@@ -630,6 +630,47 @@ directions, reducing its effectiveness on the correlated Rosenbrock geometry.}
 \label{fig:q2_contour_C}
 \end{figure}
 
+\subsection{Adam Convergence Theory and Limitations}
+
+Adam combines bias-corrected first and second moment estimates. The bias correction arises because
+at step $t=1$, the running averages $m_1 = (1-\beta_1)g_1$ and $v_1 = (1-\beta_2)g_1^2$ are
+severely under-estimated relative to the true gradient moments. Dividing by $(1-\beta_1^t)$ and
+$(1-\beta_2^t)$ respectively corrects this bias:
+\begin{equation}
+\hat{m}_t = \frac{m_t}{1 - \beta_1^t} \to \mathbb{E}[g], \qquad \hat{v}_t = \frac{v_t}{1 - \beta_2^t} \to \mathbb{E}[g^2].
+\end{equation}
+The effective learning rate per coordinate $i$ at step $t$ is $\alpha_t^{(i)} = \alpha / (\sqrt{\hat{v}_t^{(i)}} + \varepsilon)$,
+which scales inversely with the root mean square of recent gradients. This makes Adam approximately
+scale-invariant: if all gradients are scaled by a constant $c$, the effective step is unchanged.
+
+\begin{remark}[Adam Non-Convergence]
+Despite widespread empirical success, Adam does not have a general convergence guarantee on convex
+problems. Reddi et al.\ (2018) constructed a simple 1D example where Adam with any fixed
+hyperparameters oscillates and fails to converge. The key issue is that a large gradient at a
+single step can inflate $v_t$ and suppress all future steps, even when the true gradient is large.
+AMSGrad addresses this by replacing $v_t$ with $\hat{V}_t = \max_{j \leq t} v_j$, ensuring the
+denominator is non-decreasing. For our $d=2$ benchmarks, Adam works well in practice because
+the gradient magnitudes are relatively consistent, but on problems with sporadic large gradients,
+this failure mode is relevant.
+\end{remark}
+
+\subsection{Nesterov Momentum Sequence Derivation}
+
+The Nesterov momentum coefficient $\beta_k = (k-1)/(k+2)$ follows from the optimal step-size
+sequence for the accelerated gradient method. The update
+\begin{equation}
+y_k = x_k + \frac{k-1}{k+2}(x_k - x_{k-1})
+\end{equation}
+can be derived from the requirement that the sequence of weighted iterates $\{t_k x_k\}$ (with
+$t_k = (k+1)/2$) satisfies a telescoping bound. Specifically, one can show
+\begin{equation}
+f(x_k) - f^{\star} \leq \frac{2L\|x_0 - x^{\star}\|^2}{(k+1)^2},
+\end{equation}
+which is the optimal $O(1/k^2)$ rate for first-order methods applied to convex functions with
+$L$-Lipschitz gradient (Nesterov's lower bound). No first-order method can achieve $o(1/k^2)$.
+In implementation, $\beta_k$ is capped at $\beta_{\max}$ to prevent overshoot at early iterations
+when $k$ is small and the momentum has not yet built up a reliable direction.
+
 \subsection{Mini-Batch Stochastic Gradient Descent}
 
 Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b \in \{5, 40\}$,
@@ -673,6 +714,29 @@ oscillation near the minimum because each mini-batch gradient has higher varianc
 the lower-variance gradient estimate produces a smoother but slower convergence trajectory.}
 \label{fig:q2_sgd_batch}
 \end{figure}
+
+\subsection{SGD Convergence Theory}
+
+For strongly convex $f$ with constant $\mu > 0$ and $L$-smooth individual losses $f_i$, the
+mini-batch SGD convergence bound (with constant step size $\alpha \leq 1/(2L)$) is:
+\begin{equation}
+\mathbb{E}\bigl[f(\theta_k) - f^{\star}\bigr] \leq
+(1 - \alpha\mu)^k \bigl(f(\theta_0) - f^{\star}\bigr) + \frac{\alpha \sigma_{\text{grad}}^2}{2\mu b},
+\end{equation}
+where the first term decays linearly (at rate $(1 - \alpha\mu)^k$) and the second term is the
+irreducible noise floor. This bound reveals three key trade-offs:
+\begin{itemize}[nosep]
+\item Larger $\alpha$ speeds up the linear decay but increases the noise floor (proportional to $\alpha$).
+\item Larger $b$ reduces the noise floor ($\propto 1/b$) but requires more computation per step.
+\item The optimal stopping point is after $k^{\star} \approx \frac{1}{\alpha\mu}\log\frac{f(\theta_0) - f^{\star}}{\alpha\sigma^2/(2\mu b)}$ iterations.
+\end{itemize}
+To achieve $\varepsilon$-accuracy, one should use $b \geq \sigma^2/(\mu \varepsilon)$ (so the noise
+floor is $\leq \varepsilon/2$) and run until the first term decays below $\varepsilon/2$.
+This is why practical SGD uses a \emph{learning rate decay schedule}: as the iterate approaches
+the optimum, the step size is reduced to zero the noise floor, at the cost of slower linear
+convergence. Common schedules include $\alpha_k = \alpha_0/k$ (yields $O(1/k)$ rate) and
+polynomial decay $\alpha_k = \alpha_0/(1 + \gamma k)^{0.5}$ (yields $O(1/\sqrt{k})$ rate), both
+of which satisfy $\sum_k \alpha_k = \infty$ and $\sum_k \alpha_k^2 < \infty$ (the Robbins--Monro conditions for almost-sure convergence).
 
 \subsection{Effect of Observation Noise on SGD}
 
@@ -772,6 +836,22 @@ for some constant $C > 0$ depending on $L$ and the minimum eigenvalue of $\nabla
 This \emph{quadratic convergence} means the number of correct decimal digits roughly doubles at
 each iteration, compared to linear convergence of first-order methods.
 \end{theorem}
+
+\begin{remark}[Newton's Local vs.\ Global Convergence]
+The quadratic convergence theorem is \emph{local}: it applies only when $x_0$ is sufficiently
+close to $x^{\star}$. The precise condition is $\|x_0 - x^{\star}\| < \mu^2/(L_H \mu)$ where $L_H$
+is the Lipschitz constant of the Hessian. Far from the optimum, the full Newton step $\alpha = 1$
+may overshoot or diverge (as with Rosenbrock, where $\alpha = 0.22$ is required). The transition
+between the \emph{damped phase} (linear convergence) and the \emph{pure Newton phase} (quadratic
+convergence) occurs once $\|x_k - x^{\star}\|$ is small enough. This two-phase structure explains
+the empirically observed ``plateau then rapid drop'' convergence pattern.
+
+For globally convergent Newton, one uses Armijo backtracking line search to find the largest
+step size $\alpha_k \in \{1, 1/2, 1/4, \ldots\}$ satisfying a sufficient decrease condition:
+$f(x_k - \alpha_k p_k) \leq f(x_k) - c_1 \alpha_k \nabla f(x_k)^T p_k$ for $c_1 = 10^{-4}$.
+This guarantees global convergence at a linear rate, transitioning to quadratic convergence once
+the basin of attraction is reached.
+\end{remark}
 
 Settings: GD runs 80 iterations; Newton uses 20 iterations with Hessian damping
 $\lambda = 10^{-8}$ (added to ensure positive definiteness if $\nabla^2 f$ is indefinite).
@@ -1055,6 +1135,39 @@ and a 10D problem would require $55^{10} \approx 2.5 \times 10^{17}$---completel
 
 \subsection{Comparative Analysis of Derivative-Free Methods}
 
+The fundamental trade-off between these methods can be understood through the concept of
+\emph{gradient information richness}:
+\begin{itemize}[nosep]
+\item \textbf{Exact GD} uses the full $d$-dimensional gradient at each step. Each function
+evaluation of $f$ costs $O(1)$, but the gradient requires $O(d)$ evaluations via automatic
+differentiation (or is available analytically). The gradient provides \emph{complete local
+linear information}.
+
+\item \textbf{FD GD} approximates the full gradient using $d+1$ function evaluations. The
+approximation quality is governed by the truncation error $O(\delta)$: for $\delta = 0.05$ on
+Benchmark B, the 2\% relative error is acceptable; for $\delta = 0.8$, the 33\% error ruins
+gradient direction.
+
+\item \textbf{Nesterov random search} uses only 2 function evaluations per iteration, but
+receives only a 1D directional gradient projection. The $1/d$ information loss means this method
+is most competitive at very high dimensions where gradient computation is expensive, but at $d=2$
+it converges much more slowly than FD-GD.
+
+\item \textbf{Nelder--Mead} collects information about $f$ through function evaluations at
+$d+1 = 3$ simplex vertices. It implicitly models the local geometry through the simplex shape,
+but provides no gradient information and has no proven convergence guarantees. In practice, it
+performs well when $d \leq 10$ and the objective is smooth.
+
+\item \textbf{Grid search} is the only method that provides a \emph{global coverage guarantee},
+ensuring the optimum is found to within grid resolution. Its exponential cost makes it suitable
+only when $d \leq 3$ and many function evaluations are available.
+\end{itemize}
+
+For this assignment's $d = 2$ problems, Nelder--Mead is the most competitive derivative-free
+method due to its effective simplex-based local search. In higher dimensions ($d \geq 20$),
+NRS would be preferred over Nelder--Mead, and FD-GD would be preferred over NRS since both
+use $O(d)$ evaluations per iteration but FD-GD produces a full gradient.
+
 \begin{table}[H]
 \centering
 \caption{Q4: Comprehensive comparison of derivative-approximation and derivative-free methods.
@@ -1064,12 +1177,12 @@ FE = function evaluations per iteration, $d$ = problem dimension, $N_G$ = grid p
 \toprule
 \textbf{Method} & \textbf{Gradient Info} & \textbf{FE/iter} & \textbf{Scalability} & \textbf{Convergence rate} & \textbf{Accuracy} \\
 \midrule
-Exact GD & Full & $1 + d$ & $O(d)$/iter & $O(1/k)$ & High \\
+Exact GD & Full gradient & $1 + d$ & $O(d)$/iter & $O(1/k)$ & High \\
 FD GD ($\delta$ small) & Approx.\ full & $d + 1$ & $O(d)$/iter & $\approx O(1/k)$ & High \\
-FD GD ($\delta$ large) & Poor approx. & $d + 1$ & $O(d)$/iter & Slow & Low \\
-Nesterov random & Directional & 2 & $O(1)$/iter & $O(d/k)$ & Moderate \\
+FD GD ($\delta$ large) & Poor approx. & $d + 1$ & $O(d)$/iter & Slow/fails & Low \\
+Nesterov random & $\sim(1/d)$-fraction & 2 & $O(1)$/iter & $O(d/k)$ & Moderate \\
 Nelder--Mead & None & $\leq d+3$ & Low-dim only & No guarantees & Moderate \\
-Grid search & None & $N_G^d$ total & Exponential & Grid-limited & Grid-limited \\
+Grid search & None & $N_G^d$ total & Exponential in $d$ & Grid-limited & Grid-limited \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1099,6 +1212,26 @@ x_1^{\star} - 0.5 &\geq 0 \quad \text{(primal feasibility)}, \\
 Since the constraint is inactive at $x^{\star}$ (i.e., $x_1^{\star} = 0.582 > 0.5$), the
 complementarity condition forces $\mu^{\star} = 0$, and the KKT conditions reduce to
 $\nabla f(x^{\star}) = 0$---the unconstrained optimality condition.
+
+\begin{remark}[Explicit KKT Verification]
+We verify the KKT conditions numerically. At $x^{\star} = (0.582, 2.0)$:
+\begin{align}
+\nabla f(x^{\star}) &= \begin{bmatrix} 2(0.582 - 1) + \cos(0.582) \\ 10(2.0 - 2) \end{bmatrix}
+= \begin{bmatrix} -0.836 + 0.838 \\ 0 \end{bmatrix} \approx \begin{bmatrix} 0.002 \\ 0 \end{bmatrix} \approx \mathbf{0}.
+\end{align}
+The residual $0.002$ arises because the exact transcendental solution of $2(x_1-1)+\cos(x_1)=0$
+is irrational; with more decimal places, $x_1^{\star} \approx 0.5817...$, yielding $\|\nabla f(x^{\star})\| < 10^{-5}$.
+The stationarity condition holds to numerical precision. Primal feasibility $0.582 > 0.5$ is satisfied,
+dual feasibility $\mu^{\star} = 0 \geq 0$ holds, and complementarity $\mu^{\star}(0.582 - 0.5) = 0$ is trivially satisfied.
+\end{remark}
+
+\begin{remark}[Slater Condition and Strong Duality]
+The constraint $x_1 \geq 0.5$ is affine. The Slater condition for inequality-constrained problems
+requires a strictly feasible point: $\bar{x}_1 > 0.5$, which is trivially satisfied by e.g.\
+$\bar{x} = (1, 2)$. By Slater's theorem, strong duality holds (zero duality gap), so the dual
+problem $\max_{\mu \geq 0} \inf_x \mathcal{L}(x, \mu)$ has the same optimal value as the primal.
+This guarantees that the KKT conditions are both necessary and sufficient for optimality.
+\end{remark}
 
 \subsection{Algorithm Formulations}
 
