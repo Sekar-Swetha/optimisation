@@ -132,9 +132,9 @@ All four methods derive from the first-order Taylor expansion $f(x - \alpha\nabl
 
 \textbf{Polyak step size} chooses $\alpha_k$ so that the first-order model predicts $f^{\star}$: setting the approximation equal to $f^{\star}$ yields $\alpha_k = (f(x_k)-f^{\star})/\|\nabla f(x_k)\|^2$. This has a natural self-scaling property: large gradients produce small steps (stable far from the minimum), small gradients produce large steps (aggressive near the minimum). The $\varepsilon$ damping prevents division by zero.
 
-\textbf{Adagrad} accumulates the squared gradient magnitude for each coordinate independently: $G^{(i)}_k = \sum_{t=0}^{k-1}(g_t^{(i)})^2$. The per-coordinate step $\alpha_k^{(i)} = \alpha_0/(\sqrt{G^{(i)}_k}+\varepsilon)$ automatically decreases for coordinates with large past gradients (which have already been explored) and stays large for coordinates with small past gradients. This is especially effective for sparse problems but can decrease too aggressively on dense problems.
+\textbf{Adagrad} accumulates the squared gradient magnitude for each coordinate independently: $G^{(i)}_k = \sum_{t=0}^{k-1}(g_t^{(i)})^2$. The per-coordinate step $\alpha_k^{(i)} = \alpha_0/(\sqrt{G^{(i)}_k}+\varepsilon)$ automatically decreases for coordinates with large past gradients (which have already been explored) and stays large for coordinates with small past gradients. If the $i$-th coordinate has gradient with average magnitude $\bar{g}_i$, then after $k$ steps $G^{(i)}_k \approx k\bar{g}_i^2$, so the effective step decays as $\alpha_0/(\bar{g}_i\sqrt{k})$: a $O(1/\sqrt{k})$ decay rather than GD's fixed step. This is especially effective for sparse problems (where $\bar{g}_i$ is small for rarely-updated coordinates) but can decrease too aggressively on dense problems.
 
-\textbf{RMSprop} addresses Adagrad's aggressive step decay by replacing the cumulative sum with an exponentially weighted moving average $v_k^{(i)} = \beta v_{k-1}^{(i)} + (1-\beta)(g_k^{(i)})^2$. With $\beta = 0.9$ (as used here), only the most recent~$\sim\!1/(1-\beta)=10$ gradient squares receive appreciable weight, so the effective step size adapts to recent curvature rather than the entire history.
+\textbf{RMSprop} addresses Adagrad's aggressive step decay by replacing the cumulative sum with an exponentially weighted moving average $v_k^{(i)} = \beta v_{k-1}^{(i)} + (1-\beta)(g_k^{(i)})^2$. With $\beta = 0.9$ (as used here), only the most recent~$\sim\!1/(1-\beta)=10$ gradient squares receive appreciable weight, so the effective step size adapts to recent curvature rather than the entire history. If the gradient sequence is stationary (gradients are approximately i.i.d.\ with second moment $\sigma^2_i$), then $v^{(i)}_k\to\sigma^2_i$ as $k\to\infty$ (the geometric series $v_\infty = (1-\beta)\sum_{t=0}^\infty\beta^t\sigma^2_i = \sigma^2_i$ converges). The asymptotic effective step is therefore $\alpha_0/(\sigma_i+\varepsilon)$, which is proportional to the inverse gradient magnitude per coordinate---a form of per-coordinate normalisation.
 
 \textbf{Heavy Ball (Polyak momentum)} replaces the gradient step with a momentum-weighted update. Because $\sum_{t\geq 0}\beta^t = 1/(1-\beta)$, the momentum velocity $z_k$ acts as a weighted sum of past gradients scaled by an effective step $\alpha/(1-\beta)$. For the settings used here (e.g.\ $\beta=0.88$, $\alpha=0.045$ on Benchmark A), the effective step is $0.045/0.12 \approx 0.375$, nearly five times larger than the GD baseline $\alpha=0.08$.
 
@@ -556,6 +556,12 @@ g_0 &= 0.25^4 = 3.906 \times 10^{-3}, \quad g'(x_0) = 4(0.25)^3 = 0.0625, \quad 
 x_1 = x_0 - \frac{g'(x_0)}{g''(x_0)} = 0.25 - \frac{0.0625}{0.75} = 0.25 - 0.0833 = 0.1667.
 \end{equation}
 In the multidimensional case this generalises to $x_{k+1} = x_k - \alpha H_k^{-1}\nabla f(x_k)$, where $H_k = \nabla^2 f(x_k) + \lambda I$ (with damping $\lambda=10^{-8}$ to ensure positive definiteness).
+
+\textbf{One-step convergence for quadratics (Benchmark A):} For $J(\theta) = \frac{1}{2}\theta^T H\theta - b^T\theta + c$ with constant Hessian $H = X^TX/m$, the gradient is $\nabla J(\theta) = H\theta - b$. With $\alpha=1$ and no damping:
+\begin{equation}
+\theta_1 = \theta_0 - H^{-1}(H\theta_0 - b) = \theta_0 - \theta_0 + H^{-1}b = H^{-1}b = \theta_{\mathrm{OLS}},
+\end{equation}
+regardless of $\theta_0$. The Newton step exactly inverts the quadratic's Hessian and lands at the global minimum in one step. This is why GD requires $O(\kappa)$ iterations while Newton requires exactly 1.
 
 \begin{figure}[H]
 \centering
@@ -1063,6 +1069,17 @@ This study reveals several principles governing the behaviour of optimisation al
 \end{table}
 
 The cross-question comparison reveals that for smooth well-conditioned problems (Benchmarks A and B), most methods converge to near-optimal values and the differences are modest. The discriminating benchmark is Rosenbrock: here only Polyak (with oracle $f^\star$), Nesterov, and Nelder--Mead make meaningful progress within the iteration budget, confirming that ill-conditioning $\kappa\approx2504$ severely limits gradient descent and most of its variants.
+
+\subsection*{Practical Recommendations}
+
+Based on the experimental results, the following method selection heuristics emerge:
+\begin{itemize}[nosep,leftmargin=*]
+\item \textbf{Well-conditioned quadratic / machine learning models:} Adam or Heavy Ball. Both converge rapidly on Benchmarks A and B; Adam's bias-corrected first step and per-coordinate scaling make it robust to heterogeneous gradient magnitudes.
+\item \textbf{Smooth but ill-conditioned problems:} Nesterov acceleration. The $O(1/k^2)$ rate provides a qualitative advantage over GD and Heavy Ball, particularly when $\kappa\gg1$. If $f^\star$ is known, Polyak provides the best per-step descent but requires oracle knowledge.
+\item \textbf{Gradient unavailable:} Nelder--Mead for low-dimensional ($d\leq10$) problems; Nesterov random search for high-dimensional black-box optimisation ($d\gg 10$) where function evaluations are the bottleneck.
+\item \textbf{Second-order available and affordable:} Newton's method with damping for well-structured problems near the optimum. The $O(d^3)$ cost is prohibitive for large $d$, but for $d=2$ as here it is optimal.
+\item \textbf{Constrained problems:} Projected gradient descent for simple constraint sets (boxes, half-spaces); penalty/augmented Lagrangian for complex or implicit constraints.
+\end{itemize}
 
 % ============================================================
 \newpage
