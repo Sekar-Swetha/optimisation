@@ -59,23 +59,30 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a comprehensive comparative study of optimisation algorithms across six
-methodological categories applied to three benchmark problems: a linear regression quadratic loss
-(Benchmark A), a toy neural network loss with sinusoidal perturbation (Benchmark B), and the
-Rosenbrock function (Benchmark C). The six categories investigated are: (Q1)~adaptive step-size
-methods (Polyak, Adagrad, RMSprop, Heavy Ball); (Q2)~momentum-based and stochastic methods
-(Nesterov acceleration, Adam, mini-batch SGD); (Q3)~Newton's method exploiting second-order
-curvature; (Q4)~derivative-free approaches (finite differences, Nesterov random search,
-Nelder--Mead, grid search); (Q5)~constrained optimisation via projected gradient descent and
-penalty methods; and (Q6)~the Frank--Wolfe conditional gradient algorithm for linearly-constrained
-problems. Each method is evaluated across convergence speed, trajectory behaviour, theoretical
-guarantees, and computational trade-offs. Newton's method achieves the lowest final value on
-Rosenbrock in 50 iterations ($f = 4.6 \times 10^{-4}$) due to its quadratic convergence rate, while
-Polyak and Nelder--Mead converge to near-zero with sufficient iterations. Projected gradient
-descent enforces hard constraints from the first iterate, and Frank--Wolfe avoids projection by
-exploiting the linear minimisation oracle. The analysis reveals that second-order information and
-the accuracy of the known optimum are the two most influential factors for convergence on
-ill-conditioned problems.
+This report presents a systematic comparative study of fourteen optimisation algorithms across six
+methodological categories, applied to three benchmark problems spanning condition numbers from
+$\kappa \approx 3$ to $\kappa \approx 2500$: a linear regression quadratic loss (Benchmark A,
+strongly convex, $\kappa \approx 3$), a toy neural network loss with sinusoidal perturbation
+(Benchmark B, $\kappa \approx 10$), and the ill-conditioned Rosenbrock function (Benchmark C,
+$\kappa \approx 2500$). The six categories are: (Q1)~adaptive step-size methods (Polyak, Adagrad,
+RMSprop, Heavy Ball); (Q2)~momentum-based and stochastic methods (Nesterov acceleration, Adam,
+mini-batch SGD); (Q3)~Newton's method exploiting second-order curvature; (Q4)~derivative-free
+approaches (finite differences, Nesterov random search, Nelder--Mead, grid search);
+(Q5)~constrained optimisation via projected gradient descent and penalty methods; and
+(Q6)~the Frank--Wolfe conditional gradient algorithm. Each method is evaluated on convergence
+speed, trajectory behaviour, theoretical guarantees, and per-iteration computational cost.
+
+Key findings: Newton's method achieves $f = 4.6 \times 10^{-4}$ on Rosenbrock in 20 iterations
+(vs.\ GD's $f = 3.73$ in 80 iterations) via quadratic convergence. Polyak step diverges when
+$f^{\star}$ is misspecified (Benchmarks A/B) but achieves the best Q1 result on Rosenbrock when
+$f^{\star} = 0$ is exact. Nesterov acceleration outperforms Adam on Rosenbrock ($f = 0.48$
+vs.\ $1.58$) because the curved valley requires sustained directional momentum rather than
+coordinate-wise scaling. Projected gradient descent enforces hard feasibility from the first
+iterate, while penalty methods achieve feasibility asymptotically as $\lambda \to \infty$.
+Frank--Wolfe produces iterates that are sparse convex combinations of domain vertices, making it
+preferable for sparse optimisation over non-Euclidean domains. The central finding is that
+\textbf{the amount and quality of curvature information available to the optimiser is the
+primary determinant of convergence speed on ill-conditioned problems}.
 \end{abstract}
 
 \tableofcontents
@@ -424,48 +431,51 @@ among Q1 methods.}
 
 \subsection{Comparative Analysis}
 
-\textbf{Why Polyak diverges on A and B but succeeds on C:}
-The Polyak step size is $\alpha_k = (f(x_k) - f^{\star}) / (\|\nabla f(x_k)\|^2 + \varepsilon)$.
-Near the optimum, $\|\nabla f(x_k)\| \to 0$ (approximately as $O(1/k)$ for strongly convex
-functions). On Benchmark A, $f(x_k) \to J^{\star} \approx 0.4826 > 0 = f^{\star}$, so the numerator
-remains bounded away from zero while the denominator vanishes, causing $\alpha_k \to \infty$.
-On Benchmark C, both numerator and denominator decay proportionally so $\alpha_k$ remains bounded
-and decreasing, consistent with the convergence guarantee.
+\textbf{Polyak step sensitivity to $f^{\star}$.}
+The Polyak step size $\alpha_k = (f(x_k) - f^{\star}) / (\|\nabla f(x_k)\|^2 + \varepsilon)$
+requires that the numerator vanish at the same rate as the denominator. Near the optimum of a
+strongly convex function, $\|\nabla f\| = O(\|x_k - x^{\star}\|)$, so the denominator decays as
+$O(\|x_k - x^{\star}\|^2)$. The numerator decays as $f(x_k) - f^{\star} = O(\|x_k - x^{\star}\|^2)$
+only when $f^{\star}$ is exact. On Benchmark A, $f(x_k) \to 0.4826 \neq f^{\star} = 0$: the numerator
+is bounded below by $0.48$ while $\|\nabla f\|^2 \to 0$, so $\alpha_k \to \infty$, inducing divergence.
+On Benchmark C, $f^{\star} = 0$ matches the true minimum, so both numerator and denominator
+decay proportionally and $\alpha_k$ remains bounded, yielding convergence at the theoretical rate.
 
-\textbf{Why Adagrad ($f = 2.20$) outperforms GD ($f = 3.51$) on Benchmark C despite its much
-larger $\alpha_0 = 0.45$:} Adagrad's per-coordinate adaptation effectively uses different step
-sizes for the steep $x_2$-direction ($\approx$ curvature 200 near $(1,1)$) and the shallow
-$x_1$-direction ($\approx$ curvature 2). This coordinate-wise scaling reduces the effective
-condition number faced by the optimiser. GD must use the same $\alpha = 0.0012$ for both directions,
-severely throttling progress in the shallow direction.
+\textbf{Adagrad vs.\ GD on Rosenbrock.}
+Adagrad achieves $f = 2.20$ versus GD's $f = 3.51$ with a much larger base rate $\alpha_0 = 0.45$.
+The key is coordinate-wise scaling: near the Rosenbrock minimum $(1,1)$, the Hessian has eigenvalues
+approximately $1001.6$ (steep direction) and $0.4$ (shallow direction). GD must satisfy
+$\alpha < 2/1001.6 \approx 0.002$, throttling progress in the shallow direction to a crawl.
+Adagrad's per-coordinate accumulator $G_k[i]$ grows large for the steep dimension (many large
+gradients) and small for the shallow dimension, automatically using a larger effective step in the
+flat direction. This implicit preconditioning reduces the effective condition number.
 
-\textbf{Why RMSprop ($f = 3.12$) underperforms Adagrad on Benchmark C:} RMSprop requires a small
-base rate $\alpha_0 = 0.0035$ for stability (versus Adagrad's $\alpha_0 = 0.45$). The exponential
-moving average of RMSprop adapts to \emph{recent} gradients, while Adagrad accumulates all history.
-For Rosenbrock, the gradients are consistently large in the same directions, so Adagrad's full
-history provides a more stable and accurate per-coordinate scaling.
+\textbf{Adagrad vs.\ RMSprop on Rosenbrock.}
+RMSprop ($f = 3.12$) underperforms Adagrad ($f = 2.20$) despite RMSprop's usual superiority in
+non-stationary settings. Rosenbrock's gradient structure is \emph{consistent} rather than
+non-stationary: the gradients in the steep direction remain consistently large throughout the
+optimisation. Adagrad's full-history accumulator $G_k = \sum_{j=0}^k g_j \odot g_j$ builds a
+very accurate per-coordinate estimate of the curvature, while RMSprop's exponential average
+(window $\approx 10$ steps) discards early gradient history and cannot build as accurate a
+scaling. RMSprop's advantage over Adagrad appears primarily on problems where gradient
+magnitudes change significantly over the course of optimisation.
 
-\begin{itemize}[nosep]
-\item \textbf{Correctness of $f^{\star}$:} Polyak's convergence is theoretically guaranteed only
-when $f^{\star}$ is specified exactly. A lower bound $f^{\star} < f_{\text{true}}^{\star}$ causes
-divergence (Benchmarks A and B); the exact value $f^{\star} = 0$ (Benchmark C) yields the fastest
-convergence in Q1. In practice, $f^{\star}$ is rarely known, limiting Polyak's applicability.
+\textbf{Heavy Ball and momentum on Rosenbrock.}
+Momentum $\beta = 0.86$ allows Heavy Ball to achieve $f = 1.40$, more than halving GD's $f = 3.51$.
+The mechanism is that the valley direction of Rosenbrock is consistent across iterations: the
+gradient component pointing along the valley (towards $(1,1)$) is small but persistent.
+Momentum accumulates these consistent small nudges, building up velocity along the valley floor.
+At each gradient step, $z_{k+1} = 0.86 z_k + \alpha g_k$: after $k$ steps, the accumulated
+velocity $z_k \approx \sum_{j=0}^k 0.86^{k-j} \alpha g_j$ amplifies the consistent valley component
+by a factor of up to $1/(1-0.86) \approx 7$.
 
-\item \textbf{Adagrad vs.\ RMSprop:} Adagrad's monotone accumulation of $G_k$ acts as a
-``forgetting-free'' memory, making it uniformly stable but prone to step-size collapse on
-non-stationary problems. RMSprop's exponential moving average prevents this collapse, making it
-the preferred choice for deep learning where gradients are highly non-stationary. On our static
-benchmark problems with consistent gradient structure, Adagrad performs comparably or better.
-
-\item \textbf{Heavy Ball:} Momentum $\beta = 0.88$--$0.90$ effectively accelerates convergence on
-moderately ill-conditioned problems. On Benchmark C, momentum helps the iterate sustain progress
-along the valley floor between gradient updates: each gradient step points slightly uphill, but
-the accumulated momentum from previous steps carries the iterate along the valley.
-
-\item \textbf{GD baseline:} Stable but conservatively slow. Its step size is dictated by the
-\emph{largest} curvature, causing slow progress in the directions of small curvature---a fundamental
-limitation on anisotropic problems quantified by the condition number $\kappa = L/\mu$.
-\end{itemize}
+\textbf{GD baseline limitation.}
+GD's performance is fundamentally limited by the condition number $\kappa = L/\mu$: its linear
+convergence rate is $(1 - \mu/L)^k = (1 - 1/\kappa)^k \approx e^{-k/\kappa}$, requiring
+$O(\kappa)$ iterations to reduce error by a constant factor. For Rosenbrock with
+$\kappa \approx 2500$, this means approximately 2500 iterations per decade of error reduction.
+All other methods in Q1 attempt to overcome this condition number bottleneck through different
+mechanisms (adaptive step sizes, correct $f^{\star}$, momentum).
 
 % ============================================================
 \section{Question 2: Momentum and Stochastic Methods \quad\normalfont\textit{[30 marks]}}
@@ -1532,6 +1542,21 @@ not satisfying the standard $\gamma_k = 2/(k+2)$ schedule. With the theoreticall
 decaying step size $\gamma_k = 2/(k+2)$, convergence to $f^{\star}$ would be guaranteed at
 rate $O(LD^2/(k+2)) = O(1/k)$.
 
+\textbf{Frank--Wolfe and Sparsity:} A crucial property of Frank--Wolfe is that each update is a
+convex combination of the current iterate and a vertex $z_k$, producing iterates that are
+\emph{sparse}: after $k$ iterations, $x_k$ lies in a convex hull of at most $k+1$ vertices of
+$\mathcal{X}$. For the probability simplex $\mathcal{X} = \Delta^d = \{x \geq 0 : \sum_i x_i = 1\}$,
+vertices are unit vectors $e_i$, and the iterates after $k$ steps have at most $k+1$ non-zero
+entries. This makes Frank--Wolfe the natural choice for sparse optimisation problems such as:
+\begin{itemize}[nosep]
+\item \textbf{LASSO:} Minimise $\|Ax - b\|^2$ subject to $\|x\|_1 \leq C$.
+Vertices of the $\ell_1$ ball are $\pm Ce_i$, so FW produces a solution with at most $k$ non-zeros.
+\item \textbf{Low-rank matrix recovery:} Minimise a loss over $\{X : \|X\|_* \leq C\}$ (nuclear norm ball).
+The LMO requires a rank-1 SVD ($O(d^2)$), while projection requires a full SVD ($O(d^3)$).
+\item \textbf{Structured prediction:} Optimise over a polytope (e.g., the marginal polytope in graphical models)
+where the LMO corresponds to MAP inference.
+\end{itemize}
+
 \textbf{Comparison with Projected GD:} Frank--Wolfe is preferred when (1) the LMO is cheaper
 than the projection oracle (e.g., for the nuclear norm ball, projection requires SVD at $O(d^3)$
 but the LMO is $O(d^2)$), and (2) the domain is a polytope where the solution is inherently sparse
@@ -1616,6 +1641,33 @@ Frank--Wolfe & $O(LD^2/k)$ & $O(LD^2/k)$ (same!) & No projection; vertex oscilla
 \end{tabular}
 \end{table}
 
+\subsection{Computational Cost per Iteration}
+
+\begin{table}[H]
+\centering
+\caption{Per-iteration cost comparison. $d$ = dimension, $m$ = dataset size (for SGD), $b$ = batch size,
+$n$ = simplex dimension (for FW). Gradient $\nabla f$ cost is $O(d \cdot m)$ for linear regression.
+``Hessian'' = $O(d^2 m)$ to form + $O(d^3)$ to solve; amortised $O(d^3)$ for fixed $m$.}
+\label{tab:cost}
+\begin{tabular}{lccl}
+\toprule
+\textbf{Method} & \textbf{Gradient evals} & \textbf{Extra cost} & \textbf{Memory} \\
+\midrule
+GD & $1 \times \nabla f$ & --- & $O(d)$ \\
+Polyak, Nesterov, HB & $1 \times \nabla f$ & $O(d)$ (momentum) & $O(d)$ \\
+Adagrad, RMSprop & $1 \times \nabla f$ & $O(d)$ (accumulate $G$) & $O(d)$ \\
+Adam & $1 \times \nabla f$ & $O(d)$ (two moments) & $O(d)$ \\
+SGD (mini-batch) & $b/m \times$ full & --- & $O(d)$ \\
+Newton & $1 \times \nabla^2 f$ & $O(d^3)$ solve & $O(d^2)$ \\
+L-BFGS & $1 \times \nabla f$ & $O(md)$ ($m$ pairs) & $O(md)$ \\
+FD GD & $d+1$ fn evals & --- & $O(d)$ \\
+Nesterov RS & 2 fn evals & --- & $O(d)$ \\
+Projected GD & $1 \times \nabla f$ & $O(d)$ projection & $O(d)$ \\
+Frank--Wolfe & $1 \times \nabla f$ & $O(d)$ LMO & $O(d)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Practical Recommendations}
 
 Based on the experimental and theoretical analysis:
@@ -1660,6 +1712,28 @@ Hessian computation and inversion.
 On the ill-conditioned Rosenbrock function (condition number $\kappa \approx 2500$), the
 advantage of Newton's method is most dramatic because it fully exploits the curvature mismatch.
 The practical takeaway is: use the \emph{cheapest} method that achieves the required accuracy.
+
+\subsection{Unified View: Oracle Complexity}
+
+Optimisation theory frames the problem in terms of \emph{oracle complexity}: how many queries
+to an information oracle (gradient, Hessian, function value) are required to achieve $\varepsilon$-accuracy?
+\begin{itemize}[nosep]
+\item \textbf{First-order oracle:} GD requires $O(L\|x_0-x^{\star}\|^2/\varepsilon)$ gradient queries for
+convex $f$. Nesterov's $O(1/k^2)$ rate reduces this to $O(\sqrt{L/\varepsilon})$, which is
+\emph{optimal}: no first-order method can do better (Nemirovski--Yudin, 1983).
+\item \textbf{Second-order oracle:} Newton's quadratic convergence means only
+$O(\log\log(1/\varepsilon))$ Hessian queries are needed to achieve precision $\varepsilon$ near
+the optimum. However, each query costs $O(d^3)$ vs.\ $O(d)$ for a gradient query, so the
+advantage is problem-size dependent.
+\item \textbf{Zeroth-order oracle:} Nesterov random search requires $O(d/\varepsilon)$ function evaluations,
+a $d$-fold increase over first-order methods. Grid search requires $O(\varepsilon^{-d/2})$
+evaluations (exponential in dimension), confirming the curse of dimensionality.
+\end{itemize}
+The \emph{ratio of convergence rates} between Newton and GD on Rosenbrock is not merely a
+constant factor but an \emph{exponential advantage}: where GD needs $O(\kappa/\varepsilon)$ iterations
+for a $\kappa$-conditioned problem, Newton needs only $O(\log\log(1/\varepsilon))$ near the
+optimum. This explains the empirical observation that Newton reaches $f = 4.6 \times 10^{-4}$
+in 20 iterations while GD reaches only $f = 3.7$ in 80 iterations on the same $\kappa \approx 2500$ problem.
 
 \subsection{Limitations and Future Directions}
 
