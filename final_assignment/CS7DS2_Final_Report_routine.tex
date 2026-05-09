@@ -111,6 +111,28 @@ The maximum eigenvalue is $\approx \frac{802+200}{2} + \sqrt{\left(\frac{802-200
 \subsection{Benchmark D: Constrained Feasible Set}
 For constrained problems: $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\ -5 \leq x_2 \leq 10\}$. This is a convex box constraint set, for which projection and linear minimisation both admit closed-form solutions.
 
+\subsection{Condition Number as the Primary Discriminator}
+\label{sec:kappa_analysis}
+
+A central theme across all six questions is the role of the \emph{condition number} $\kappa = L/\mu$ in determining method performance. The three benchmarks represent the spectrum:
+
+\begin{table}[H]
+\centering
+\caption{Condition numbers and their impact on all methods. GD iterations to halve sub-optimality: $k_{1/2} = \kappa \ln 2$ (from $(1-1/\kappa)^k = 0.5$).}
+\label{tab:kappa}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Benchmark} & $\boldsymbol{\kappa}$ & \textbf{GD $k_{1/2}$} & \textbf{HB optimal rate $\rho_{\text{HB}}$} & \textbf{Nesterov iters (theory)} \\
+\midrule
+A (linear regression) & $\approx 1$ & $\approx 1$ & $\approx 0$ (superfast) & $\leq 3$ \\
+B (toy NN) & $\approx 7$ & $\approx 5$ & $0.429^k$ & $\approx 9$ \\
+C (Rosenbrock) & $\approx 2000$ & $1386$ & $0.956^k$ & $\approx 128$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The condition number $\kappa \approx 1$ for Benchmark A follows from the law of large numbers (Section~\ref{sec:benchmarks}), explaining why all methods converge equally fast. For Benchmark B, $\kappa = L/\mu = 10/(2-\sin(x_1^\star)) = 10/(2-\sin(0.582)) \approx 10/1.45 \approx 6.9$, so GD needs $k_{1/2} = 6.9 \ln 2 \approx 5$ iterations to halve the error --- fast enough that all methods effectively converge within 80 iterations. For Benchmark C, $\kappa \approx 2000$ means $k_{1/2} \approx 1386$ iterations for GD, explaining why GD makes barely visible progress even in 150 iterations while Nesterov (needing only $\sim 128$ iterations theoretically) succeeds. \emph{The condition number is thus the single most important feature of an optimisation problem for predicting which class of method will be effective.}
+
 % ============================================================
 \section{Question 1: Adaptive Step-Size Methods \hfill [30 marks]}
 \label{sec:q1}
@@ -535,6 +557,8 @@ Robust to anisotropy? & No & Partial & Yes (via $\hat{v}_t$) & Adam \\
 \item \textbf{Benchmark C:} The greatest differentiation occurs on the ill-conditioned Rosenbrock. To match Nesterov's observed $f = 0.479$ from GD's starting value $f_0 = 3.388$, GD requires $(1 - 1/\kappa)^k \leq f_{\text{target}}/f_0 = 0.479/3.388 = 0.1414$, giving $k \geq \ln(0.1414)/\ln(1 - 1/2000) \approx 1.957/0.0005 = 3{,}914$ iterations. Nesterov's $O(1/k^2)$ bound $2L\|x_0 - x^{\star}\|^2/(k+1)^2 \leq 0.479$ with $L \approx 1002$ and $\|x_0 - (1,1)\|^2 = 4$ requires $(k+1)^2 \geq 2 \times 1002 \times 4 / 0.479 = 16{,}735$, i.e.\ $k \geq 128$ iterations --- a theoretical \textbf{30$\times$ speedup} over GD. Empirically we observe only $7.1\times$ (150 Nesterov vs.\ 150 GD iterations), partly because: (i) the $\beta_k$ schedule saturates at $k^{\star} = 37$ (Remark on $\beta_k$ saturation), losing the $O(1/k^2)$ guarantee, and (ii) the $O(1/k^2)$ bound uses $L = 1002$ which is the maximum global $L$, while the actual $L$ along the trajectory is lower, making the theoretical bound conservative. Adam's $2.1\times$ improvement over GD is limited by its $O(1/\sqrt{k})$ non-convex rate and the step suppression from large $\hat{v}_t$ in the low-gradient Rosenbrock valley.
 
 \item \textbf{Anisotropy handling:} Adam's per-coordinate normalisation via $\hat{v}_t$ effectively addresses the curvature anisotropy of Benchmark B ($\kappa \in [3.3, 10]$), enabling faster convergence on this benchmark than Nesterov. On Rosenbrock ($\kappa \approx 2000$), however, the dominant challenge is the global ill-conditioning along the valley direction, which coordinate-wise adaptation does not help with --- momentum accumulation (Nesterov) is more effective there.
+
+\item \textbf{Why Adam's $\hat{v}_t$ suppresses progress on the Rosenbrock valley floor:} In the valley $\{x_2 \approx x_1^2\}$, the gradient component along the flat valley direction (the eigenvector of $\nabla^2 f$ with eigenvalue $\lambda_{\min} \approx 0.5$) is small: $\|\nabla f\|_{\text{valley}} \approx 0.1$--$0.5$ for typical iterates on the valley floor. Adam's denominator $\sqrt{\hat{v}_{t,i}} + \varepsilon$ contains the exponential moving average of $g_{t,i}^2$, which is large early in training (when the gradient is large in the steep transverse direction) and accumulates to a large $\hat{v}_{t,i}$ value. Even after the iterates reach the valley, $\hat{v}_{t,i}$ decays only slowly (half-life $\approx 1/(1-\beta_2) = 1/(1-0.999) = 1000$ steps), so the effective step along the valley direction is $\alpha/\sqrt{\hat{v}_{t,i}} \approx 0.006/\sqrt{1} = 0.006$, smaller than the $\alpha = 0.006$ that Nesterov uses directly. Nesterov has no such suppression: its step along the valley is proportional to the accumulated momentum $z_k$, which builds up over successive aligned gradient steps and can reach multiples of $\alpha\|\nabla f\|$. This momentum amplification along the consistent valley direction is precisely what Nesterov's design achieves, and it is structurally absent from Adam's formulation.
 \end{itemize}
 
 \subsection{Mini-Batch Stochastic Gradient Descent}
@@ -893,6 +917,12 @@ Grid search evaluates the objective on a uniform $55 \times 55 = 3{,}025$ grid o
 \label{fig:q4_grid}
 \end{figure}
 
+\subsubsection*{Why $\delta = 0.05$ Works Well on Benchmark B but Would Fail on Benchmark C}
+
+The finite-difference error analysis (Equation~\ref{eq:fd_error}) shows that the optimal $\delta^{\star}$ depends on both $|f(x)|$ and $|f''(x)|$. On Benchmark B at $x_0 = (-1, 4)$: $|f''(x_1)| = |2 - \sin(-1)| \approx 2.84$ and $\delta^{\star} \approx \sqrt{2 \times 10^{-16} / 2.84} \approx 10^{-8}$. With $\delta = 0.05 \gg \delta^{\star}$, the error is truncation-dominated at $O(\delta) \approx 0.05$; the gradient magnitude is $\|\nabla f(x_0)\| \approx 20$, so the relative error is $0.05 \times 2.84/2 / \|\nabla f\| \approx 0.0036 = 0.36\%$ --- negligible.
+
+On Benchmark C (Rosenbrock) at a valley-floor point where $\|\nabla f\| \approx 0.5$ (near-flat gradient near the optimum), the second derivative can reach $|f''| \approx 1200$ (the $(1,1)$ Hessian entry near $(1,1)$). The truncation error $\delta |f''|/2 = 0.05 \times 600 = 30$ would \emph{exceed} the gradient magnitude of $0.5$, yielding a relative error of $6000\%$ --- completely destroying the gradient direction. This explains why FD-GD with $\delta = 0.05$, while effective on Benchmark B, would be disastrous on Rosenbrock near the optimum: the Rosenbrock Hessian is $O(1000\times)$ larger, amplifying the truncation error proportionally. For Rosenbrock, an adaptive $\delta$ (e.g., $\delta = |f(x)|/\|\nabla f\|$ or central differences with smaller $\delta$) would be required.
+
 \subsection{Computational Comparison and Analysis}
 
 \begin{table}[H]
@@ -1189,6 +1219,9 @@ Boundary & 0.93 & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 \end{table}
 
 \subsection{Interior vs.\ Boundary Behaviour Comparison}
+\label{sec:q6_comparison}
+
+The contrast between interior and boundary convergence is one of the most instructive aspects of Frank--Wolfe's geometry. The key insight is that for \emph{interior} optima, the gradient $\nabla f(x_k) \to 0$ as $x_k \to x^\star$, causing the LMO solution $z_k$ to become highly sensitive to small gradient perturbations (and to jump between distant vertices of $\mathcal{X}$). For \emph{boundary} optima, the gradient remains bounded away from zero (it points outward from the feasible set), so the LMO consistently selects the same vertex, providing a stable and monotone pull towards the optimum.
 
 \textbf{Interior optimum:} Frank--Wolfe exhibits the characteristic ``zig-zag'' pattern near interior optima. The Frank--Wolfe gap $h_k = \nabla f(x_k)^T(x_k - z_k)$ bounds the sub-optimality; near the interior optimum $(1,5)$, the gradient $\nabla f \approx 0$, so $h_k \to 0$ but the LMO solution $z_k$ becomes highly sensitive to the gradient direction and jumps between extreme vertices (e.g., $x_2 \in \{-5, +10\}$ alternating) as the tiny gradient fluctuates. The convex averaging $x_{k+1} = \beta x_k + (1-\beta)z_k$ damps these vertex jumps but cannot eliminate oscillation with a fixed $(1-\beta)$. The standard remedy is the decaying schedule $\gamma_k = 2/(k+2)$, ensuring $(1-\beta_k) \to 0$ and provably achieving $O(1/k)$ convergence without oscillation. The proof uses the \emph{sufficient decrease lemma}: by $L$-smoothness, $f(x_{k+1}) \leq f(x_k) + \nabla f(x_k)^T(x_{k+1}-x_k) + \frac{L}{2}\|x_{k+1}-x_k\|^2$. Since $x_{k+1} - x_k = \gamma_k(z_k - x_k)$ and $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$, substituting and rearranging gives $f(x_{k+1}) - f^{\star} \leq (1 - \gamma_k)(f(x_k) - f^{\star}) + \frac{L\gamma_k^2 D^2}{2}$. With $\gamma_k = 2/(k+2)$, summing this recurrence yields the $O(1/k)$ bound.
 
