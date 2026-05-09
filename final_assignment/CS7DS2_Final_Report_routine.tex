@@ -188,6 +188,12 @@ RMSprop fixes Adagrad's monotone decay by using an \emph{exponential moving aver
 
 The Heavy Ball method can be interpreted as a discretised damped harmonic oscillator: $z$ is the ``velocity'' that accumulates gradient information, and $\beta$ controls the damping. On quadratic functions with $\mu$-strong convexity and $L$-smoothness, the optimal $(\alpha, \beta)$ yields convergence rate $\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k$, which is the square root of the GD rate.
 
+\begin{remark}[Lyapunov argument for Heavy Ball]
+Consider the Lyapunov function $E_k = \|x_k - x^{\star}\|_H^2 + \frac{\alpha}{1-\beta}\|z_k\|^2$, where $\|\cdot\|_H$ denotes the $H$-weighted norm. On a quadratic $f(x) = \frac{1}{2}(x-x^{\star})^T H (x-x^{\star})$ with $H = \text{diag}(\mu_1,\ldots,\mu_d)$, expanding the Heavy Ball recursion shows:
+$E_{k+1} \leq \rho_{\text{HB}}^2\, E_k$ where $\rho_{\text{HB}} = \frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}$ at the optimal $\alpha^{\star} = \frac{4}{(\sqrt{L}+\sqrt{\mu})^2}$, $\beta^{\star} = \left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^2$.
+Compared to GD where the Lyapunov function $E_k = f(x_k) - f^{\star}$ decreases as $(1-\mu\alpha)^k \approx e^{-\mu k/L} = e^{-k/\kappa}$, Heavy Ball achieves $\rho_{\text{HB}}^k \approx e^{-2k/\sqrt{\kappa}}$, an exponential improvement in the exponent by $\sqrt{\kappa}$. This is exact for quadratics; for non-quadratic $f$, Heavy Ball loses this guarantee (the optimal $\alpha^{\star}$ and $\beta^{\star}$ depend on the unknown $\mu$ and $L$ locally), which partly explains its Rosenbrock underperformance relative to the theoretical prediction.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -464,6 +470,18 @@ This is an \emph{unbiased} estimator of the full gradient: $\mathbb{E}[g_{\mathc
 
 The total progress per epoch scales as (updates per epoch) $\times$ (step quality): small batches make many noisy steps; large batches make few accurate steps. For linear regression near convergence, the expected per-step progress is $\propto \alpha \mu / 2 \cdot \mathbb{E}[\|x_k - x^{\star}\|^2] - \alpha^2/(2\mu b)\cdot \sigma^2_g$, revealing a fundamental speed-accuracy trade-off: smaller batches are faster per epoch but introduce a noise floor that prevents convergence below $O(\alpha \sigma^2_g / (b\mu))$.
 
+More precisely, for an $L$-smooth $\mu$-strongly-convex function, a single SGD step with mini-batch $\mathcal{B}$ satisfies:
+\begin{equation}
+\mathbb{E}\!\left[\|x_{k+1} - x^{\star}\|^2\right] \leq (1 - \alpha\mu)\,\mathbb{E}\!\left[\|x_k - x^{\star}\|^2\right] + \frac{\alpha^2 \sigma^2_g}{b},
+\label{eq:sgd_recurrence}
+\end{equation}
+where $\sigma^2_g = \frac{1}{m}\sum_{i=1}^m \|\nabla f_i(x^{\star})\|^2$ is the per-sample gradient variance at the optimum. Unrolling \eqref{eq:sgd_recurrence} over $K$ steps yields:
+\begin{equation}
+\mathbb{E}\!\left[\|x_K - x^{\star}\|^2\right] \leq (1 - \alpha\mu)^K\|x_0 - x^{\star}\|^2 + \frac{\alpha \sigma^2_g}{\mu b}.
+\label{eq:sgd_bound}
+\end{equation}
+The two terms in \eqref{eq:sgd_bound} trade off: the first term (optimisation bias) decays geometrically and is reduced by large $\alpha$; the second term (statistical noise floor) grows with $\alpha$ and shrinks with batch size $b$. The optimal fixed $\alpha$ balances these as $\alpha^{\star} = \sqrt{b \|x_0 - x^{\star}\|^2 / (\sigma^2_g K)}$, giving a convergence rate $O(1/\sqrt{bK})$, which is faster than GD ($O(1/K)$) only when the variance term dominates. In practice, learning rate schedules $\alpha_k = c/k$ can achieve $O(1/k)$ at the cost of slower early-phase convergence.
+
 \begin{algorithm}[H]
 \caption{Mini-Batch SGD}
 \label{alg:sgd}
@@ -532,6 +550,20 @@ x_1^{\text{Newton}} = 0.25 - \frac{g'(0.25)}{g''(0.25)} = 0.25 - \frac{0.0625}{0
 which is close to (but not equal to) the true minimum at $x^{\star} = 0$ because $g(x) = x^4$ is not quadratic. A second Newton step from $x_1 = 0.1667$ gives $x_2 = 0.1667 - 4(0.1667)^3/(12(0.1667)^2) = 0.1667 - 0.1667/3 = 0.1111$, demonstrating the pattern of superlinear convergence $\|x_{k+1}\| = \frac{1}{3}\|x_k\|$ towards zero.
 
 In multiple dimensions, it generalises to $x_{k+1} = x_k - \alpha [\nabla^2 f(x_k)]^{-1} \nabla f(x_k)$, where $\alpha \in (0, 1]$ is a damping factor that ensures global convergence by preventing overshoot when far from the optimum.
+
+\subsubsection*{Newton Decrement and Convergence Phases}
+
+The \emph{Newton decrement} at $x_k$ is defined as:
+\begin{equation}
+\lambda_N(x_k) = \sqrt{\nabla f(x_k)^T [\nabla^2 f(x_k)]^{-1} \nabla f(x_k)},
+\label{eq:newton_decrement}
+\end{equation}
+and provides a theoretically-motivated stopping criterion. It measures the predicted decrease of the local quadratic model: $f(x_k) - \inf_x \hat{q}_{x_k}(x) = \frac{1}{2}\lambda_N(x_k)^2$. Two convergence phases exist:
+\begin{itemize}[nosep]
+  \item \textbf{Damped phase} ($\lambda_N \geq \eta$ for some threshold $\eta$): each step decreases $f$ by at least a constant $\gamma > 0$, giving linear convergence.
+  \item \textbf{Quadratic phase} ($\lambda_N < \eta$, close to optimum): full Newton steps ($\alpha = 1$) give \emph{quadratic} convergence $\lambda_N(x_{k+1}) \leq \frac{L_H}{2\mu^2}\lambda_N(x_k)^2$, where $L_H$ is the Hessian Lipschitz constant.
+\end{itemize}
+In our experiments, Benchmarks A and B quickly enter the quadratic phase (explaining rapid convergence), while Benchmark C stays in the damped phase throughout the 20 iterations (the Hessian varies too rapidly to activate quadratic convergence). For $g(x) = x^4$ at $x_0 = 0.25$: $\lambda_N(0.25) = |g'(0.25)|/\sqrt{g''(0.25)} = 0.0625/\sqrt{0.75} = 0.072$, indicating we are moderately close to the optimum, and the Newton step moves to $x_1 = 0.167$.
 
 \begin{figure}[H]
 \centering
@@ -660,7 +692,13 @@ By Taylor expansion, $f(x + \delta e_i) = f(x) + \delta \frac{\partial f}{\parti
 \left|\frac{f(x + \delta e_i) - f(x)}{\delta} - \frac{\partial f}{\partial x_i}(x)\right| = O(\delta) + O\!\left(\frac{\varepsilon_{\text{mach}}}{\delta}\right),
 \label{eq:fd_error}
 \end{equation}
-where the $O(\delta)$ term is \emph{truncation error} (from higher-order terms) and $O(\varepsilon_{\text{mach}}/\delta)$ is \emph{rounding error} (from floating-point cancellation when $\delta$ is too small). The optimal $\delta$ minimises the total error: $\delta^{\star} \sim \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-8}$. Each gradient evaluation requires $d + 1 = 3$ function evaluations for a $d=2$ problem, scaling linearly with dimension.
+where the $O(\delta)$ term is \emph{truncation error} (from higher-order terms) and $O(\varepsilon_{\text{mach}}/\delta)$ is \emph{rounding error} (from floating-point cancellation when $\delta$ is too small). The total error is approximately $E(\delta) \approx \frac{\delta}{2}|f''(x)| + \frac{\varepsilon_{\text{mach}}\,|f(x)|}{\delta}$. Minimising over $\delta$ by setting $\frac{dE}{d\delta} = 0$:
+\begin{equation}
+\frac{1}{2}|f''(x)| = \frac{\varepsilon_{\text{mach}}\,|f(x)|}{\delta^2} \implies \delta^{\star} = \sqrt{\frac{2\,\varepsilon_{\text{mach}}\,|f(x)|}{|f''(x)|}}.
+\label{eq:fd_optimal_delta}
+\end{equation}
+For typical problems where $|f(x)| \approx |f''(x)| \sim O(1)$, this gives $\delta^{\star} \sim \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-8}$.
+At the minimum total error, $E(\delta^{\star}) = O(\varepsilon_{\text{mach}}^{1/2})$, meaning finite differences can recover the gradient to about half the floating-point digits of precision. Each gradient evaluation requires $d + 1 = 3$ function evaluations for a $d=2$ problem, scaling linearly with dimension.
 
 To quantify the error for Benchmark B at the starting point $x_0 = [-1, 4]$: the true gradient component $\frac{\partial f}{\partial x_1} = 2(-1-1) + \cos(-1) = -4 + 0.540 = -3.460$. With $\delta = 0.05$: $\frac{f(x_0 + 0.05 e_1) - f(x_0)}{0.05}$; since the second derivative is $g''(x_1) = 2 - \sin(x_1)$, the truncation error is $\frac{0.05}{2}|g''(-1)| = \frac{0.05}{2}(2+0.841) = 0.071$, a relative error of $2\%$ --- acceptable. With $\delta = 0.8$: truncation error $\approx \frac{0.8}{2}|g''(-1)| = 1.136$, a $33\%$ relative error --- unacceptable for gradient-based optimisation.
 
@@ -847,7 +885,20 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.000 & $\sim 10$ \\
 
 \textbf{Penalty methods} convert the constrained problem into an unconstrained one, avoiding the projection oracle entirely. The trade-off is that feasibility is enforced \emph{approximately}, depending on $\lambda$. As established in the KKT analysis above, the constraint gradient at the starting point has magnitude $\approx 0.62$, requiring $\lambda > 0.62$ for the penalty to overcome the objective gradient pulling towards the infeasible region. The experiments confirm: $\lambda = 0.15 < 0.62$ fails to enforce feasibility, while $\lambda = 1.8 > 0.62$ and $\lambda = 4.5 \gg 0.62$ both succeed.
 
-Increasing $\lambda$ tightens constraint enforcement but causes ill-conditioning: the Lipschitz constant of $F_{\lambda}$ is $L_{F_{\lambda}} = L_f + \lambda$ (the penalty adds an extra gradient term), requiring smaller step sizes $\alpha \leq 1/L_{F_{\lambda}}$ for stability. This explains why $\alpha$ must be reduced from $0.05$ to $0.03$ for $\lambda = 4.5$: $1/(L_f + 4.5) \approx 0.03$ versus $1/(L_f + 1.8) \approx 0.05$. An augmented Lagrangian approach ($F_{\text{AL}}(x;\nu,\lambda) = f(x) + \nu g(x) + \frac{\lambda}{2}[g(x)]_+^2$) would address this trade-off by updating the dual variable $\nu$ to achieve exact feasibility without requiring $\lambda \to \infty$.
+Increasing $\lambda$ tightens constraint enforcement but causes ill-conditioning: the Lipschitz constant of $F_{\lambda}$ is $L_{F_{\lambda}} = L_f + \lambda$ (the penalty adds an extra gradient term), requiring smaller step sizes $\alpha \leq 1/L_{F_{\lambda}}$ for stability. This explains why $\alpha$ must be reduced from $0.05$ to $0.03$ for $\lambda = 4.5$: $1/(L_f + 4.5) \approx 0.03$ versus $1/(L_f + 1.8) \approx 0.05$.
+
+\subsubsection*{Augmented Lagrangian Remedy}
+
+The \emph{augmented Lagrangian} (method of multipliers) resolves the large-$\lambda$ ill-conditioning by introducing a dual variable $\nu \geq 0$:
+\begin{equation}
+F_{\text{AL}}(x;\,\nu,\lambda) = f(x) + \nu\, g(x) + \tfrac{\lambda}{2}\!\left[\max(0,\, g(x))\right]^2,
+\end{equation}
+where $g(x) = 0.5 - x_1 \leq 0$. After each primal minimisation $x^{(j+1)} = \arg\min_x F_{\text{AL}}(x;\nu^{(j)}, \lambda)$, the dual variable is updated as:
+\begin{equation}
+\nu^{(j+1)} = \max\!\left(0,\ \nu^{(j)} + \lambda\, g(x^{(j+1)})\right).
+\label{eq:al_dual_update}
+\end{equation}
+Under mild conditions, this achieves exact feasibility ($g(x^{\star}) = 0$ or $g(x^{\star}) < 0$, $\nu^{\star} g(x^{\star}) = 0$ by complementarity) even for \emph{finite} $\lambda$, because the dual variable $\nu$ absorbs the Lagrange multiplier, eliminating the need for $\lambda \to \infty$. For our problem: the optimal dual variable is $\nu^{\star} = 0$ (since the constraint is inactive), so the dual update \eqref{eq:al_dual_update} will converge to $\nu^{(j)} \to 0$ and the augmented Lagrangian approach reduces to pure penalty for this problem --- but in general (active-constraint cases) the augmented Lagrangian maintains a moderate $\lambda$ while achieving machine-precision feasibility.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -907,6 +958,12 @@ This $O(1/k)$ rate is the \emph{same} as projected gradient descent but does not
 \begin{definition}[Frank--Wolfe gap]
 The \emph{Frank--Wolfe gap} at $x_k$ is $h_k = \nabla f(x_k)^T(x_k - z_k)$, where $z_k$ solves the LMO. This quantity satisfies $h_k \geq f(x_k) - f^{\star} \geq 0$ for convex $f$ and provides a \emph{computable} upper bound on sub-optimality without knowing $f^{\star}$.
 \end{definition}
+
+A numerical example of the FW gap: for the \textbf{interior} case $f(x) = (x_1-1)^2 + (x_2-5)^2$ starting at $x_0 = (1, 1)$, the gradient is $\nabla f(x_0) = [2(1-1), 2(1-5)] = [0, -8]$. The LMO selects $z_0 = (\arg\min_{x_1} 0\cdot x_1, \arg\min_{x_2} -8x_2) = (0.5, 10)$ (lower bound in $x_1$ since coefficient zero picks the smaller; upper bound in $x_2$ since coefficient $-8 < 0$). The FW gap is:
+\[
+h_0 = \nabla f(x_0)^T(x_0 - z_0) = [0, -8]^T[1 - 0.5,\ 1 - 10] = [0, -8]^T[0.5, -9] = 0 + 72 = 72.
+\]
+Meanwhile, the true sub-optimality is $f(x_0) - f^{\star} = 0 + 16 = 16$. So $h_0 = 72 \geq 16 = f(x_0) - f^{\star}$, confirming the FW gap overestimates sub-optimality (as guaranteed), with a factor of $72/16 = 4.5$ at this initial point.
 
 The fixed-$\beta$ scheme used here (rather than the $\gamma_k = 2/(k+2)$ optimal schedule) does not guarantee $O(1/k)$ convergence, but provides a simple, stable update. With fixed $\beta$, the effective step size towards $z_k$ is $(1-\beta)$, analogous to a fixed learning rate in gradient descent. The key trade-off is: larger $(1-\beta)$ enables faster initial progress but causes more oscillation near the optimum due to large discrete jumps to constraint vertices; smaller $(1-\beta)$ slows initial convergence but produces smoother settling behaviour. Note that our Frank--Wolfe implementation uses the update $x_{k+1} = \beta x_k + (1-\beta)z_k$, where $\beta = 1 - \gamma_k$ in the standard $\gamma$-parametrisation.
 
@@ -1007,19 +1064,22 @@ Q6 & Frank--Wolfe & \multicolumn{3}{c}{Constrained Benchmark D only} & $O(1/k)$ 
 
 \begin{table}[H]
 \centering
-\caption{Theoretical convergence rates. $\kappa$: condition number, $L$: smoothness constant, $\mu$: strong convexity constant.}
+\caption{Theoretical convergence rates. $\kappa=L/\mu$: condition number; $\sigma^2_g$: per-sample gradient variance; $b$: batch size; $d$: dimension.}
 \label{tab:rates}
-\begin{tabular}{lcc}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Method} & \textbf{Convergence Rate (convex)} & \textbf{Per-iter cost} \\
+\textbf{Method} & \textbf{Convergence Rate} & \textbf{FE/step} & \textbf{Setting} \\
 \midrule
-Gradient Descent & $O\!\left(\left(1 - \frac{1}{\kappa}\right)^k\right)$ & $O(d)$ \\
-Polyak Step (exact $f^{\star}$) & $O\!\left(\left(1 - \frac{1}{\kappa}\right)^k\right)$ optimal & $O(d)$ \\
-Heavy Ball (optimal) & $O\!\left(\left(\frac{\sqrt\kappa - 1}{\sqrt\kappa + 1}\right)^{2k}\right)$ & $O(d)$ \\
-Nesterov Acceleration & $O\!\left(1/k^2\right)$ (convex) & $O(d)$ \\
-Adam & $O\!\left(1/\sqrt{k}\right)$ (non-convex) & $O(d)$ \\
-Newton's Method & $O(\rho^{2^k})$ quadratic (near opt.) & $O(d^3)$ \\
-Frank--Wolfe (step $2/(k+2)$) & $O(1/k)$ (smooth convex) & $O(d)$ \\
+Gradient Descent & $O\!\left(\!\left(1 - \tfrac{1}{\kappa}\right)^{\!k}\right)$ & 1 & Str.\ convex \\
+Polyak Step (exact $f^{\star}$) & $O\!\left(\!\left(1 - \tfrac{1}{\kappa}\right)^{\!k}\right)$ & 1 & Str.\ convex \\
+Heavy Ball (optimal $\alpha,\beta$) & $O\!\left(\!\left(\tfrac{\sqrt\kappa-1}{\sqrt\kappa+1}\right)^{\!2k}\right)$ & 1 & Quadratic only \\
+Nesterov Acceleration & $O(1/k^2)$ & 1 & Smooth convex \\
+Mini-batch SGD ($b$) & $O\!\left(\tfrac{\sigma^2_g}{\mu^2 b k}\right)$ noise floor & 1 (per step) & Str.\ convex \\
+Adam & $O\!\left(1/\sqrt{k}\right)$ & 1 & Non-convex \\
+Newton's Method & $O(\rho^{2^k})$ quadratic near opt. & 1 ($+$ $O(d^3)$) & Smooth, $H \succ 0$ \\
+Finite-Difference GD & $O\!\left(\!\left(1-\tfrac{1}{\kappa}\right)^{\!k}\right)$ (for $\delta=\delta^{\star}$) & $d+1$ & $\delta$ chosen well \\
+Nesterov Random Search & $O(d/k)$ & 2 & Smooth \\
+Frank--Wolfe ($\gamma_k = 2/(k+2)$) & $O(1/k)$ & 1 ($+$~LMO) & Smooth convex \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1039,6 +1099,30 @@ Frank--Wolfe (step $2/(k+2)$) & $O(1/k)$ (smooth convex) & $O(d)$ \\
 
 \item \textbf{Derivative-free methods trade gradient quality for evaluation simplicity.} Finite differences with small $\delta$ ($= 0.05$, $\approx 2\%$ relative error) recover near-exact gradient information at $d+1 = 3$ function evaluations per step. Random search (Nesterov method, 2 evaluations per step) is dimension-independent but provides only a noisy 1D gradient projection. Grid search guarantees global optimality up to grid resolution ($\Delta x \approx 0.073$ here) but requires $N^d$ evaluations --- $3025$ here vs.\ $\sim 10^{17}$ for $d=10$. Frank--Wolfe avoids the projection oracle entirely through the LMO, making it preferable when the constraint set has exploitable structure (e.g., nuclear norm balls in matrix completion, polytopes in combinatorial optimisation).
 \end{enumerate}
+
+\subsection{Computational Budget Perspective}
+
+A key practical question is: given a \emph{fixed function-evaluation budget}, which method achieves the lowest loss? Table~\ref{tab:budget} compares final losses at comparable evaluation counts on Benchmark C.
+
+\begin{table}[H]
+\centering
+\caption{Benchmark C final objective at approximately 240 total function evaluations. FD-GD $\delta=0.05$ uses $3\times 80 = 240$ evaluations; Newton uses 1 gradient + 1 Hessian (both $O(d)$ here) per iter, roughly $\approx 60$ gradient-equivalent evaluations; Nesterov random uses $2\times 120 = 240$ evaluations.}
+\label{tab:budget}
+\begin{tabular}{lccl}
+\toprule
+\textbf{Method} & \textbf{Iters} & \textbf{FE} & \textbf{Final $f$ (Bench.\ C)} \\
+\midrule
+GD & 120 & 120 & 3.514 \\
+FD-GD ($\delta=0.05$) & 80 & 240 & $\approx 0.73$ \\
+Nesterov random search & 120 & 240 & $\approx 2.1$ \\
+Nesterov momentum & 150 & 150 & 0.479 \\
+Newton (damped, $\alpha=0.22$) & 20 & $\sim 60$ & 0.686 \\
+Polyak (correct $f^{\star}$) & 120 & 120 & 0.009 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The evaluation-normalised comparison reinforces that gradient quality dominates raw count: Nesterov random search uses 240 evaluations but achieves only $f \approx 2.1$, worse than vanilla GD with 120. FD-GD ($\delta=0.05$) at 240 evaluations reaches $f \approx 0.73$, outperforming GD with the same budget ($f = 3.51$ at 120 evals), demonstrating that accurate gradient information is worth the extra $d$ evaluations per step even at equal total cost.
 
 \subsection{Limitations of This Study}
 
