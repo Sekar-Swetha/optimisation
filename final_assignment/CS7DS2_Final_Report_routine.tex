@@ -81,6 +81,10 @@ All experiments are implemented in Python with \texttt{NumPy}, using a fixed ran
 \label{sec:benchmarks}
 % ============================================================
 
+\begin{remark}[Gradient Descent as Euler Discretisation of Gradient Flow]
+The gradient descent update $x_{k+1} = x_k - \alpha \nabla f(x_k)$ is the Euler method applied to the continuous-time \emph{gradient flow} ODE: $\dot{x}(t) = -\nabla f(x(t))$. This ODE describes the steepest descent path of $f$ and converges to a local minimum for any smooth objective. The step size $\alpha$ acts as the time step: large $\alpha$ gives faster ``virtual time'' progress but risks instability (analogous to stiff ODE solvers diverging for large time steps). The stability condition $\alpha < 2/L$ corresponds to the Euler stability region for this ODE. This physical interpretation clarifies why all first-order methods are fundamentally limited by the condition number $\kappa = L/\mu$: the gradient flow converges at rate $e^{-\mu t}$, and Euler with time step $\alpha$ requires $k \approx t/\alpha \approx \kappa \log(1/\epsilon) / 2$ steps to achieve $\epsilon$-accuracy.
+\end{remark}
+
 \subsection{Benchmark A: Linear Regression Quadratic Loss}
 A synthetic dataset with $m = 1000$ samples and $d = 2$ parameters is generated:
 \begin{equation}
@@ -163,7 +167,7 @@ Four adaptive methods are compared against a constant step-size gradient descent
 \end{algorithmic}
 \end{algorithm}
 
-The Polyak step size is theoretically motivated: for any convex $f$, setting $\alpha_k = (f(x_k) - f^{\star}) / \|\nabla f(x_k)\|^2$ is the largest step that can be taken without increasing the distance to any optimal point $x^{\star}$. The $\varepsilon$ term prevents division by zero.
+The Polyak step size is theoretically motivated: for any convex $f$, setting $\alpha_k = (f(x_k) - f^{\star}) / \|\nabla f(x_k)\|^2$ is the unique step size that minimises $\|x_{k+1} - x^{\star}\|^2$ over all scalar steps, i.e., it is the step that brings the iterate \emph{closest} to any optimal point in the current gradient descent direction. This can be verified by minimising $\|x_k - \alpha g_k - x^{\star}\|^2$ over $\alpha$, giving $\alpha^{\star} = g_k^T(x_k - x^{\star}) / \|g_k\|^2$. Using the first-order convexity inequality $g_k^T(x_k - x^{\star}) \geq f(x_k) - f^{\star}$ (from $f(x^{\star}) \geq f(x_k) + g_k^T(x^{\star} - x_k)$) and replacing $g_k^T(x_k - x^{\star})$ with its lower bound $f(x_k) - f^{\star}$ gives the Polyak formula as a conservative approximation. The $\varepsilon$ term prevents division by zero.
 
 \begin{algorithm}[H]
 \caption{Adagrad}
@@ -223,6 +227,14 @@ For a convex function $f$ with exact $f^{\star}$, the Polyak step-size iteration
 \]
 Moreover, if $f$ is $\mu$-strongly convex and $f^{\star}$ is known exactly, geometric convergence holds: $f(x_k) - f^{\star} \le (1 - \mu/L)^k (f(x_0) - f^{\star})$.
 \end{theorem}
+
+\begin{remark}[Heavy Ball as a Damped Harmonic Oscillator]
+The Heavy Ball update $z_{k+1} = \beta z_k + \alpha \nabla f(x_k)$, $x_{k+1} = x_k - z_{k+1}$ can be written as a second-order recurrence:
+\[
+x_{k+1} - (1 + \beta) x_k + \beta x_{k-1} = -\alpha \nabla f(x_k).
+\]
+In the continuous-time limit (step size $\alpha \to 0$), this becomes the ODE $\ddot{x} + (1-\beta)\dot{x} + \alpha\nabla f(x) = 0$, the equation of a \emph{damped harmonic oscillator} with damping coefficient $\gamma = 1 - \beta$ and ``spring constant'' equal to the Hessian eigenvalue $\lambda$. The optimal Heavy Ball parameters $\alpha^{\star}$ and $\beta^{\star}$ correspond to \emph{critical damping} ($\gamma^2 = 4\alpha\lambda$) for the worst eigenvalue, ensuring exponential convergence without oscillation for quadratic objectives. For non-quadratic objectives, the varying Hessian causes the system to be ``out of tune'' --- neither critically damped nor over-damped simultaneously in all directions --- explaining the oscillations observed in Figure~\ref{fig:q2_nesterov_vs_hb}.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -722,6 +734,10 @@ H = \begin{bmatrix} 2 + 1200x_1^2 - 400x_2 & -400x_1 \\ -400x_1 & 200 \end{bmatr
 At $x_0 = (-1, 1)$: $H_{11} = 2 + 1200 - 400 = 802$, $H_{12} = 400$, $H_{22} = 200$. The full Newton step $p = H^{-1}\nabla f$ may be large and point far from the quadratic approximation's validity region. A damping factor $\alpha = 0.22$ trades convergence speed for stability, ensuring each step stays within the region where the quadratic model is accurate.
 \end{remark}
 
+\begin{remark}[Newton Decrement as a Principled Stopping Criterion]
+The quadratic convergence of Newton's method enables a rigorous stopping criterion without knowing $f^{\star}$. The \textbf{Newton decrement} $\lambda_N(x) = \sqrt{\nabla f(x)^T H(x)^{-1} \nabla f(x)}$ satisfies $f(x) - f(x^{\star}) \leq \frac{1}{2}\lambda_N(x)^2$ (for strongly convex $f$), providing a computable upper bound on the sub-optimality gap. In practice, the stopping criterion $\lambda_N(x)^2/2 \leq \varepsilon_{\text{tol}}$ guarantees $\epsilon$-accuracy without any reference to $f^{\star}$. For our Benchmark A (quadratic), $\lambda_N$ drops to machine precision after one Newton step. For our experiments, we use the fixed iteration count $N = 20$, but in production implementations the Newton decrement criterion would terminate early (typically in 5--10 iterations for Benchmark B).
+\end{remark}
+
 \begin{remark}[Levenberg--Marquardt: Adaptive Hessian Regularisation]
 The Tikhonov regularisation $H_{\lambda} = H + \lambda I$ used in Algorithm~\ref{alg:newton} has a direct connection to the \textbf{Levenberg--Marquardt} (LM) method, which adaptively adjusts $\lambda$ based on whether the quadratic model provides a good approximation. The ratio $\rho = (f(x_k) - f(x_k + p_k)) / (m_k(0) - m_k(p_k))$ compares actual vs.\ predicted reduction: if $\rho > 0.75$, decrease $\lambda$ (more like Newton); if $\rho < 0.25$, increase $\lambda$ (more like steepest descent). This adaptive trust-region strategy eliminates the need to hand-tune the damping factor $\alpha$, and is particularly effective on least-squares problems where $H \approx J^T J$ (Gauss--Newton Hessian approximation). In our Rosenbrock experiments, a fixed $\alpha = 0.22$ serves a similar role but wastes potential progress in later iterations when the iterate is already close to the optimum and $\lambda$ could safely be reduced.
 \end{remark}
@@ -1079,6 +1095,10 @@ g_{\text{FW}}(x_k) = \max_{y \in \mathcal{X}}\, \nabla f(x_k)^T(x_k - y) = \nabl
 \end{equation}
 It satisfies $g_{\text{FW}}(x_k) \geq f(x_k) - f^{\star} \geq 0$, providing a computable upper bound on the sub-optimality gap. $g_{\text{FW}}(x^{\star}) = 0$ iff $x^{\star}$ is a constrained optimum.
 \end{definition}
+
+\begin{proof}[Proof of $g_{\text{FW}}(x_k) \geq f(x_k) - f^{\star}$]
+By convexity of $f$: for any $y \in \mathcal{X}$, $f(y) \geq f(x_k) + \nabla f(x_k)^T(y - x_k)$. Setting $y = x^{\star}$ and rearranging: $f(x_k) - f^{\star} \leq \nabla f(x_k)^T(x_k - x^{\star}) \leq \max_{y \in \mathcal{X}} \nabla f(x_k)^T(x_k - y) = g_{\text{FW}}(x_k)$, where the second inequality follows because $x^{\star} \in \mathcal{X}$.
+\end{proof}
 
 \begin{theorem}[Frank--Wolfe Convergence Rate]
 For a convex, $L$-smooth objective $f$ and the standard step-size $\gamma_k = 2/(k+2)$, Frank--Wolfe satisfies:
