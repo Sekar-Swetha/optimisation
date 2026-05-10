@@ -195,7 +195,7 @@ Adagrad applies a larger effective rate to coordinates with consistently small g
 \end{algorithmic}
 \end{algorithm}
 
-RMSprop (Hinton, 2012) addresses Adagrad's vanishing step issue by replacing the cumulative sum with an exponential moving average. The decay factor $\beta = 0.9$ (used throughout) means only the most recent gradient magnitudes dominate the scaling, maintaining a non-vanishing effective step size.
+RMSprop (Hinton, 2012) addresses Adagrad's vanishing step issue by replacing the cumulative sum with an exponential moving average. The decay factor $\beta = 0.9$ (used throughout) means only the most recent gradient magnitudes dominate the scaling, maintaining a non-vanishing effective step size. In quasi-steady state, $v_k \approx (1-\beta)\mathbb{E}[g^2_k]$ (geometric series), so the effective step becomes $\alpha_0 g_k / \sqrt{(1-\beta)\mathbb{E}[g^2]} \propto g_k / \sqrt{\mathbb{E}[g^2]}$ --- \emph{gradient divided by its root-mean-square}, hence the name ``RMSprop''. This per-coordinate normalisation approximates a diagonal Newton step (replacing the full Hessian with its diagonal), providing curvature-aware scaling at $O(d)$ cost.
 
 \begin{algorithm}[H]
 \caption{Polyak Momentum / Heavy Ball}
@@ -362,6 +362,8 @@ Figure~\ref{fig:theory_vs_practice} verifies the theoretical convergence rates o
 \item \textbf{Effect of condition number:} Table~\ref{tab:smoothness} shows that Benchmark A's near-unit conditioning ($\kappa \approx 1.12$) makes it trivially easy for all methods. Benchmark B's $\kappa \approx 10$ is moderate. Benchmark C's $\kappa \approx 1604$ at the starting point is the key driver of difficulty: GD needs a tiny step $\alpha < 0.0025$, requiring $\sim 1600$ steps to achieve the same relative error as one Newton step.
 
 \item \textbf{Memory cost:} GD and Polyak: $O(d)$. Adagrad and RMSprop: $O(d)$ for the accumulated squared gradients. Heavy Ball: $O(d)$ for the momentum buffer. All methods are memory-efficient for large $d$.
+
+\item \textbf{Practical domain:} Adagrad's diagonal preconditioning advantage is most pronounced in NLP and recommendation systems where input features are sparse: an embedding lookup table has $d = \text{vocabulary} \times \text{embedding dim}$ parameters, but each mini-batch touches only $b \ll d$ embedding rows. The cumulative $G_k$ grows only for active coordinates, preserving large effective steps for rare-but-important features. This is why Adagrad (and its successor Adam) became the default for word embedding training. For our dense $d = 2$ benchmarks, this sparsity advantage is absent, and Adagrad offers no benefit over RMSprop.
 \end{itemize}
 
 % ============================================================
@@ -393,6 +395,10 @@ f(x_k) - f^{\star} \;\leq\; \frac{2L\|x_0 - x^{\star}\|^2}{(k+1)^2} \;=\; O(1/k^
 \]
 This is \emph{optimal} for first-order methods on convex smooth problems (Nesterov, 1983).
 \end{theorem}
+
+\begin{remark}[Why $O(1/k^2)$ is Optimal]
+Nesterov (1983) proved a \emph{lower bound}: for any first-order method (using only gradient evaluations $\nabla f(x_0), \ldots, \nabla f(x_{k-1})$) and any $L$-smooth convex $f$, there exists a worst-case function for which $f(x_k) - f^{\star} \geq \Omega(L\|x_0 - x^{\star}\|^2 / k^2)$. The construction uses a ``worst-case'' tridiagonal quadratic, showing that gradient information propagates through the dimension at most one coordinate per step. Since Nesterov acceleration matches this lower bound, it is \emph{oracle-optimal}: no first-order method can do asymptotically better in the worst case. This does \emph{not} mean Nesterov is always best in practice --- for strongly convex problems, Heavy Ball achieves the same rate with a simpler implementation, and for finite-sum problems, variance reduction methods are superior.
+\end{remark}
 
 The key distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$. This allows the algorithm to ``correct'' its trajectory before overshooting. Conceptually, Nesterov evaluates the gradient one momentum step ahead, combining the momentum direction with the local gradient information at that look-ahead point.
 
@@ -1176,45 +1182,49 @@ Table~\ref{tab:alg_summary} consolidates the theoretical convergence rates, comp
 
 \begin{table}[H]
 \centering
-\caption{Summary of all optimisation algorithms: convergence rates (for convex smooth $f$), per-iteration cost, memory, and practical observations from experiments. $d$ = problem dimension, $m$ = number of data points, $b$ = batch size. $\kappa = L/\mu$ = condition number. $C_{\mathcal{X}}$ = feasible set diameter.}
+\caption{Summary of all optimisation algorithms: convergence rates, per-iteration cost, memory, and iterations to $\epsilon$-accuracy (strongly convex case where applicable). $d$ = dimension, $m$ = data points, $b$ = batch size, $\kappa = L/\mu$, $C_{\mathcal{X}}$ = diameter of feasible set.}
 \label{tab:alg_summary}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccccc}
 \toprule
-\textbf{Method} & \textbf{Rate (convex)} & \textbf{Cost/iter} & \textbf{Memory} & \textbf{Key property} \\
+\textbf{Method} & \textbf{Rate} & \textbf{Iters to $\epsilon$} & \textbf{Cost/iter} & \textbf{Mem} & \textbf{Key property} \\
 \midrule
-\multicolumn{5}{l}{\textit{Question 1: Adaptive Step-Size}} \\
-GD (constant $\alpha$) & $O(e^{-\mu\alpha k})$ & $O(md)$ & $O(d)$ & Stable, baseline \\
-Polyak & $O(e^{-\mu k/L})$ & $O(md)$ & $O(d)$ & Requires known $f^{\star}$ \\
-Adagrad & $O(\log k / \sqrt{k})$ & $O(md)$ & $O(d)$ & Monotone step, sparse data \\
-RMSprop & $O(1/\sqrt{k})$ & $O(md)$ & $O(d)$ & Non-vanishing step \\
-Heavy Ball & $O(e^{-\sqrt{\mu/L}\,k})$ & $O(md)$ & $O(d)$ & $\sqrt{\kappa}$ speedup (quadratics) \\
+\multicolumn{6}{l}{\textit{Question 1: Adaptive Step-Size}} \\
+GD (constant $\alpha$) & $O(e^{-k/\kappa})$ & $O(\kappa\log\tfrac{1}{\epsilon})$ & $O(md)$ & $O(d)$ & Stable, baseline \\
+Polyak & $O(e^{-k/\kappa})$ & $O(\kappa\log\tfrac{1}{\epsilon})$ & $O(md)$ & $O(d)$ & Requires known $f^{\star}$ \\
+Adagrad & $O(\log k / \sqrt{k})$ & $O(1/\epsilon^2)$ & $O(md)$ & $O(d)$ & Sparse data; vanishing step \\
+RMSprop & $O(1/\sqrt{k})$ & $O(1/\epsilon^2)$ & $O(md)$ & $O(d)$ & Diag.\ Newton approx. \\
+Heavy Ball & $O(e^{-k/\sqrt{\kappa}})$ & $O(\sqrt{\kappa}\log\tfrac{1}{\epsilon})$ & $O(md)$ & $O(d)$ & $\sqrt{\kappa}$ speedup (quadratics) \\
 \midrule
-\multicolumn{5}{l}{\textit{Question 2: Momentum and Stochastic}} \\
-Nesterov & $O(L/k^2)$ & $O(md)$ & $O(d)$ & Optimal first-order rate \\
-Adam & (non-convex) & $O(md)$ & $O(d)$ & Adaptive + momentum \\
-Mini-batch SGD & $O(1/k)$ (decay $\alpha$) & $O(bd)$ & $O(d)$ & Scalable, noisy \\
+\multicolumn{6}{l}{\textit{Question 2: Momentum and Stochastic}} \\
+Nesterov & $O(L/k^2)$ & $O(\sqrt{\kappa}\log\tfrac{1}{\epsilon})$ & $O(md)$ & $O(d)$ & Optimal first-order rate \\
+Adam & non-convex & --- & $O(md)$ & $O(d)$ & Adaptive + momentum \\
+SGD (decay $\alpha$) & $O(1/k)$ & $O(1/(\mu\epsilon))$ & $O(bd)$ & $O(d)$ & Scalable, noisy \\
+SVRG & $O(e^{-k/\kappa})$ & $O((\kappa+m)\log\tfrac{1}{\epsilon})$ & $O(d)$ & $O(md)$ & Linear conv., no decay \\
 \midrule
-\multicolumn{5}{l}{\textit{Question 3: Newton's Method}} \\
-GD (quadratic) & $O(e^{-\mu\alpha k})$ & $O(d^2)$ & $O(d)$ & Linear convergence \\
-Newton & $O(\rho^{2^k})$ (quadratic) & $O(d^3)$ & $O(d^2)$ & 1 step for quadratics \\
-BFGS (quasi-Newton) & super-linear & $O(d^2)$ & $O(d^2)$ & Practical for $d \leq 10^4$ \\
+\multicolumn{6}{l}{\textit{Question 3: Newton's Method}} \\
+Newton & $O(\rho^{2^k})$ & $O(\log\log\tfrac{1}{\epsilon})$ & $O(d^3)$ & $O(d^2)$ & 1 step for quadratics \\
+BFGS & super-linear & $O(\log\tfrac{1}{\epsilon})$ & $O(d^2)$ & $O(d^2)$ & Practical for $d \leq 10^4$ \\
 \midrule
-\multicolumn{5}{l}{\textit{Question 4: Derivative-Free}} \\
-Finite diff.\ GD & $O(e^{-\mu\alpha k})$ & $O(md)$ & $O(d)$ & $O(\delta)$ gradient error \\
-Nesterov random & $O(Ld^2/k)$ & $O(2m)$ & $O(d)$ & No gradient needed \\
-Nelder--Mead & (no guarantee) & $O(d)$ & $O(d^2)$ & $d \leq 5$ in practice \\
-Grid search & (global) & $O(N^d)$ total & $O(d)$ & Exponential in $d$ \\
+\multicolumn{6}{l}{\textit{Question 4: Derivative-Free}} \\
+FD GD ($\delta$ small) & $O(e^{-k/\kappa})$ & $O(\kappa\log\tfrac{1}{\epsilon})$ & $O(d\cdot m)$ & $O(d)$ & $O(\delta)$ gradient error \\
+Nesterov random & $O(Ld^2/k)$ & $O(Ld^2/\epsilon)$ & $O(2m)$ & $O(d)$ & $O(1)$ eval/iter \\
+Nelder--Mead & (no guarantee) & $O(200d)$ empirical & $O(d)$ & $O(d^2)$ & $d \leq 5$ \\
+Grid search & global & $O(N^d)$ total & --- & $O(d)$ & Exhaustive \\
 \midrule
-\multicolumn{5}{l}{\textit{Question 5: Constrained Optimisation}} \\
-Projected GD & $O(L/k)$ & $O(md + \Pi)$ & $O(d)$ & Hard feasibility \\
-Penalty method & $O(L_\lambda/k)$ & $O(md)$ & $O(d)$ & Soft feasibility; ill-cond.\ \\
+\multicolumn{6}{l}{\textit{Question 5: Constrained Optimisation}} \\
+Projected GD & $O(L/k)$ & $O(\kappa/\epsilon)$ & $O(md + \Pi)$ & $O(d)$ & Hard feasibility \\
+Penalty ($\lambda$ fixed) & $O(L_\lambda/k)$ & $O(\kappa_\lambda/\epsilon)$ & $O(md)$ & $O(d)$ & Soft; $L_\lambda = L_f + \lambda$ \\
+Aug.\ Lagrangian & $O(e^{-k})$ & $O(\kappa\log\tfrac{1}{\epsilon})$ & $O(md)$ & $O(d)$ & Exact via dual update \\
 \midrule
-\multicolumn{5}{l}{\textit{Question 6: Frank--Wolfe}} \\
-FW (fixed $\beta$) & varies & $O(d)$ LMO & $O(d)$ & Projection-free \\
-FW ($\gamma_k = 2/(k+2)$) & $O(LC_\mathcal{X}^2/k)$ & $O(d)$ LMO & $O(d)$ & Optimal rate, sparse \\
+\multicolumn{6}{l}{\textit{Question 6: Frank--Wolfe}} \\
+FW (fixed $\beta$) & varies & --- & $O(d)$ LMO & $O(d)$ & Projection-free \\
+FW ($\gamma_k = 2/(k+2)$) & $O(LC_\mathcal{X}^2/k)$ & $O(LC_\mathcal{X}^2/\epsilon)$ & $O(d)$ LMO & $O(d)$ & Optimal rate, sparse \\
+Away-step FW & $O(e^{-ck})$ & $O(\kappa\log\tfrac{1}{\epsilon})$ & $O(d)$ LMO & $O(k)$ & Linear conv., active set \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+Table~\ref{tab:alg_summary} reveals a key pattern: methods that exploit curvature (Newton, Heavy Ball, Nesterov) achieve iteration complexity depending on $\sqrt{\kappa}$ or $\log\log(1/\epsilon)$, while pure first-order methods (GD, SGD) depend linearly on $\kappa$. For Benchmark C ($\kappa \approx 2000$), this means GD needs $\sim 15{,}000$ iterations to reach $\epsilon = 10^{-3}$ accuracy, Nesterov needs $\sim 280$ iterations, Heavy Ball (optimal) needs $\sim 320$ iterations, and Newton needs $\sim 7$ iterations. In contrast, for Benchmark A ($\kappa \approx 1.12$), all methods converge in fewer than 30 iterations regardless of order.
 
 % ============================================================
 \section{Cross-Method Comparison on Benchmark C}
