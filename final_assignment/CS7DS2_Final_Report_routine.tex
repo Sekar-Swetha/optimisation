@@ -885,11 +885,36 @@ Despite Newton's superior convergence rate, two practical limitations restrict i
 \item \textbf{Non-convexity}: When $\nabla^2 f(x_k)$ is indefinite (negative curvature), the Newton direction is not necessarily a descent direction. The Tikhonov regulariser $\lambda I$ mitigates this but may be insufficient far from the optimum.
 \end{enumerate}
 
-\textbf{Quasi-Newton methods} (e.g., BFGS, L-BFGS) address these limitations by approximating $H_k^{-1}$ from gradient differences, without ever computing the true Hessian. The BFGS update:
+\textbf{Quasi-Newton methods} (e.g., BFGS, L-BFGS) address these limitations by approximating $H_k^{-1}$ from gradient differences, without ever computing the true Hessian.
+
+\textbf{The secant equation.} Quasi-Newton methods are derived from the \emph{secant condition}: after taking step $s_k = x_{k+1} - x_k$, the gradient difference $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$ satisfies:
 \begin{equation}
-B_{k+1} = B_k - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k} + \frac{y_k y_k^T}{y_k^T s_k}, \quad s_k = x_{k+1} - x_k, \quad y_k = g_{k+1} - g_k,
+y_k = \int_0^1 \nabla^2 f(x_k + t s_k)\, s_k\, dt \approx \nabla^2 f(x_{k+1})\, s_k.
+\label{eq:secant}
 \end{equation}
-maintains a positive definite Hessian approximation using $O(d^2)$ storage. The limited-memory variant (L-BFGS) stores only the last $m \ll d$ correction pairs, reducing storage to $O(md)$. Both achieve \emph{superlinear} convergence --- faster than GD's linear rate but slower than Newton's quadratic rate --- and are the methods of choice in large-scale optimisation in practice.
+This motivates requiring the next Hessian approximation $B_{k+1}$ to satisfy $B_{k+1} s_k = y_k$ (the secant equation). Among all positive definite matrices satisfying the secant equation, BFGS selects the one closest to $B_k$ in the weighted Frobenius norm $\|B_{k+1} - B_k\|_{W}^2$. The solution is the BFGS rank-2 update:
+\begin{equation}
+B_{k+1} = B_k - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k} + \frac{y_k y_k^T}{y_k^T s_k}, \quad s_k = x_{k+1} - x_k, \quad y_k = g_{k+1} - g_k.
+\end{equation}
+Using the Sherman–Morrison–Woodbury identity, the inverse Hessian approximation $H_k^{-1} \approx B_k^{-1}$ can be updated directly (avoiding any linear solve):
+\begin{equation}
+B_{k+1}^{-1} = \left(I - \rho_k s_k y_k^T\right) B_k^{-1} \left(I - \rho_k y_k s_k^T\right) + \rho_k s_k s_k^T, \quad \rho_k = \frac{1}{y_k^T s_k}.
+\label{eq:bfgs_inv}
+\end{equation}
+Equation~\eqref{eq:bfgs_inv} is the form used in practice: given $B_k^{-1}$, the inverse is updated in $O(d^2)$ operations using only two vectors $s_k, y_k$. No Hessian is ever formed or inverted.
+
+\textbf{Convergence and self-correcting property.} BFGS achieves \emph{superlinear} convergence: $\|x_{k+1} - x^{\star}\| = o(\|x_k - x^{\star}\|)$, i.e., the per-step contraction ratio $\|x_{k+1} - x^{\star}\|/\|x_k - x^{\star}\| \to 0$. This is faster than GD's fixed linear rate but slower than Newton's quadratic $O(\|e_k\|^2)$. Intuitively, BFGS gradually builds up curvature information over iterations, so each step uses a better Hessian approximation than the last. Figure~\ref{fig:bfgs_analysis} confirms this: the relative Hessian approximation error drops from $\sim$30\% initially to under 1\% by iteration 30, and the secant condition~\eqref{eq:secant} is satisfied exactly at every step (secant residual $\approx 10^{-14}$, machine precision). A key property is \emph{self-correction}: if $B_k$ is a poor Hessian estimate, the BFGS update adjusts it based on observed curvature in the $s_k$ direction. After $d$ steps in general position, the accumulated information theoretically suffices to recover the exact Hessian (for quadratic objectives, BFGS terminates in at most $d$ steps).
+
+\textbf{Curvature condition.} The update is only valid when $y_k^T s_k > 0$, which ensures $B_{k+1}$ is positive definite given $B_k \succ 0$. For a convex function, this holds automatically when using the Wolfe line search conditions. In the damped Newton regime, $y_k^T s_k = s_k^T(\nabla^2 f(\xi)s_k) \geq \mu\|s_k\|^2 > 0$ for strongly convex $f$.
+
+The limited-memory variant (L-BFGS) stores only the last $m \ll d$ correction pairs $\{(s_j, y_j)\}_{j=k-m}^{k}$, reducing storage to $O(md)$ and matrix-vector products to $O(md)$ via the two-loop recursion. This makes L-BFGS practical for $d \sim 10^6$--$10^9$ parameter models, and it is the standard algorithm for large-scale machine learning.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/bfgs_analysis.pdf}
+\caption{BFGS analysis on Benchmark B. \emph{Left}: convergence comparison — BFGS and Newton both reach machine precision in $\sim$10 iterations, while GD (linear rate $(1-1/\kappa)^k$, $\kappa \approx 7$) stalls at $f - f^{\star} \approx 2.7 \times 10^{-5}$ after 30 iterations. BFGS enters its superlinear phase around iteration 5 (dashed red line), when the inverse Hessian approximation has accumulated enough curvature information. \emph{Centre}: BFGS Hessian approximation quality — the relative error $\|B_k - H(x_k)\|_F/\|H(x_k)\|_F$ drops from $\sim$30\% to under 1\% as iterations progress. The secant condition is satisfied to machine precision at every step ($\approx 10^{-14}$). \emph{Right}: gradient norm convergence — BFGS gradient norm decays superlinearly (faster than the GD linear-rate reference), confirming superlinear convergence even without an explicit rate constant.}
+\label{fig:bfgs_analysis}
+\end{figure}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
