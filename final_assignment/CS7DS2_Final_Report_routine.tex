@@ -243,6 +243,14 @@ RMSprop replaces Adagrad's full history with a running exponential average contr
 
 \textbf{Steady-state analysis.} After many iterations, $v_{k}$ converges to a steady state where $v_\infty \approx \mathbb{E}[g^2]$ (the mean squared gradient, coordinate-wise). The effective step then approaches $\alpha_0 / \sqrt{\mathbb{E}[g_i^2]} \cdot g_i \approx \alpha_0 \cdot \mathrm{sign}(g_i) \cdot \sqrt{\mathbb{E}[g_i^2]} / \mathbb{E}[g_i^2] = \alpha_0 \cdot g_i / \sqrt{\mathbb{E}[g_i^2]}$. This normalises the gradient by its root-mean-square, effectively rescaling to a coordinate system where all directions have comparable curvature. RMSprop can be interpreted as gradient descent in a preconditioned coordinate system with preconditioner $P_k = \text{diag}(\sqrt{v_k})^{-1}$, reducing the effective condition number from $\kappa(H)$ to $\kappa(P_k H P_k) \approx 1$ in steady state.
 
+\begin{proposition}[RMSprop Condition Number Reduction]
+  For a quadratic $f(x) = \frac{1}{2}x^T H x$ with diagonal $H = \mathrm{diag}(h_1, \ldots, h_d)$ ($h_i > 0$), the steady-state RMSprop preconditioner satisfies $v_{\infty, i} = \mathbb{E}[g_i^2] = h_i^2 \mathbb{E}[x_i^2]$ (at any fixed $x$). The preconditioned iterate $\tilde{x}_{k+1} = \tilde{x}_k - \alpha_0 P_k \nabla f(x_k)$ satisfies a descent recursion with effective condition number:
+  \begin{equation}
+    \kappa_{\rm eff} = \frac{\max_i h_i / \sqrt{v_{\infty,i}}}{\min_i h_i / \sqrt{v_{\infty,i}}} = \frac{\max_i h_i / (h_i \sqrt{\mathbb{E}[x_i^2]})}{\min_i h_i / (h_i \sqrt{\mathbb{E}[x_i^2]})} = 1,
+  \end{equation}
+  provided the squared-gradient estimates $v_{\infty,i}$ are proportional to $h_i^2$. In practice, the proportionality only holds approximately (gradients depend on the full trajectory, not just the steady state), but RMSprop still substantially reduces the effective condition number, explaining its superior performance on ill-conditioned problems.
+\end{proposition}
+
 \begin{algorithm}[H]
 \caption{Polyak Momentum / Heavy Ball Method}
 \label{alg:heavyball}
@@ -429,6 +437,21 @@ The \emph{Polyak--\L{}ojasiewicz (PL) inequality} with constant $\mu > 0$ states
   \frac{1}{2}\|\nabla f(x)\|^2 \geq \mu\,(f(x) - f^\star), \quad \forall\, x.
 \end{equation}
 This is weaker than strong convexity but sufficient to prove GD's linear convergence $f(x_k) - f^\star \leq (1 - 2\alpha\mu)^k(f(x_0) - f^\star)$ for $\alpha \leq 1/L$. All strongly convex functions satisfy PL, but PL functions need not be convex (e.g., $f(x_1, x_2) = x_1^2 + 3(1-\cos x_2)$ is nonconvex but PL on $|x_2| < 2\pi$).
+
+\textbf{Proof that GD converges linearly under PL.} For $\alpha = 1/L$:
+\begin{align}
+  f(x_{k+1}) &\leq f(x_k) - \frac{1}{2L}\|\nabla f(x_k)\|^2 & \text{(descent lemma, $L$-smooth)} \\
+  &\leq f(x_k) - \frac{\mu}{L}(f(x_k) - f^\star) & \text{(PL inequality)} \\
+  &= \left(1 - \frac{\mu}{L}\right)(f(x_k) - f^\star) + f^\star. &
+\end{align}
+Subtracting $f^\star$: $f(x_{k+1}) - f^\star \leq (1 - \mu/L)(f(x_k) - f^\star)$, giving $f(x_k) - f^\star \leq (1-\mu/L)^k (f(x_0) - f^\star)$. The rate $1 - \mu/L = 1 - 1/\kappa$ (with $\kappa = L/\mu$) recovers the exact GD linear rate. The key step is the descent lemma, which replaces the need for convexity: the PL condition provides the ``gradient-to-suboptimality'' link that convexity would otherwise supply.
+
+\textbf{Implications for the benchmark problems:}
+\begin{itemize}[nosep]
+  \item Benchmark A (quadratic, $\kappa \approx 1$): $\mu = \lambda_{\min}(H) \approx 1$, $L = \lambda_{\max}(H) \approx 1$. The near-unit condition number gives convergence in $\approx 15$ iterations: $(1-1)^{15} \approx 0$.
+  \item Benchmark B (Toy NN, $\kappa \in [3.3, 5.6]$): $\mu \approx 1.54$, $L \approx 8.6$. Rate $\approx 0.82^k$; 50 iterations reduce error by $0.82^{50} \approx 10^{-4}$.
+  \item Benchmark C (Rosenbrock): Near $x^\star$, $\mu \approx 0.399$, $L \approx 1001.6$, $\kappa \approx 2508$. Rate $\approx (1 - 1/2508)^k$; 2500 iterations reduce error by $e^{-1}$. Far from $x^\star$, the PL constant effectively vanishes because $\|\nabla f\|^2 \ll 2\mu(f - f^\star)$ in the curved valley, explaining GD's extremely slow progress on Rosenbrock.
+\end{itemize}
 
 \begin{figure}[H]
 \centering
@@ -749,6 +772,22 @@ The first-order model's ``minimum'' is at $-\infty$ (since it is affine), provid
 \end{equation}
 This is an exact geometric progression: $x_k = (2/3)^k \cdot 0.25 \to 0$ as $k \to \infty$ with a \emph{linear} rate $\rho = 2/3$. The quadratic convergence theorem does not apply here because $g''(x^\star) = g''(0) = 0$---the Hessian is degenerate at the minimiser. The theorem requires $g''(x^\star) \succ 0$ (positive definite), but $g(x) = x^4$ has a \emph{degenerate} (flat) minimum. Despite this, Newton still converges---just at a linear rather than quadratic rate. For $g(x) = x^2$ (non-degenerate), Newton would converge in one step; for $g(x) = x^4$, it takes infinitely many but still faster than gradient descent (rate $\rho = 2/3$ vs $\rho = 1 - 2\alpha \cdot 12x^2$ for GD with constant $\alpha$).
 
+\begin{proposition}[Degenerate Newton Rate for $g(x) = x^p$]
+  For $g(x) = x^p$ with integer $p \geq 2$ and $x_0 \neq 0$, Newton's method converges to $x^\star = 0$ with exact linear rate:
+  \begin{equation}
+    x_{k+1} = x_k - \frac{g'(x_k)}{g''(x_k)} = x_k - \frac{p\,x_k^{p-1}}{p(p-1)\,x_k^{p-2}} = x_k - \frac{x_k}{p-1} = \frac{p-2}{p-1}\,x_k,
+  \end{equation}
+  so $|x_k| = \rho^k |x_0|$ with rate $\rho = (p-2)/(p-1)$. For $p=4$: $\rho=2/3$. For $p=3$: $\rho=1/2$. For $p=2$: $\rho=0$ (one step, non-degenerate quadratic). As $p \to \infty$: $\rho \to 1$ (arbitrarily slow).
+\end{proposition}
+
+The general formula $\rho = (p-2)/(p-1)$ shows that the heavier the degeneracy (higher flatness order $p$), the \emph{slower} Newton converges: at $p=2$, one step; at $p=4$, rate $2/3$; as $p \to \infty$, rate $\to 1$ (arbitrarily slow). The rate degrades because the second-order model $\hat{g}_2(x) = g(x_k) + g'(x_k)(x-x_k) + \frac{1}{2}g''(x_k)(x-x_k)^2$ is an increasingly poor approximation of $g$ near $x^\star=0$ when higher-order terms dominate.
+
+\textbf{Comparison with GD.} For gradient descent on $g(x) = x^4$ with step $\alpha$:
+\begin{equation}
+  x_{k+1} = x_k - \alpha g'(x_k) = x_k - 4\alpha x_k^3,
+\end{equation}
+which is not a constant-rate contraction --- the rate depends on $x_k$. Near the optimum, $|x_k| \to 0$ means $4\alpha x_k^2 \to 0$, so GD's effective rate $1 - 4\alpha x_k^2 \to 1$ (slower and slower). Newton's rate $2/3$ is \emph{constant} throughout, giving a decisive advantage: Newton uses $k$ iterations while GD requires $O(1/x_0^{2(1-1/p)}/\alpha)$ to match the same precision.
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q3_approximation.pdf}
@@ -976,12 +1015,16 @@ For typical ML functions with $|f| \sim 1$ and $|f''| \sim 1$: $\delta^\star \ap
 \label{fig:q4_fd_error}
 \end{figure}
 
-\begin{remark}[Centered Finite Differences]
+\begin{remark}[Centered Finite Differences and Optimal Step]
   The forward difference approximation has $O(\delta)$ truncation error. An alternative is the \emph{centered} difference:
   \begin{equation}
     \frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta},
   \end{equation}
-  which has $O(\delta^2)$ truncation error (the odd Taylor terms cancel). This requires $2d$ function evaluations (vs $d+1$ for forward differences) but achieves a much better accuracy-vs-$\delta$ trade-off for moderate $\delta$. For $\delta = 0.05$, centered FD has $\sim 400\times$ smaller truncation error than forward FD ($\delta^2/\delta = \delta = 0.05$ factor advantage). Figure~\ref{fig:q4_fwd_cen} compares the two.
+  which has $O(\delta^2)$ truncation error because the odd-order Taylor terms cancel:
+  \begin{equation}
+    \frac{f(x+\delta) - f(x-\delta)}{2\delta} = f'(x) + \frac{\delta^2}{6}f'''(x) + O(\delta^4).
+  \end{equation}
+  The total error for centred FD is $E_c(\delta) = \frac{\delta^2}{6}|f'''| + \frac{|f|\,\varepsilon_{\rm mach}}{\delta}$. Minimising: $\delta_c^\star = \left(\frac{3|f|\,\varepsilon_{\rm mach}}{|f'''|}\right)^{1/3} \approx (3\varepsilon_{\rm mach})^{1/3} \approx 6.7 \times 10^{-6}$ for $|f| \sim |f'''| \sim 1$. The minimum error for centred FD scales as $O(\varepsilon_{\rm mach}^{2/3})$, whereas for forward FD it scales as $O(\varepsilon_{\rm mach}^{1/2})$---centred FD achieves $\varepsilon_{\rm mach}^{1/6}$ times smaller minimum error, which is $\approx 100\times$ better in double precision. For the moderate $\delta=0.05$ used in the assignment, centred FD has $\delta^2/\delta = \delta = 0.05$ factor advantage in truncation error, i.e., $\approx 20\times$ smaller truncation error for $\delta = 0.05$.
 \end{remark}
 
 \begin{figure}[H]
@@ -1456,6 +1499,12 @@ where the inequality follows from the convexity of $f$ and the definition of $z_
   \item \textbf{Dual certificate}: The FW gap $g_k$ is a guaranteed dual bound that requires no additional computation. Projected gradient descent requires a separate optimality check.
 \end{enumerate}
 The $O(1/k)$ rate can be improved to $O(1/k^2)$ by using the ``away-step'' or ``pairwise'' Frank--Wolfe variants, which also move iterates away from non-optimal vertices, reducing the zig-zag inefficiency near the optimum.
+
+\begin{remark}[Why Standard FW Cannot Achieve $O(1/k^2)$]
+  The FW ``zig-zag'' inefficiency is not merely a practical issue---it reflects a fundamental lower bound. Lacoste-Julien and Jaggi (2015) show that for any polytope $\mathcal{X}$ and smooth $f$ whose minimiser is in the interior of $\mathcal{X}$, standard FW with the canonical step schedule $\gamma_k = 2/(k+2)$ satisfies a lower bound $f(x_k) - f^\star \geq C/k$ for some problem-dependent constant $C > 0$. The zig-zag arises because FW iterates are convex combinations of \emph{at most $k$ vertices}: $x_k \in \mathrm{conv}\{z_0, z_1, \ldots, z_{k-1}\}$. When the optimal point $x^\star$ lies in the relative interior, FW must ``cycle'' through all supporting vertices, and the combination can only approximate $x^\star$ at rate $O(1/k)$ in terms of the LP vertex weights. The away-step variant (AFW) augments each step with an ``away'' direction $d_k^{\rm away} = x_k - v_k$ (where $v_k$ is the \emph{worst} active vertex for the current gradient), which removes weight from non-productive vertices and achieves $O(\rho^k)$ linear convergence for strongly convex $f$ over a polytope. The practical consequence for this assignment: if $x^\star$ is interior (as in the interior optimum case), the zig-zag of standard FW is unavoidable at the $O(1/k)$ rate; for boundary optima (where the minimiser is a vertex), FW can converge in finitely many steps.
+\end{remark}
+
+\textbf{Lower bound on FW convergence.} To see why $O(1/k)$ is tight, consider $f(x) = \|x - x^\star\|^2$ on the simplex $\Delta^d = \{x \geq 0, \mathbf{1}^T x = 1\}$ with $x^\star = \mathbf{1}/d$ (centre of simplex). The FW iterate selects $z_k = e_j$ (standard basis vector) where $j = \arg\min_j \nabla f(x_k)_j$. The distance $\|x_k - x^\star\|^2$ satisfies a recurrence that yields $\|x_k - x^\star\|^2 = O(1/k)$, confirming the bound is tight up to constants.
 
 % ============================================================
 \section{Cross-Method Summary and Conclusion}
