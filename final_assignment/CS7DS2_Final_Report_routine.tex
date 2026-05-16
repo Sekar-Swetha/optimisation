@@ -85,6 +85,15 @@ The experiments are designed to answer several key questions:
   \item When does Frank--Wolfe converge to the interior optimum vs the boundary optimum, and what is the role of the mixing parameter $\beta$?
 \end{itemize}
 
+The three benchmarks span a carefully chosen range of problem properties:
+\begin{itemize}[nosep]
+  \item \textbf{Benchmark A} ($\kappa \approx 1.12$, strongly convex): a well-conditioned linear regression quadratic where all gradient methods converge quickly and Newton solves the system in one step. This benchmark provides ground-truth validation of convergence theory.
+  \item \textbf{Benchmark B} ($\kappa \approx 3.5$--$6.9$, mildly non-quadratic): a near-convex problem with a sinusoidal perturbation creating a varying-curvature landscape. Coordinate-wise adaptation (Adam) provides a clear advantage here.
+  \item \textbf{Benchmark C} ($\kappa \approx 2508$, non-convex): the Rosenbrock function, a classic optimisation test case with extreme ill-conditioning that exposes the fundamental limitations of first-order methods without curvature adaptation.
+\end{itemize}
+
+The main finding of this report is that \emph{curvature information, whether explicit (Newton), implicit via momentum (Nesterov), or adaptive via coordinate scaling (Adam), is essential for efficiently solving ill-conditioned problems}. Methods that do not account for curvature (GD, Adagrad, RMSprop) converge slowly on Benchmark C, while Nesterov and Polyak (with correct $f^\star$) achieve qualitatively faster convergence. Newton's method, at the cost of $O(d^3)$ per iteration, achieves quadratic convergence that no first-order method can match.
+
 All experiments use a fixed random seed (\texttt{np.random.seed(42)}) for reproducibility.
 
 % ============================================================
@@ -156,6 +165,25 @@ For constrained problems (Questions 5--6):
   \mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\ -5 \leq x_2 \leq 10\}.
 \end{equation}
 This is a convex compact polytope (box) in $\mathbb{R}^2$.
+
+\subsection{Benchmark Summary and Difficulty Hierarchy}
+
+\begin{table}[H]
+\centering
+\caption{Benchmark properties and predicted algorithm performance.}
+\label{tab:benchmark_summary}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Benchmark} & $\kappa$ & \textbf{Convexity} & \textbf{GD rate} $\rho$ & \textbf{GD iters/$10^{-3}$} & \textbf{Recommended} \\
+\midrule
+A (linear regression) & 1.12 & Strongly convex & 0.059 & 5 & Any GD variant \\
+B (toy neural net) & 3.5--6.9 & Approx.\ convex & 0.55--0.75 & 20--40 & Adam, GD \\
+C (Rosenbrock) & 2508 & Non-convex & 0.9992 & $>$10{,}000 & Newton, Nesterov \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The difficulty hierarchy motivates the algorithm choice for each question: Questions 1--2 apply all first-order methods to expose their relative performance; Question 3 adds Newton's method to demonstrate second-order acceleration; Questions 4--6 study methods under additional constraints (derivative-free, feasibility).
 
 % ============================================================
 \section{Question 1: Adaptive Step-Size Methods \hfill [30 marks]}
@@ -668,6 +696,14 @@ The \emph{linear scaling rule} (Goyal et al., 2017) follows directly: the noise 
 
 The response noise is amplified by factor 6: $y^{(i)}_{\mathrm{noisy}} = (\theta^\star)^T x^{(i)} + 6\varepsilon^{(i)}$, yielding $\sigma^2 = 36$ instead of 1.
 
+\begin{remark}[Predicted vs Observed Noise Floors]
+Using Theorem~\ref{thm:sgd_conv}, the predicted noise floor for Benchmark A with constant step $\alpha = 0.06$, batch $b = 5$, $\mu \approx 0.925$, $L \approx 1.03$, $\sigma^2 = 1$:
+\begin{equation}
+  \text{Noise floor} \approx \frac{L\alpha\sigma^2}{2\mu b} + J^\star = \frac{1.03 \times 0.06 \times 1}{2 \times 0.925 \times 5} + 0.4826 \approx 0.007 + 0.4826 \approx 0.490.
+\end{equation}
+For $\sigma^2 = 36$ (amplified noise), the sampling-variance contribution is $36\times$ larger ($\approx 0.25$), giving predicted noise floor $\approx 0.73$. However, the dominant contribution for large $\sigma^2$ is the irreducible noise-floor $J^\star_{\mathrm{noisy}} = \sigma^2/(2m) \cdot \|y - X\theta_{\mathrm{OLS}}\|^2 / \sigma^2 \approx 17.4$, which dwarfs the mini-batch sampling term. The observed floor of $\approx 17.5$ confirms this: the SGD sampling variance is negligible compared to the observation noise floor when $\sigma$ is large.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q2_sgd_noisy.pdf}
@@ -677,7 +713,16 @@ The response noise is amplified by factor 6: $y^{(i)}_{\mathrm{noisy}} = (\theta
 
 \subsection{Comparative Analysis}
 
-Nesterov acceleration provides the most significant improvement over GD on ill-conditioned problems, consistent with its theoretical $O(1/k^2)$ rate (Theorem \ref{thm:nesterov}). To quantify: for the Rosenbrock function with $\kappa \approx 2508$, Nesterov's optimal rate on a quadratic approximation would be $\rho_{\mathrm{Nest}} \approx (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \approx 0.969$ vs GD's $\rho_{\mathrm{GD}} \approx 0.9992$ --- a ratio of $(\kappa-1)/(\kappa+1) \div (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \approx \sqrt{\kappa}/2 \approx 25$ fewer iterations needed at the same precision. The observed improvement (Nesterov at $f=0.48$ vs GD at $f=3.39$ after 150 iterations) is consistent with this theoretical speedup, though Rosenbrock's non-quadratic structure prevents the full $\sqrt{\kappa}$ improvement from being realised. Adam's coordinate-wise adaptation is beneficial for problems with \emph{decoupled} heterogeneous curvature across coordinates (Benchmark B) but does not help on Rosenbrock, where the challenge is \emph{coupled} cross-coordinate curvature (the off-diagonal Hessian term $-400x_1$ couples the two coordinates). Mini-batch SGD is the only method in this question that trades gradient accuracy for computational efficiency, a trade-off especially relevant in large-scale machine learning where the full gradient is expensive to compute.
+Nesterov acceleration provides the most significant improvement over GD on ill-conditioned problems, consistent with its theoretical $O(1/k^2)$ rate (Theorem \ref{thm:nesterov}). To quantify: for the Rosenbrock function with $\kappa \approx 2508$, Nesterov's optimal rate on a quadratic approximation would be $\rho_{\mathrm{Nest}} \approx (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \approx 0.969$ vs GD's $\rho_{\mathrm{GD}} \approx 0.9992$ --- a ratio of $(\kappa-1)/(\kappa+1) \div (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \approx \sqrt{\kappa}/2 \approx 25$ fewer iterations needed at the same precision. The observed improvement (Nesterov at $f=0.48$ vs GD at $f=3.39$ after 150 iterations) is consistent with this theoretical speedup, though Rosenbrock's non-quadratic structure prevents the full $\sqrt{\kappa}$ improvement from being realised.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/nesterov_rate_analysis.pdf}
+\caption{Q2: Nesterov rate analysis on Benchmark C (Rosenbrock). Left: log-log scale shows both GD (blue) and Nesterov (red) with their theoretical reference slopes $O(1/k)$ and $O(1/k^2)$ (dashed). The Nesterov curve has a steeper slope in the log-log plot than GD, consistent with $O(1/k^2)$ vs $O(1/k)$. However, on the non-convex Rosenbrock, neither method achieves its asymptotic rate cleanly: the curves depart from the reference slopes due to the non-quadratic valley structure. Right: the speedup ratio $f_\mathrm{GD}(k)/f_\mathrm{Nest}(k)$ grows over time, reaching $\sim 7\times$ by iteration 150, confirming Nesterov's growing advantage on this benchmark. The speedup is smaller than the theoretical $\sqrt{\kappa}/2 \approx 25$ because (a) Rosenbrock is non-quadratic and (b) the $\beta_{\max}$ cap prevents the full $O(1/k^2)$ rate.}
+\label{fig:nesterov_rate}
+\end{figure}
+
+Adam's coordinate-wise adaptation is beneficial for problems with \emph{decoupled} heterogeneous curvature across coordinates (Benchmark B) but does not help on Rosenbrock, where the challenge is \emph{coupled} cross-coordinate curvature (the off-diagonal Hessian term $-400x_1$ couples the two coordinates). Mini-batch SGD is the only method in this question that trades gradient accuracy for computational efficiency, a trade-off especially relevant in large-scale machine learning where the full gradient is expensive to compute.
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -1224,6 +1269,10 @@ For a box $\mathcal{X} = [l_1, u_1] \times [l_2, u_2]$, the LP solution for $\mi
 \end{equation}
 This $O(d)$ LP solution per iteration replaces the potentially expensive projection step. For comparison: projection onto a general polytope (intersection of $m$ halfspaces) requires solving a QP, which costs $O(m \cdot d)$ to $O(d^3)$ depending on the method. The LP subproblem over a box costs only $O(d)$ --- a dramatic simplification. This is why Frank--Wolfe is particularly attractive for \emph{structured} constraint sets where the LP is cheap: simplices, nuclear norm balls, spectrahedra, and flow polytopes all have efficient LP oracles.
 
+\begin{remark}[Connection to the Simplex Method]
+The LP subproblem solved at each Frank--Wolfe step is itself a special case of linear programming over the same feasible polytope $\mathcal{X}$. The Simplex Method solves this LP by moving along edges of $\mathcal{X}$ between adjacent vertices until optimality is certified. For the box constraint here, the LP solution is trivial (component-wise comparison), but for general polytopes (flow polytopes, combinatorial polytopes in network optimisation), efficient LP solvers can be substituted as the LMO oracle. This separates the FW algorithm's convergence analysis from the specific LP oracle, allowing the two components to be improved independently. Frank--Wolfe with a specialised LP oracle for matrix trace-norm constraints, for instance, enables state-of-the-art algorithms for matrix completion.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q6_lp.pdf}
@@ -1246,6 +1295,7 @@ This $O(d)$ LP solution per iteration replaces the potentially expensive project
 \end{algorithm}
 
 \begin{theorem}[Frank--Wolfe Convergence Rate]
+\label{thm:fw_conv}
 For a convex differentiable $f$ with $L$-Lipschitz gradient over a convex compact set $\mathcal{X}$ with diameter $D = \max_{x,y \in \mathcal{X}}\|x-y\|$, the Frank--Wolfe algorithm with step size $\gamma_k = 2/(k+2)$ satisfies:
 \begin{equation}
   f(x_k) - f^\star \leq \frac{2LD^2}{k+2}, \qquad k \geq 1.
@@ -1374,7 +1424,14 @@ A crucial distinction is that FW does \emph{not} improve from $O(1/k)$ to $O(\rh
 
 For the box constraints in this experiment ($O(d)$ cost for both), PGD is theoretically superior for strongly convex objectives. The choice of FW here is illustrative: it demonstrates the algorithm's properties (duality gap, zig-zag, vertex convergence) in a setting where both methods are equally cheap per step.
 
-Figure \ref{fig:q6_gap} provides an empirical study of the duality gap and the zig-zag phenomenon.
+Figure \ref{fig:q6_rate} provides a detailed rate analysis with the theoretical $O(1/k)$ bound, and Figure \ref{fig:q6_gap} provides an empirical study of the duality gap and the zig-zag phenomenon.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/fw_rate_analysis.pdf}
+\caption{Q6: Frank--Wolfe convergence rate analysis (Case II, interior optimum, 200 iterations). Left: comparison of three step-size strategies. The decaying schedule $\gamma_k = 2/(k+2)$ (green) tracks the theoretical $O(1/k)$ bound $2LD^2/(k+2)$ (dashed, with $L=2$, $D \approx 15.7$), confirming the convergence guarantee from Theorem~\ref{thm:fw_conv}. Fixed $\beta = 0.90$ and $\beta = 0.985$ both fail to achieve the $O(1/k)$ rate due to constant step sizes; $\beta = 0.985$ is superior to $\beta = 0.90$ because smaller steps reduce zig-zag oscillation. Right: the FW duality gap $g_k = \nabla f(x_k)^T(x_k - z_k)$ (solid green) consistently overestimates true suboptimality $f(x_k)-f^\star$ (dashed), confirming $g_k \geq f(x_k)-f^\star$. Both quantities decay at $O(1/k)$ rate, making the gap a \emph{computable certificate} of approximate optimality without knowing $f^\star$.}
+\label{fig:q6_rate}
+\end{figure}
 
 \begin{figure}[H]
 \centering
