@@ -460,6 +460,22 @@ This table quantifies why Benchmark C is so challenging for GD: the theoretical 
 \label{fig:ada_rms}
 \end{figure}
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/adagrad_rmsprop_theory.pdf}
+\caption{Q1: Extended Adagrad vs RMSprop theory analysis. (a) Theoretical step decay for constant gradient $g=2$: Adagrad decays as $\alpha_0/\sqrt{kg^2} = O(1/\sqrt{k})$, while RMSprop stabilises at $\alpha_0/|g|$ (the steady-state EMA). (b) Gradient accumulator growth: Adagrad's $G_k = \sum_{j=1}^k g_j^2$ grows linearly, while RMSprop's $v_k \to g^2$ converges to the true squared gradient. (c) Coordinate-wise adaptation for heterogeneous gradients ($g_1=0.5$, $g_2=5.0$): Adagrad assigns $10\times$ larger effective steps to coordinate 1 (which has smaller gradients), automatically preconditioning with the inverse gradient scale. (d--e) Empirical convergence and step size evolution on Benchmark A. (f) RMSprop memory window: for $\beta = 0.9$, the half-life is $\log(2)/(1-\beta) \approx 7$ steps, meaning gradients from $>14$ steps ago contribute negligibly. Larger $\beta$ extends the window, giving more stable but less responsive adaptation.}
+\label{fig:ada_rms_theory}
+\end{figure}
+
+The formal step-size formulae for the two methods are:
+\begin{align}
+  \text{Adagrad:} \quad \alpha_k^{(i)} &= \frac{\alpha_0}{\sqrt{G_{k,i} + \varepsilon}}, \qquad G_{k,i} = \sum_{j=1}^k g_{j,i}^2, \\
+  \text{RMSprop:} \quad \alpha_k^{(i)} &= \frac{\alpha_0}{\sqrt{v_{k,i} + \varepsilon}}, \qquad v_{k,i} = \beta v_{k-1,i} + (1-\beta) g_{k,i}^2.
+\end{align}
+For a sequence of constant gradients $|g_i| = c$, Adagrad gives $G_{k,i} = kc^2$ and $\alpha_k^{(i)} = \alpha_0/(c\sqrt{k})$, an $O(1/\sqrt{k})$ decay. RMSprop gives $v_{k,i} \to c^2$ (geometric series: $v_k = (1-\beta^k)c^2$) and $\alpha_k^{(i)} \to \alpha_0/c$, a \emph{constant} effective step. This fundamental difference explains why Adagrad eventually stagnates on long training runs while RMSprop (and Adam, which uses the same second-moment mechanism) remains effective.
+
+The RMSprop EMA has an effective memory window of $\tau = 1/(1-\beta)$ iterations. For $\beta = 0.9$, $\tau = 10$; the weight assigned to a gradient from $m$ steps ago is $(1-\beta)\beta^m$, which decays to half its initial value at $m = \tau\log 2 \approx 6.9$ steps. This ``forgiving'' mechanism allows RMSprop to respond to changes in gradient magnitude, making it more suitable for non-stationary objectives (e.g., deep networks during later stages of training where the effective curvature changes).
+
 \subsection{Comparative Analysis and Discussion}
 
 \begin{itemize}[nosep]
@@ -644,6 +660,17 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 \\
 \label{fig:q2_contour_C}
 \end{figure}
 
+\subsection{Momentum Mechanism: Visualising Lookahead vs Heavy Ball}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/momentum_comparison.pdf}
+\caption{Q2: Visualisation of the momentum mechanism for GD, Heavy Ball, and Nesterov on Benchmark B (first 12 iterations, starting from $x_0 = (3, 0.5)$, optimum at $(1, 2)$). Arrows show the gradient and momentum directions at selected iterations ($k = 0, 3, 6, 9$). \textbf{Left (GD):} each step is purely in the negative gradient direction at $x_k$; the trajectory follows a zig-zag pattern down the steeper $x_2$ direction. \textbf{Centre (Heavy Ball):} dashed arrows show the gradient at $x_k$, solid arrows the accumulated momentum direction. The momentum averages past gradients, smoothing the trajectory and building velocity in the consistent descent direction. However, Heavy Ball evaluates the gradient at $x_k$ (not ahead), so it cannot anticipate overshooting. \textbf{Right (Nesterov):} orange triangles mark the lookahead points $\tilde{x}_k = x_k + \beta_k z_k$; the gradient (dark green) is evaluated there. By computing the gradient one step ahead, Nesterov detects imminent overshoots before they occur, enabling the adaptive momentum schedule to reduce $\beta_k$ accordingly. This lookahead mechanism is the key difference enabling the $O(1/k^2)$ convergence rate.}
+\label{fig:momentum_comparison}
+\end{figure}
+
+The lookahead mechanism can be understood as an \emph{implicit prediction-correction} step. Heavy Ball's velocity at iteration $k$ is $z_{k+1} = \beta z_k - \alpha\nabla f(x_k)$, which corrects the current position using the current gradient. Nesterov first predicts where the iterate will be after applying the current momentum ($\tilde{x}_k = x_k + \beta_k z_k$), then evaluates the gradient \emph{there} before deciding on the full update. The lookahead gradient $\nabla f(\tilde{x}_k)$ is a better approximation to the ``committed'' gradient direction, allowing the algorithm to apply brakes when the momentum overshoots. This one-step lookahead --- mathematically $\nabla f(x_k + \beta_k z_k)$ vs $\nabla f(x_k)$ --- is the sole algorithmic difference between Heavy Ball and Nesterov, yet it produces a qualitatively different convergence theory: $O(\rho^{k/2})$ vs $O(1/k^2)$ for smooth convex objectives.
+
 \subsection{Mini-Batch Stochastic Gradient Descent}
 
 Mini-batch SGD is evaluated on Benchmark A with learning rate $\alpha = 0.06$, batch sizes $b \in \{5, 40\}$, 50 epochs, and data shuffled at each epoch. The gradient estimator for batch $\mathcal{B}$ of size $b$ is:
@@ -703,6 +730,14 @@ This theorem has two important implications for the experiments. First, the nois
 
 The \emph{linear scaling rule} (Goyal et al., 2017) follows directly: the noise floor $L\alpha\sigma^2/(2\mu b)$ is constant when $\alpha/b$ is constant. Thus increasing $b$ by factor $\rho$ allows increasing $\alpha$ by $\rho$ while maintaining the same noise floor. This explains why large-batch training (modern deep learning often uses $b = 256$--$8192$) requires proportionally larger learning rates.
 
+\textbf{Variance decomposition:} The total estimation error of the mini-batch gradient can be decomposed as:
+\begin{equation}
+  \mathbb{E}\|\hat{g}_\mathcal{B} - \nabla J(\theta)\|^2 = \underbrace{\frac{\sigma_g^2}{b}}_{\text{mini-batch sampling variance}} + \underbrace{0}_{\text{bias (unbiased estimator)}},
+\end{equation}
+where $\sigma_g^2 = \frac{1}{m}\sum_{i=1}^m\|\nabla J_i(\theta) - \nabla J(\theta)\|^2$ is the \emph{per-sample gradient variance}. For the linear regression objective, $\nabla J_i(\theta) = x^{(i)}({\theta^T x^{(i)} - y^{(i)}})$ and $\sigma_g^2$ depends on the data distribution. The noise floor $L\alpha\sigma_g^2/(2\mu b)$ can be viewed as the gradient variance $\sigma_g^2/b$ times the GD step size sensitivity $L\alpha/(2\mu) = \alpha/(2\mu/L) = \alpha/(2/\kappa)$: ill-conditioned problems ($\kappa \gg 1$) amplify gradient noise, requiring even smaller learning rates or larger batches to control oscillations.
+
+For Benchmark A with $m = 1000$, $b = 5$: the effective noise amplification is $\kappa/(2b) = 1.12/10 \approx 0.11$ --- modest because $\kappa$ is small. For a hypothetical Rosenbrock SGD ($\kappa \approx 2508$, $b=5$): amplification $\approx 250.8$, meaning gradient noise is amplified by $\sim 250\times$ per step, making mini-batch SGD completely ineffective without aggressive step-size reduction. This explains why SGD is not applied to Benchmark C: the high condition number makes the noise floor unacceptably large at any reasonable batch size and learning rate.
+
 \subsection{SGD with Increased Noise}
 
 The response noise is amplified by factor 6: $y^{(i)}_{\mathrm{noisy}} = (\theta^\star)^T x^{(i)} + 6\varepsilon^{(i)}$, yielding $\sigma^2 = 36$ instead of 1.
@@ -734,6 +769,13 @@ Nesterov acceleration provides the most significant improvement over GD on ill-c
 \end{figure}
 
 Adam's coordinate-wise adaptation is beneficial for problems with \emph{decoupled} heterogeneous curvature across coordinates (Benchmark B) but does not help on Rosenbrock, where the challenge is \emph{coupled} cross-coordinate curvature (the off-diagonal Hessian term $-400x_1$ couples the two coordinates). Mini-batch SGD is the only method in this question that trades gradient accuracy for computational efficiency, a trade-off especially relevant in large-scale machine learning where the full gradient is expensive to compute.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/sgd_scaling_law.pdf}
+\caption{Q2: Mini-batch SGD scaling analysis on Benchmark A. (a) Fixed learning rate $\alpha=0.06$ across batch sizes $b \in \{1, 5, 20, 80, 200, 1000\}$ for 60 epochs. Large batches (small $b/m$) converge more slowly per epoch but achieve lower noise floors; the dotted horizontal lines show the theoretical noise floor $L\alpha\sigma^2/(2\mu b)$ scaling as $1/b$. Full-batch GD ($b=1000$) converges monotonically to $f^\star$. (b) Linear scaling rule: keeping $\alpha/b = 6\times10^{-3}$ constant, different batch sizes follow nearly identical convergence curves per epoch, confirming that the noise floor depends only on $\alpha/b$. (c) Theoretical noise floor grows linearly with $\alpha$ and decreases as $1/b$. (d) Observed vs theoretical noise floor as a function of $b$: the $O(1/b)$ relationship holds closely, validating Theorem~\ref{thm:sgd_conv}. (e) Epochs to reach $f - f^\star < 10^{-2}$ as a function of $b$: small batches need fewer epochs (more parameter updates per epoch) but at the cost of noisy updates; large batches need more epochs but each update is more accurate. The sweet spot for this problem is $b \approx 20$--$40$.}
+\label{fig:sgd_scaling}
+\end{figure}
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -944,6 +986,14 @@ This is essentially the \emph{trust region} approach: taking a fraction of the f
 
 \begin{remark}[Polyak--\L ojasiewicz Condition and Non-Convex Convergence]
 A weaker condition than strong convexity that still guarantees linear GD convergence is the \emph{Polyak--\L ojasiewicz (PL) condition}: $\|\nabla f(x)\|^2 \geq 2\mu(f(x) - f^\star)$ for all $x$. If $f$ satisfies PL, GD with $\alpha = 1/L$ achieves $f(x_k) - f^\star \leq (1 - \mu/L)^k (f(x_0) - f^\star)$, an $O(\rho^k)$ rate. The Rosenbrock function \emph{does not} satisfy PL globally: near the saddle point at $(-1, 1)$, the gradient can be small while the function value is large (relative to $f^\star = 0$). This explains why GD fails dramatically on Rosenbrock: once trapped near the valley entrance, both the gradient and the objective value are small but the distance to the minimum $(1,1)$ is large.
+
+Formally, the Polyak--\L ojasiewicz condition sits strictly between (strong) convexity and general smoothness in the function hierarchy. Every $\mu$-strongly convex function satisfies PL with the same $\mu$ (by the suboptimality characterisation of strong convexity: $f(x) - f^\star \leq \frac{1}{2\mu}\|\nabla f(x)\|^2$), but not conversely. In fact, PL holds for all functions of the form $f(x) = h(Ax)$ where $h$ is strongly convex and the composition retains the gradient lower bound structure --- a class that includes over-parameterised linear networks and certain shallow neural networks in the interpolating regime.
+
+The relationship between PL, strong convexity, and the quadratic growth condition $f(x) - f^\star \geq (\mu/2)\|x - x^\star\|^2$ can be summarised as:
+\begin{equation}
+  \text{Strong convexity} \Rightarrow \text{PL condition} \Rightarrow \text{Quadratic growth}
+\end{equation}
+(with neither implication reversible in general). Newton's quadratic convergence in Theorem~\ref{thm:newton} holds under strong convexity (positive definite Hessian at $x^\star$), which for Rosenbrock requires the damped/trust-region approach since the global PL condition is violated.
 \end{remark}
 
 % ============================================================
@@ -1273,6 +1323,27 @@ The experiments confirm the pure penalty limitation: the step size must decrease
 \item \textbf{Augmented Lagrangian}: iterative multiplier update, best balance of feasibility and conditioning.
 \end{itemize}
 
+\subsection{Penalty Method Conditioning Analysis}
+
+A key limitation of pure quadratic penalty methods is that the condition number of the augmented objective $F_\lambda(x) = f(x) + (\lambda/2)\|g(x)\|^2$ grows with $\lambda$, making gradient descent increasingly ill-conditioned. For the half-space constraint $g(x) = 0.5 - x_1$ with quadratic penalty $(\lambda/2)\max(0,g)^2$, the Hessian of $F_\lambda$ at a point where $x_1 < 0.5$ (infeasible) is:
+\begin{equation}
+  \nabla^2 F_\lambda(x) = \nabla^2 f(x) + \lambda\, e_1 e_1^T,
+\end{equation}
+where $e_1 = [1, 0]^T$. The eigenvalues of $\nabla^2 f$ at the constrained optimum are approximately $[2\cos(x_1^\star), 4] \approx [1.66, 4]$. Adding $\lambda$ to the $(1,1)$ entry gives eigenvalues approximately $[1.66 + \lambda, 4]$, so:
+\begin{equation}
+  \kappa(F_\lambda) = \frac{\max(\lambda_{\max})}{\min(\lambda_{\min})} \approx \frac{1.66 + \lambda}{4} \cdot \frac{4}{1.66} \approx 1 + \frac{\lambda}{1.66},
+\end{equation}
+and the maximum stable step size satisfies $\alpha < 2/(1.66 + \lambda)$. For $\lambda = 4.5$, $\alpha < 2/6.16 \approx 0.32$ (reasonable); for $\lambda = 100$, $\alpha < 2/101.66 \approx 0.02$ (restrictive). This explains the observed need to reduce $\alpha$ as $\lambda$ increases, and is the primary motivation for the augmented Lagrangian, which can achieve feasibility at lower $\lambda$ without the associated ill-conditioning.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/penalty_analysis.pdf}
+\caption{Q5: Penalty method analysis across a wide range of $\lambda$. (a) Condition number $\kappa(H_{\rm pen})$ grows approximately as $\lambda/4$ for large $\lambda$, confirming the theoretical prediction. (b) The maximum eigenvalue $\lambda_{\max}(H)$ grows linearly with $\lambda$ while the minimum remains near the objective's minimum eigenvalue $\approx 1.66$; the maximum stable step size $2/\lambda_{\max}$ therefore decays as $1/\lambda$. (c) Trajectories for four $\lambda$ values from $x_0 = (2, 2)$: small $\lambda = 0.15$ (blue) ends at an infeasible point; large $\lambda = 20$ (purple) converges close to the constraint boundary. (d) Constraint violation vs iteration for all $\lambda$ values; violation $\propto 1/\lambda$ is confirmed at steady state. (e) Final objective quality vs $\lambda$: the true constrained minimum $f^\star \approx -0.827$ (green dashed) is approached as $\lambda \to \infty$, while the final constraint violation (red, right axis) also converges to zero.}
+\label{fig:penalty_analysis}
+\end{figure}
+
+The trade-off is visualised in Figure~\ref{fig:penalty_analysis}: increasing $\lambda$ enforces tighter feasibility (panel d, e) at the cost of smaller required step sizes (panel b) and greater ill-conditioning (panel a). The $\lambda/\kappa$ trade-off is the fundamental limitation that the augmented Lagrangian method resolves by updating the Lagrange multiplier separately, achieving geometric reduction in constraint violation without the conditioning penalty.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -1453,6 +1524,16 @@ A crucial distinction is that FW does \emph{not} improve from $O(1/k)$ to $O(\rh
 
 For the box constraints in this experiment ($O(d)$ cost for both), PGD is theoretically superior for strongly convex objectives. The choice of FW here is illustrative: it demonstrates the algorithm's properties (duality gap, zig-zag, vertex convergence) in a setting where both methods are equally cheap per step.
 
+\textbf{Quantitative zig-zag analysis:} The zig-zag phenomenon admits a precise characterisation for the interior-optimum case (Case II, $f(x) = (x_1-1)^2 + (x_2-5)^2$). At each iteration $k$, the LMO for coordinate $i$ selects:
+\begin{equation}
+  (z_k)_i = \begin{cases} l_i & \text{if } \frac{\partial f}{\partial x_i}(x_k) > 0 \\ u_i & \text{if } \frac{\partial f}{\partial x_i}(x_k) < 0 \end{cases}
+\end{equation}
+For coordinate 2, $\frac{\partial f}{\partial x_2}(x_k) = 2(x_{k,2} - 5)$ changes sign when $x_{k,2}$ crosses the optimum $x_{2}^\star = 5$. With fixed step $(1-\beta)$, the iterate $x_{k+1,2} = \beta x_{k,2} + (1-\beta) (z_k)_2$ where $(z_k)_2 \in \{-5, 10\}$. When $x_{k,2} > 5$ (gradient positive, LMO selects $z_{k,2} = -5$):
+\begin{equation}
+  x_{k+1,2} = \beta x_{k,2} + (1-\beta)(-5) = \beta(x_{k,2} - 5) - 5(1-\beta) + 5\beta = \beta x_{k,2} - 5 + 5\beta.
+\end{equation}
+The sign of $(x_{k+1,2} - 5)$ is the same as that of $\beta(x_{k,2} - 5) - 10(1-\beta)$. For $\beta = 0.90$ and $x_{k,2} \approx 5.1$ (close to optimum), $\beta(x_{k,2}-5) \approx 0.09 < 10 \times 0.10 = 1.0$, so $x_{k+1,2} - 5 < 0$: the iterate crosses the optimum, triggering a sign change and an LMO switch from $-5$ to $+10$. This perpetuates the zig-zag: at each step, the iterate overshoots the optimum and the LMO switches between extremes of the box. The oscillation amplitude decays as $\beta^k$ (from the geometric damping in the update), but for large $\beta$ this decay is slow. For $\beta = 0.985$: $\beta^{50} \approx 0.47$, so after 50 steps the oscillation has halved; for $\beta = 0.90$: $\beta^{50} \approx 0.0052$, oscillation has nearly vanished but the iterate is less accurate due to large early overshoots.
+
 Figure \ref{fig:q6_rate} provides a detailed rate analysis with the theoretical $O(1/k)$ bound, and Figure \ref{fig:q6_gap} provides an empirical study of the duality gap and the zig-zag phenomenon.
 
 \begin{figure}[H]
@@ -1605,6 +1686,38 @@ The hierarchy reveals a clear principle: \emph{more oracle information enables f
 \caption{Fair comparison at equal gradient evaluation budget (300 GFEs) on Benchmark C. Newton uses 3 GFEs per iteration (gradient + 2 Hessian-column evaluations for the $2\times2$ Hessian), GD/Nesterov/Adam use 1 GFE per iteration. At 300 GFEs: GD achieves $f=2.71$, Adam $f=0.19$, Nesterov $f=0.066$, and Newton $f\approx10^{-6}$ (essentially machine precision). This comparison shows that Newton's dramatic superiority is \emph{not} an artifact of counting iterations differently: even at the same computational budget, Newton's quadratic convergence after entering the local regime completely dominates first-order methods. The 100 Newton iterations correspond to 300 GFEs while achieving $f < 10^{-6}$, whereas 300 GD iterations achieve only $f = 2.71$ (still far from convergence). The crossover where Newton becomes more efficient occurs at approximately 30--50 GFEs, after which its accelerating convergence pulls ahead rapidly.}
 \label{fig:fair_comparison}
 \end{figure}
+
+\subsection{Unified Mathematical Framework}
+
+All algorithms studied in this report can be viewed through a single unifying lens: each is a \emph{gradient preconditioner} that modifies the gradient update $x_{k+1} = x_k - \alpha P_k \nabla f(x_k)$ for some preconditioner matrix $P_k$:
+
+\begin{table}[H]
+\centering
+\caption{All algorithms as gradient preconditioners $x_{k+1} = x_k - \alpha P_k \nabla f(x_k)$ or generalisations.}
+\label{tab:preconditioners}
+\begin{tabular}{lp{5.5cm}p{5cm}}
+\toprule
+\textbf{Algorithm} & \textbf{Preconditioner $P_k$} & \textbf{Interpretation} \\
+\midrule
+GD & $I$ (identity) & No preconditioning \\
+Newton & $[\nabla^2 f(x_k)]^{-1}$ & Full curvature inverse \\
+Heavy Ball & $I$ (with momentum state) & Inertial iteration, $\kappa$ improvement for quadratics \\
+Nesterov & $I$ (with lookahead gradient) & Accelerated via extrapolated point \\
+Adagrad & $\mathrm{diag}(G_k)^{-1/2}$, $G_{k,i} = \sum_j g_{j,i}^2$ & Diagonal, cumulative curvature estimate \\
+RMSprop & $\mathrm{diag}(v_k)^{-1/2}$, $v_k$ = EMA of $g_k^2$ & Diagonal, exponential curvature estimate \\
+Adam & $\mathrm{diag}(\hat{v}_t)^{-1/2}$ applied to $\hat{m}_t$ & Diagonal preconditioner + momentum \\
+L-BFGS & Low-rank approx.\ of $[\nabla^2 f]^{-1}$ & Between GD and Newton \\
+\midrule
+PGD & $I$ + projection onto $\mathcal{X}$ & Constrained GD via projection \\
+Frank--Wolfe & LMO oracle (no matrix) & Projection-free, $O(1/k)$ rate \\
+NRS / Nelder--Mead & None (zeroth-order) & Gradient-free, $d$-factor penalty \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This framework immediately reveals why Newton dominates: for strongly convex $f$, the ideal preconditioner is $[\nabla^2 f(x_k)]^{-1}$ (equating all effective step sizes across directions), and Newton's method is the only first/second-order method that achieves this exactly. Adam and RMSprop approximate this with the \emph{diagonal} of the Hessian, which is exact for problems with diagonal $H$ (like Benchmark B) but misses off-diagonal coupling (like Benchmark C). Heavy Ball and Nesterov use $P_k = I$ but compensate through momentum accumulation, effectively averaging past gradients to approximate the inverse Hessian implicitly over multiple steps.
+
+From this perspective, the history of optimisation for machine learning can be read as a progression: GD (no preconditioning) $\to$ Adagrad/RMSprop (diagonal preconditioning) $\to$ Adam (diagonal + momentum) $\to$ K-FAC/Shampoo (block-diagonal) $\to$ Newton/L-BFGS (full inverse Hessian). Each step trades computational cost for better curvature information, with the optimal choice depending on $d$, the cost of Hessian computation, and the degree of cross-coordinate coupling in the problem.
 
 \subsection{Method Selection Guide}
 
