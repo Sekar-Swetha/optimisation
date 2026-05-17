@@ -142,7 +142,7 @@ C: Rosenbrock & No & 0.0 & $(1.0,\, 1.0)$ & $\approx 2508$ & $(-1, 1)$ \\
 \subsection{Algorithm Formulations}
 \label{subsec:q1_algs}
 
-Four adaptive methods are compared against constant step-size GD across all benchmarks for 120 iterations. The GD update is $x_{k+1} = x_k - \alpha \nabla f(x_k)$, with convergence rate $O(\rho^k)$ where $\rho = 1 - \alpha\mu$ for a $\mu$-strongly convex, $L$-smooth function and $\alpha \leq 1/L$.
+Four adaptive methods are compared against constant step-size GD across all benchmarks for 120 iterations. The GD update is $x_{k+1} = x_k - \alpha \nabla f(x_k)$. For an $L$-smooth, $\mu$-strongly convex function with $\alpha \leq 1/L$, GD converges at rate $\|x_k - x^{\star}\|^2 \leq (1 - \mu\alpha)^k \|x_0 - x^{\star}\|^2$, yielding the linear convergence factor $\rho = 1 - \mu/L = 1 - 1/\kappa$. The largest stable step size is $\alpha_{\max} = 2/(L + \mu)$ (optimal for linear convergence), and the tightest bound gives rate $\rho_{\min} = (\kappa - 1)/(\kappa + 1)$. For the benchmarks: $\rho_A \approx 0.054$ ($\kappa = 1.117$), and for Rosenbrock $\rho_C \approx 0.9996$ ($\kappa \approx 2508$), explaining why GD barely progresses on Benchmark~C.
 
 \begin{algorithm}[H]
 \caption{Polyak Step Size}
@@ -399,7 +399,7 @@ The effective per-coordinate step at iteration $t$ is $\alpha\,|\hat{m}_t^{(i)}|
 
 \begin{table}[H]
 \centering
-\caption{Q2: Hyperparameter settings. Nesterov and Adam run for 150 iterations.}
+\caption{Q2: Hyperparameter settings. Nesterov and Adam run for 150 iterations. Adam uses non-standard $\beta_1 \in \{0.80, 0.82\}$ (vs.\ default 0.9) to reduce momentum on small-scale problems where the standard setting causes oscillation near the minimum.}
 \label{tab:q2_params}
 \begin{tabular}{llccc}
 \toprule
@@ -686,7 +686,13 @@ where $e_i$ is the $i$-th standard basis vector. The approximation error decompo
 \end{itemize}
 The optimal $\delta$ that balances these is $\delta^{\star} = \sqrt{\varepsilon_{\mathrm{mach}}} \approx 10^{-8}$ for double precision. The experiments use $\delta = 0.05$ (good: truncation $O(0.05)$, round-off $O(10^{-14})$) and $\delta = 0.8$ (poor: truncation $O(0.8)$), both far from the optimal $\delta^{\star}$.
 
-Each gradient evaluation at a $d$-dimensional point requires $d + 1$ function evaluations (one at $x$ and one per coordinate), compared to $O(d)$ arithmetic operations for exact gradients. For $d = 2$, this is 3 evaluations per step.
+Each gradient evaluation at a $d$-dimensional point requires $d + 1$ function evaluations (one base evaluation at $x$ and one per coordinate direction), compared to $O(d)$ arithmetic operations for exact analytic gradients. For $d = 2$, this is 3 evaluations per step.
+
+\textbf{Central differences} provide second-order accuracy $O(\delta^2)$ at the cost of $2d$ evaluations:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}, \quad \text{error } O(\delta^2) \gg O(\delta).
+\end{equation}
+The optimal $\delta$ for central differences is $\delta^{\star}_c = \varepsilon_{\mathrm{mach}}^{1/3} \approx 10^{-5.3}$, roughly three orders of magnitude larger than for forward differences, making it more numerically stable in practice.
 
 \begin{figure}[H]
 \centering
@@ -710,7 +716,11 @@ Each gradient evaluation at a $d$-dimensional point requires $d + 1$ function ev
 \end{algorithmic}
 \end{algorithm}
 
-The directional estimate $\hat{g}_k$ approximates $(\nabla f(x_k)^T u_k) u_k$, which is an unbiased estimate of $\frac{1}{d} \nabla f(x_k)$ when $u_k$ is uniform on the sphere (after appropriate normalisation). The \emph{critical advantage} is dimension-independence: only \textbf{2} function evaluations per iteration regardless of $d$. This makes it uniquely valuable when evaluating $\nabla f$ is computationally expensive (e.g.\ black-box simulators).
+The directional estimate $\hat{g}_k$ approximates $(\nabla f(x_k)^T u_k) u_k$. Taking expectation over $u_k \sim \mathrm{Uniform}(\mathbb{S}^{d-1})$:
+\[
+\mathbb{E}_{u}[\hat{g}_k] \approx \mathbb{E}_u\bigl[(\nabla f^T u)\, u\bigr] = \frac{1}{d}\, \nabla f(x_k),
+\]
+since $\mathbb{E}[uu^T] = \frac{1}{d} I_d$ for uniform $u$ on the sphere. Thus $\hat{g}_k$ is an unbiased estimator of $\frac{1}{d}\nabla f$, and the effective step is $\alpha_{\mathrm{eff}} = \alpha \cdot d$. The \emph{critical advantage} is dimension-independence: only \textbf{2} function evaluations per iteration regardless of $d$, making it $d/2$ times cheaper than forward-difference GD. This makes it uniquely valuable for black-box optimisation (simulators, hardware-in-the-loop, adversarial attacks) where gradient computation is impossible or prohibitively expensive.
 
 \subsubsection{Results on Benchmark B}
 
@@ -874,11 +884,17 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Approximately \\
 
 \textbf{Key trade-offs:}
 \begin{itemize}[nosep]
-\item \textbf{PGD} enforces hard feasibility at every step, making it the preferred method when feasibility is a safety requirement (e.g.\ power grid constraints, control bounds). The limitation is the need for an efficient projection oracle; for general convex sets this can be as expensive as solving a quadratic programme.
+\item \textbf{PGD} enforces hard feasibility at every step, making it the preferred method when feasibility is a safety requirement (e.g.\ power grid constraints, control bounds). Theoretically, PGD inherits the same convergence rate as unconstrained GD: $O(1/k)$ for convex and linear convergence for strongly convex objectives, since the projection $\Pi_{\mathcal{C}}$ is non-expansive. The limitation is the need for an efficient projection oracle; for general convex sets the projection can be as expensive as solving a quadratic programme.
 
-\item \textbf{Penalty methods} require only the gradient of the augmented objective, making them easy to implement. However, increasing $\lambda$ stiffens the objective, requiring smaller step sizes and potentially slower convergence. The sequence of problems $\min_x F_{\lambda_k}(x)$ with $\lambda_k \to \infty$ (sequential unconstrained minimisation) converges to the constrained solution in theory, but numerical instability arises for very large $\lambda$.
+\item \textbf{Penalty methods} require only the gradient of the augmented objective $F_\lambda = f + \lambda\,\phi$ (where $\phi(x) = \max(0, g(x))$ for inequality constraints), making them easy to implement with any existing solver. However, increasing $\lambda$ stiffens the objective: the condition number of $\nabla^2 F_\lambda$ grows with $\lambda$, requiring smaller step sizes. Specifically, the Lipschitz constant of $\nabla F_\lambda$ grows as $\lambda \to \infty$, so $\alpha \leq 1/L_\lambda$ forces increasingly small steps. The theoretical penalty update $\lambda_k \to \infty$ converges to the constrained solution but is numerically ill-conditioned.
 
-\item \textbf{Augmented Lagrangian} methods combine penalty and dual variable estimation, avoiding the ill-conditioning of pure penalty methods. The method would add a multiplier update $\mu_{k+1} = \mu_k + \lambda (g(x_k))_+$ and augment the objective accordingly, achieving better conditioning than fixed-$\lambda$ penalty.
+\item \textbf{Augmented Lagrangian (Method of Multipliers)} combines penalty and Lagrangian duality to avoid the ill-conditioning of pure penalty methods:
+\begin{equation}
+\mathcal{L}_\rho(x, \mu) = f(x) + \mu^\top g(x) + \frac{\rho}{2}\|g(x)_+\|^2,
+\end{equation}
+with multiplier updates $\mu_{k+1} = \mu_k + \rho\, (g(x_k))_+$. For a fixed $\rho$, the AL method achieves the same accuracy as the pure penalty with $\lambda \to \infty$, without requiring $\rho \to \infty$. This eliminates the step-size/conditioning trade-off and allows substantially faster convergence.
+
+\item \textbf{Why the constraint is inactive here:} The unconstrained minimum of Benchmark~B is at $x_1^{\star} \approx 0.582 > 0.5$. The constraint $x_1 \geq 0.5$ is therefore inactive at the solution (complementary slackness: $\mu = 0$). This explains why unconstrained GD, PGD, and large-$\lambda$ penalty methods all converge to the same point: they all find the same feasible minimum.
 \end{itemize}
 
 % ============================================================
@@ -888,14 +904,15 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Approximately \\
 
 \subsection{Feasible Set and Linear Programme}
 
-Feasible set: $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10\}$ (axis-aligned box / polytope).
+Feasible set: $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10\}$ (axis-aligned box / polytope with 4 vertices: $(0.5,-5)$, $(5,-5)$, $(5,10)$, $(0.5,10)$).
 
 \textbf{Linear Programme (Task I).} Minimise $f(x) = x_1 + 2x_2 = a^T x$ with $a = [1, 2]^T$ over $\mathcal{X}$.
 
-Since $f$ is linear over the convex polytope $\mathcal{X}$, the fundamental theorem of linear programming guarantees the minimum is attained at a \emph{vertex}. Since $a_1 = 1 > 0$ and $a_2 = 2 > 0$, the minimum is at the vertex with the smallest $x_1$ and $x_2$ simultaneously:
+Since $f$ is linear over the convex polytope $\mathcal{X}$, the fundamental theorem of linear programming guarantees the minimum is attained at a \emph{vertex} (an extreme point). The KKT conditions for this LP are: $a = \mu_1 e_1 - \mu_2 e_1 + \mu_3 e_2 - \mu_4 e_2$ with complementary slackness, which is solved at the vertex where all active bound constraints align with the objective gradient direction. Since $a_1 = 1 > 0$ and $a_2 = 2 > 0$, both components should be minimised, giving the lower bounds:
 \begin{equation}
 x^{\star} = (0.5,\; -5), \qquad f^{\star} = 1 \cdot 0.5 + 2 \cdot (-5) = -9.5.
 \end{equation}
+The LP can be solved in $O(1)$ by inspection for box constraints: for each component $i$, set $x_i = l_i$ if $a_i > 0$ and $x_i = u_i$ if $a_i < 0$. This is precisely the LMO used in the Frank--Wolfe algorithm, establishing the direct connection between LP theory and the FW update.
 
 \begin{figure}[H]
 \centering
@@ -1007,6 +1024,15 @@ The comparison also highlights the trade-offs between method classes:
 \item \textbf{Within first-order methods:} Acceleration (Nesterov) provides the largest gain by building consistent descent momentum along the Rosenbrock valley, while Adam's per-coordinate scaling is less effective because the valley curvature is not aligned with the coordinate axes.
 \item \textbf{Polyak's special case:} With exact $f^{\star} = 0$, Polyak achieves results competitive with Newton on Rosenbrock, but this requires oracle knowledge of the minimum value, which is unavailable in practice.
 \end{itemize}
+
+Figure~\ref{fig:heatmap} provides a unified performance heatmap across all three benchmarks and all gradient-based and Newton methods.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/q_performance_heatmap.pdf}
+\caption{Performance heatmap: final excess objective $f(x_k) - f^{\star}$ after 150 iterations (first-order methods) or 20 iterations (Newton) across all three benchmarks. Colour scale is logarithmic (green = best, red = worst). Polyak diverges on Benchmarks~A ($f = 1.23$, misspecified $f^{\star}=0$ vs.\ true $0.4826$) and B ($f = 100.4$, vs.\ true $0.7244$). On Benchmark~A, all non-diverging methods converge to the noise floor $0.4826$. On Benchmark~C, the strong performance hierarchy is clear: Nesterov ($f = 0.479$) $>$ Newton ($f = 0.686$) $>$ Heavy Ball ($f = 0.701$) $>$ Adam ($f = 1.579$) $>$ Adagrad ($f = 1.922$) $>$ RMSprop ($f = 2.872$) $>$ GD ($f = 3.388$). Newton here uses only 20 iterations --- normalising by iteration count would place it even higher.}
+\label{fig:heatmap}
+\end{figure}
 
 % ============================================================
 \section{Summary and Conclusions}
