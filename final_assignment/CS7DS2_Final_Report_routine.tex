@@ -327,15 +327,15 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 & Momentum \\
 \subsection{Comparative Analysis and Discussion}
 
 \begin{itemize}[nosep]
-\item \textbf{Polyak:} Theoretically optimal when $f^{\star}$ is known exactly, but the requirement for accurate $f^{\star}$ is a fundamental practical limitation. On Benchmark~C it achieves $f = 0.0094$ in 120 iterations, a result no other first-order method in this study achieves.
+\item \textbf{Polyak:} Theoretically optimal when $f^{\star}$ is known exactly. Its step $\alpha_k = (f(x_k) - f^{\star}) / \|\nabla f\|^2$ is a normalised residual that automatically scales to the remaining function value. On Benchmark~C it achieves $f = 0.0094$ in 120 iterations --- better than Nesterov at 150 iterations --- but requires the oracle $f^{\star}$.
 
-\item \textbf{Adagrad:} Uniformly stable across all benchmarks due to its monotonically decreasing effective rate. It matches GD on Benchmarks~A and B (where GD already converges fully) and outperforms GD on Benchmark~C by adapting per-coordinate step sizes to the anisotropic Hessian. The limitation is premature stalling in later iterations when the accumulated denominators are large.
+\item \textbf{Adagrad:} Uniformly stable due to its monotonically decreasing effective rate. The accumulated denominator $\sum_j g_j^{(i)2}$ acts as a per-coordinate curvature estimate, giving large steps on flat directions and small steps on steep ones. This implicitly compensates for the anisotropic Hessian of Benchmark~C ($\kappa \approx 2508$), explaining why Adagrad ($f = 2.20$) outperforms plain GD ($f = 3.51$). The limitation: on dense problems, all denominators grow monotonically, causing the effective rate to decay to zero even in directions where more progress is possible.
 
-\item \textbf{RMSprop:} The exponential moving average $(\beta = 0.9)$ maintains a responsive effective step size, but requires careful base rate selection. On the very small curvatures of Rosenbrock, the required $\alpha_0 = 0.0035$ is too conservative to make substantial progress.
+\item \textbf{RMSprop:} The exponential moving average ($\beta = 0.9$, effective window $\approx 10$ iterations) allows the effective step to adapt to the \emph{recent} curvature rather than the entire history, avoiding Adagrad's premature stalling. However, on Rosenbrock the very small required base rate ($\alpha_0 = 0.0035$) dominates performance, limiting gains over GD.
 
-\item \textbf{Heavy Ball:} The most practically valuable adaptive method here. Momentum allows it to accumulate consistent descent directions along the Rosenbrock valley, achieving $f = 1.40$ versus GD's $f = 3.51$. It correctly converges on all three benchmarks when $f^{\star}$ is not needed.
+\item \textbf{Heavy Ball:} Achieves the best GD-family result on Rosenbrock ($f = 1.40$ vs.\ GD's $3.51$). The momentum vector $z_k = \sum_{j=0}^{k} \beta^{k-j} \alpha g_j$ is an exponentially-weighted sum of past gradients. Along the Rosenbrock valley, gradients consistently point in the same direction, allowing $z_k$ to accumulate and produce larger effective steps. The optimal Heavy Ball parameters for a quadratic are $\beta^{\star} = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$; with $\kappa \approx 2508$ this gives $\beta^{\star} \approx 0.94$, and the experiment uses $\beta = 0.86$, close to this.
 
-\item \textbf{Stability vs.\ speed:} GD is most stable but slowest on ill-conditioned problems. Adaptive methods trade some stability for speed, with Polyak being the extreme case: maximum speed when $f^{\star}$ is exact, catastrophic failure otherwise.
+\item \textbf{Stability vs.\ speed:} GD is most stable but slowest on ill-conditioned problems (convergence rate $\rho \approx 1 - 1/\kappa$). Adaptive methods trade some stability for speed by introducing hyperparameters. Polyak is the extreme case --- maximum speed when $f^{\star}$ is exact, catastrophic failure otherwise. Adagrad and Heavy Ball represent robust intermediate choices.
 \end{itemize}
 
 % ============================================================
@@ -472,10 +472,14 @@ Adam & 0.4826 & 0.7244 & 1.5785 & Problem-dependent \\
 \label{fig:q2_contour_C}
 \end{figure}
 
+\subsection{Why Nesterov Outperforms Adam on Rosenbrock}
+
+The performance gap between Nesterov ($f = 0.479$) and Adam ($f = 1.579$) on Benchmark~C merits theoretical explanation. Rosenbrock's primary challenge is the narrow, curved valley: progress requires large steps \emph{along} the valley floor direction and very small steps perpendicular to it. Nesterov handles this through accumulated momentum: once the momentum vector $z_k$ aligns with the valley, the gradient computed at the lookahead point $\tilde{x}_k = x_k + \beta_k z_k$ is directed more steeply along the valley, further amplifying the correct direction. Adam, by contrast, normalises each coordinate independently: $x_{t+1} = x_t - \alpha \hat{m}_t / (\sqrt{\hat{v}_t} + \varepsilon)$. This normalisation removes the magnitude information from the gradient, preventing the momentum from building up to the large scale needed to traverse the valley efficiently. The per-coordinate scaling is beneficial in isotropic settings (Benchmarks~A and B) but counterproductive on the anisotropic Rosenbrock where the valley direction is \emph{not} aligned with any coordinate axis.
+
 \subsection{Mini-Batch Stochastic Gradient Descent}
 \label{subsec:q2_sgd}
 
-Mini-batch SGD on Benchmark~A uses $\alpha = 0.06$, batch sizes $b \in \{5, 40\}$, and 50 epochs, with data shuffled at every epoch. One epoch corresponds to one pass through all $m = 1000$ data points, yielding $\lfloor m/b \rfloor$ parameter updates per epoch.
+Mini-batch SGD on Benchmark~A uses $\alpha = 0.06$, batch sizes $b \in \{5, 40\}$, and 50 epochs, with data shuffled at every epoch. One epoch corresponds to one pass through all $m = 1000$ data points, yielding $\lfloor m/b \rfloor$ parameter updates per epoch. The expected mini-batch gradient $\mathbb{E}[g_\mathcal{B}] = \nabla J(\theta)$ is unbiased, but the variance is $\mathrm{Var}[g_\mathcal{B}^{(i)}] \propto \sigma_i^2 / b$, where $\sigma_i^2$ is the per-sample gradient variance in direction $i$. This variance creates an irreducible noise floor in convergence near the minimum.
 
 \begin{algorithm}[H]
 \caption{Mini-Batch SGD}
@@ -791,7 +795,14 @@ Grid search & None & $N^d$ total & \textbf{Very poor} & \textbf{Yes} (locally) &
 \end{tabular}
 \end{table}
 
-\textbf{Discussion:} Gradient-based methods are orders of magnitude faster when gradients are available. Zeroth-order methods (random search, Nelder--Mead, grid search) should only be used when gradient computation is impossible (e.g.\ proprietary black-box simulators, hardware-in-the-loop optimisation). Among gradient-free methods, Nelder--Mead outperforms random search on smooth low-dimensional problems by exploiting function evaluations at multiple directions simultaneously. Grid search is the only method that provides a global optimality guarantee (within the grid resolution) but is computationally impractical for $d > 3$ due to the curse of dimensionality.
+\textbf{Discussion:} Gradient-based methods are orders of magnitude faster when gradients are available. Zeroth-order methods should only be used when gradient computation is impossible (black-box simulators, hardware-in-the-loop, adversarial attacks on non-differentiable classifiers). Among gradient-free methods:
+\begin{itemize}[nosep]
+\item \textbf{Nelder--Mead} exploits function evaluations at all $n+1$ simplex vertices simultaneously, providing directional information in $O(n)$ evaluations per iteration. It performs well on smooth low-dimensional problems ($d \leq 10$) but lacks theoretical convergence guarantees and can stagnate on degenerate landscapes.
+\item \textbf{Grid search} is the only method with global optimality guarantees (within grid resolution $\Delta x \approx 0.074$ here), but the $O(N^d)$ total cost is the curse of dimensionality: for $d = 10$ and $N = 55$ points per dimension, the grid would have $55^{10} \approx 2.5 \times 10^{17}$ points.
+\item \textbf{Nesterov random search} scales to arbitrary dimension at 2 FE/iter cost, but converges very slowly ($O(1/\sqrt{k})$ or worse in practice) due to the single directional sample.
+\end{itemize}
+
+On Rosenbrock specifically, Nelder--Mead achieves $f \approx 0.27$ in 160 iterations vs.\ GD's $f = 3.73$ in 80 iterations, demonstrating that the simplex's geometric adaptability to the curved valley compensates for the lack of gradient information.
 
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
@@ -1039,25 +1050,25 @@ Figure~\ref{fig:heatmap} provides a unified performance heatmap across all three
 \label{sec:conclusion}
 % ============================================================
 
-This study investigated 14 distinct optimisation algorithms across three benchmark functions covering well-conditioned quadratic, mildly non-convex, and severely ill-conditioned landscapes. The following conclusions are drawn:
+This study implemented and evaluated 14 distinct optimisation algorithms across three benchmark functions spanning well-conditioned quadratic, mildly non-convex, and severely ill-conditioned ($\kappa \approx 2508$) landscapes. All algorithms were implemented from scratch in Python and verified against exact analytical solutions where available.
 
 \subsection{Adaptive Step-Size Methods (Question 1)}
-Polyak achieves optimal performance when $f^{\star}$ is precisely known, but fails catastrophically on misspecified $f^{\star}$ --- a fundamental practical limitation. Adagrad provides robust monotone convergence due to its guaranteed step-size decay. RMSprop maintains responsive step sizes but requires careful $\alpha_0$ selection. Heavy Ball offers the best balance of convergence speed and stability without requiring $f^{\star}$.
+The Polyak step achieves theoretically optimal convergence when $f^{\star}$ is known exactly (Rosenbrock: $f = 0.009$ in 120 iterations), but fails catastrophically with misspecified $f^{\star}$ (diverging to $f = 24.07$ on Benchmark~B). This sensitivity fundamentally limits its applicability to settings where $f^{\star}$ is available (e.g.\ linear regression with known noise variance). Adagrad's per-coordinate diagonal preconditioning provides a computationally cheap approximation to the inverse Hessian, explaining its improved performance on ill-conditioned problems. Heavy Ball's momentum accumulation along consistent gradient directions achieves the best first-order result on Rosenbrock among methods without oracle $f^{\star}$ ($f = 1.40$ vs.\ GD's $3.51$).
 
 \subsection{Momentum and Stochastic Methods (Question 2)}
-Nesterov acceleration is the most effective first-order method on ill-conditioned problems, achieving the optimal $O(1/k^2)$ rate. Adam provides a practical default for neural network training by combining momentum with per-coordinate normalisation. Mini-batch SGD with small batches converges faster per epoch but exhibits more variance; the batch-size advantage vanishes in high-noise regimes.
+Nesterov's accelerated gradient achieves the theoretically optimal $O(1/k^2)$ convergence rate (Theorem~\ref{thm:nesterov}), confirmed empirically on Benchmark~A, and is the best first-order method on Rosenbrock ($f = 0.479$ at 150 iterations). The key advantage over Adam on ill-conditioned problems is that Nesterov builds large-scale momentum in the valley-traversal direction, while Adam's per-coordinate normalisation suppresses this accumulation. In high-noise SGD settings, increasing label noise from $\sigma = 1$ to $\sigma = 6$ raises the convergence floor by $\approx 36\times$ (proportional to $\sigma^2$), and the batch-size effect is dominated by the irreducible noise variance.
 
 \subsection{Newton's Method (Question 3)}
-Newton's method dramatically outperforms first-order methods by exploiting second-order curvature information. On quadratic objectives, it converges in a single iteration. On non-convex, ill-conditioned objectives (Rosenbrock), a damped step is essential for global convergence: full Newton steps overshoot the narrow valley, while a damped step $\alpha = 0.22$ achieves $5.4\times$ better results than GD with $4\times$ fewer iterations.
+Newton's method demonstrates the decisive advantage of second-order information: single-iteration convergence on the quadratic Benchmark~A (exploiting the constant Hessian), and $5.4\times$ better final value on Rosenbrock with $4\times$ fewer iterations versus GD. The Tikhonov-regularised Hessian ($\lambda = 10^{-8}$) ensures positive definiteness throughout. The damped step ($\alpha = 0.22$ on Rosenbrock) is necessary because the quadratic approximation is accurate only within a neighbourhood of size $\approx 1/\sqrt{\kappa_{\max}} \approx 0.02$, smaller than the valley width. The connection to adaptive gradient methods is through diagonal Hessian approximations: Adagrad and Adam are cheap surrogates for Newton's inverse Hessian scaling.
 
 \subsection{Derivative-Free Methods (Question 4)}
-Finite differences provide high-fidelity gradients when $\delta$ is chosen appropriately; the error is $O(\delta)$ and a step $\delta \approx 0.05$ is practical. Nesterov random search trades gradient fidelity for dimension-independence. Nelder--Mead is the best derivative-free method for smooth low-dimensional problems ($\leq 10$ dimensions), outperforming GD on Rosenbrock due to its geometric simplex adaptation. Grid search provides global guarantees but scales catastrophically with dimension.
+The forward finite-difference approximation introduces $O(\delta)$ truncation error; the experiment confirms that $\delta = 0.05$ provides high-fidelity gradients, while $\delta = 0.8$ introduces $\sim 16\times$ greater error. The optimal FD step $\delta^{\star} = \sqrt{\varepsilon_{\mathrm{mach}}} \approx 10^{-8}$ minimises the sum of truncation and round-off errors. Nesterov random search's key property is the $\mathbb{E}[uu^T] = I/d$ identity, making it an unbiased estimator of $\nabla f / d$ at 2 FE/iter. Nelder--Mead achieves $f \approx 0.27$ on Rosenbrock in 160 iterations by adapting its simplex geometry to the curved valley, outperforming GD ($f = 3.73$) without any gradient information. Grid search guarantees global coverage but is limited by the curse of dimensionality: $55^d$ evaluations required for $d$-dimensional problems.
 
 \subsection{Constrained Optimisation (Question 5)}
-Projected gradient descent enforces hard feasibility constraints at every iteration at the cost of requiring a projection oracle. Penalty methods are simpler to implement but converge to the constrained solution only approximately (for finite $\lambda$). Increasing $\lambda$ improves constraint satisfaction but stiffens the objective, requiring smaller step sizes and risking numerical instability.
+The constraint $x_1 \geq 0.5$ is inactive at the unconstrained minimum ($x_1^{\star} \approx 0.582 > 0.5$), so all methods ultimately converge to the same point. This illustrates the KKT complementary slackness condition: at the constrained minimiser, $\mu = 0$ and the constraint is not active. Projected GD enforces hard feasibility from iteration 1 through $O(1)$ projection. The penalty parameter $\lambda$ controls the trade-off between constraint satisfaction and objective conditioning: $\lambda = 0.15$ is insufficient to eliminate violations within 100 iterations, while $\lambda = 4.5$ achieves zero violation in $\approx 10$ iterations but requires a reduced step size $\alpha = 0.03$.
 
 \subsection{Frank--Wolfe Algorithm (Question 6)}
-Frank--Wolfe's projection-free design makes it the preferred method for linearly-constrained problems where the LMO is cheaper than the projection. It performs well for boundary optima, where the LMO naturally aligns with the constrained minimiser. For interior optima, oscillation of the LMO vertex solution is a limitation that can be addressed with decaying step sizes or away-step variants.
+The Frank--Wolfe algorithm connects directly to the linear programme solved in Task~I: the LMO $\arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$ is identical to solving a linear programme with objective $\nabla f(x_k)^T z$. By Theorem~\ref{thm:fw}, convergence is $O(1/k)$ with the standard decaying step. The fixed-step variant used here converges but oscillates near interior optima (the LMO jumps between vertices as gradient direction fluctuates). Boundary optima are handled naturally since the LMO consistently points toward the same vertex, and indeed the boundary case achieves $f = 0.364$ vs.\ $f^{\star} = 0.25$ after 140 iterations, with continued convergence expected with more iterations.
 
 \subsection{Overall Recommendation and Complexity Summary}
 
