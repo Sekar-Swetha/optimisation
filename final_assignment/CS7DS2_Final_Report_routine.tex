@@ -411,7 +411,11 @@ In the code, the schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ approximat
 \end{algorithmic}
 \end{algorithm}
 
-\textbf{Theory.} Adam combines first-moment momentum (as in Heavy Ball) with second-moment adaptive scaling (as in RMSprop). The bias corrections $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ are essential in early iterations: without them, $m_1 = (1-\beta_1)g_1$ and $v_1 = (1-\beta_2)g_1^2$ are biased towards zero, producing abnormally large effective steps. The effective step size per coordinate at time $t$ is $\alpha / \sqrt{\hat{v}_t^{(i)}} \approx \alpha / \mathbb{E}[|g^{(i)}|]$, making updates approximately scale-invariant. Adam does not have proven optimal convergence guarantees for general convex problems (Reddi et al., 2018 showed that Adam can fail to converge on simple convex problems; AMSGrad was proposed as a fix). In practice, Adam is highly effective on non-convex deep learning objectives due to its robustness to hyperparameter choice and ability to handle sparse gradients through its per-coordinate adaptive scaling.
+\textbf{Theory.} Adam combines first-moment momentum (as in Heavy Ball, Algorithm~\ref{alg:heavyball}) with second-moment adaptive scaling (as in RMSprop, Algorithm~\ref{alg:rmsprop}), inheriting the advantages of both. The bias corrections $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ are essential in early iterations: without them, $m_1 = (1-\beta_1)g_1$ and $v_1 = (1-\beta_2)g_1^2$ are biased towards zero because the EMA initialises at 0, producing over-large effective steps. The correction ensures $\hat{m}_1 \approx g_1$ and $\hat{v}_1 \approx g_1^2$ from the first iteration. The effective per-coordinate step at time $t$ is:
+\begin{equation}
+\alpha_t^{(i)} = \frac{\alpha}{\sqrt{\hat{v}_t^{(i)}} + \varepsilon} \approx \frac{\alpha}{\sqrt{\mathbb{E}[g^{(i)2}]}},
+\end{equation}
+making updates approximately scale-invariant: the magnitude of $x_t^{(i)}$ updates is bounded by $\approx \alpha$ regardless of the gradient scale, which is a crucial property for robustness in deep learning where gradients can vary over many orders of magnitude. Adam does not have proven optimal convergence guarantees for general convex problems (Reddi et al., 2018 showed that Adam can fail to converge on simple convex problems; AMSGrad was proposed as a fix). In practice, Adam is highly effective on non-convex deep learning objectives due to its robustness to hyperparameter choice and ability to handle sparse gradients through its per-coordinate adaptive scaling.
 
 \subsection{Hyperparameter Settings}
 
@@ -558,10 +562,17 @@ At $x_0 = 0.25$: $g(x_0) = 0.25^4 = 0.003906$, $g'(x_0) = 4 \times 0.25^3 = 0.06
 \label{eq:second_order}
 \end{equation}
 
-The Newton update minimises the second-order model: $\hat{g}_2'(x) = 0$ yields
+The Newton update minimises the second-order model (setting $\hat{g}_2'(x) = 0$):
 \begin{equation}
-x^+ = x_0 - \frac{g'(x_0)}{g''(x_0)} = 0.25 - \frac{0.0625}{0.75} = 0.25 - 0.0833 = 0.1667.
+0 = g'(x_0) + g''(x_0)(x^+ - x_0) \implies x^+ = x_0 - \frac{g'(x_0)}{g''(x_0)} = 0.25 - \frac{0.0625}{0.75} = 0.1667.
 \end{equation}
+In $d$ dimensions, the Newton step $p_k = H_k^{-1} g_k$ is the solution to the linear system $H_k p_k = g_k$, where $H_k = \nabla^2 f(x_k)$. The step $x_{k+1} = x_k - p_k$ is the minimiser of the local quadratic model $m_k(x) = f(x_k) + \nabla f(x_k)^T(x-x_k) + \frac{1}{2}(x-x_k)^T H_k (x-x_k)$.
+
+\textbf{One-step exactness on quadratics.} If $f(\theta) = \frac{1}{2}\theta^T H\theta - b^T\theta + c$ (constant Hessian), the Newton step starting from any $\theta_0$ gives:
+\begin{equation}
+\theta_1 = \theta_0 - H^{-1}(H\theta_0 - b) = H^{-1}b = \theta^\star,
+\end{equation}
+i.e.\ the Newton step reaches the exact minimiser in one iteration, regardless of $\theta_0$. This is exactly the behaviour observed in Figure~\ref{fig:q3_fval_A} and Figure~\ref{fig:newton_illustration}.
 For $g(x) = x^4$, the true minimiser is $x^\star = 0$. Starting from $x_0 = 0.25$, a single Newton step gives $x_1 = 0.1667$, then $x_2 = 0.1667 - (4 \times 0.1667^3)/(12 \times 0.1667^2) = 0.1667/3 \approx 0.0556$, and so on, with linear convergence (not quadratic here because the Hessian vanishes at the minimum --- $g''(0) = 0$ --- so the standard quadratic convergence theorem does not apply).
 
 \begin{figure}[H]
@@ -820,7 +831,20 @@ The central trade-off is between cost per iteration and information quality. Gra
 
 Minimise $f(x_1, x_2) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1)$ (Benchmark B) subject to $x_1 \geq 0.5$, starting from the \emph{infeasible} point $x_0 = (0.2, 4.0)$.
 
-\textbf{Important observation (inactive constraint).} The unconstrained minimiser of Benchmark B is $x^\star \approx (0.582, 2.0)$, which satisfies $x_1^\star \approx 0.582 > 0.5$. Therefore, the constraint $x_1 \geq 0.5$ is \emph{inactive at the optimum} (the KKT multiplier $\mu^\star = 0$): the constrained and unconstrained solutions coincide. This means all methods that converge to the unconstrained minimum will automatically satisfy the constraint at convergence.
+\textbf{KKT Conditions.} The constrained optimisation problem is:
+\begin{equation}
+\min_{x \in \mathbb{R}^2} f(x) \quad \text{subject to} \quad g(x) = 0.5 - x_1 \leq 0.
+\end{equation}
+The KKT stationarity conditions require the existence of a multiplier $\mu^\star \geq 0$ such that:
+\begin{align}
+\nabla f(x^\star) + \mu^\star \nabla g(x^\star) &= 0 \quad &\text{(stationarity)},\\
+g(x^\star) &\leq 0 \quad &\text{(primal feasibility)},\\
+\mu^\star &\geq 0 \quad &\text{(dual feasibility)},\\
+\mu^\star g(x^\star) &= 0 \quad &\text{(complementary slackness)}.
+\end{align}
+With $\nabla g = [-1, 0]^T$: stationarity gives $\partial f/\partial x_1 = \mu^\star$ and $\partial f/\partial x_2 = 0$.
+
+\textbf{Important observation (inactive constraint).} The unconstrained minimiser of Benchmark B satisfies $x_1^\star \approx 0.582 > 0.5$, so $g(x^\star) = 0.5 - 0.582 < 0$ (strictly feasible). By complementary slackness, $\mu^\star \cdot g(x^\star) = 0$ with $g(x^\star) \neq 0$ forces $\mu^\star = 0$. The constraint is \emph{inactive at the optimum}: the unconstrained KKT conditions ($\nabla f = 0$) hold, and the constrained solution equals the unconstrained one. This means all methods that converge to the unconstrained minimum will automatically satisfy the constraint at convergence.
 
 The constrained problem is non-trivial only in the \emph{transient phase}: the initial iterate $(0.2, 4.0)$ is infeasible, and unconstrained GD's trajectory passes through the infeasible region $x_1 < 0.5$ during early iterations (since $x_1$ increases monotonically from 0.2 towards 0.582 along the GD path). The constraint boundary $x_1 = 0.5$ is crossed at some intermediate iterate, after which all iterates are feasible. This setup cleanly illustrates the key difference between hard-constraint methods (Projected GD: never infeasible) and soft-constraint methods (Penalty: temporarily infeasible, converging to feasibility) for infeasible starting points.
 
@@ -1009,7 +1033,7 @@ Boundary, $x^\star = (0.5,0)$ & 0.93 & $(0.500,\; -0.337)$ & 0.3637 & 0.25 \\
 \end{tabular}
 \end{table}
 
-\textbf{Interior optimum.} Frank--Wolfe with a fixed $\beta$ exhibits persistent oscillation because $z_k$ alternates between vertices of $\mathcal{X}$ as the gradient direction fluctuates near the optimum. The convex combination gradually averages these jumps. Smaller $\beta$ (larger $\gamma = 1-\beta$) leads to both faster initial convergence and more oscillation near the minimum. The standard decaying schedule $\gamma_k = 2/(k+2)$ would avoid this by making steps progressively smaller, guaranteeing $O(1/k)$ convergence.
+\textbf{Interior optimum.} Frank--Wolfe with fixed $\beta$ exhibits persistent oscillation because $z_k$ alternates between vertices of $\mathcal{X}$ as the gradient direction fluctuates near the optimum. The convex combination gradually averages these jumps, but cannot reach the exact interior minimum under fixed-$\beta$. The standard decaying schedule $\gamma_k = 2/(k+2)$ (equivalently $\beta_k = k/(k+2)$, increasing towards 1) avoids this: steps become progressively smaller, reducing oscillation and guaranteeing $O(C_f/k)$ convergence. An alternative is exact line search $\gamma_k = \arg\min_{\gamma \in [0,1]} f(x_k + \gamma(z_k - x_k))$, which gives the optimal $\gamma_k = \min(1, (f(x_k)-f(z_k))/(L\|x_k-z_k\|^2))$ for $L$-smooth $f$ and achieves faster convergence in practice.
 
 \textbf{Boundary optimum.} Frank--Wolfe is particularly well-suited to boundary optima. The LMO at each step selects a vertex of $\mathcal{X}$ near the true constrained minimum, and the iterate is progressively pulled towards that vertex. No explicit projection is needed at any point --- \emph{all iterates remain in $\mathcal{X}$} as convex combinations of feasible points. This projection-free property is the primary advantage over projected gradient descent when the feasible set is a polytope.
 
