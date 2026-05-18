@@ -418,7 +418,11 @@ f(x_k) - f^\star \leq \frac{2L\|x_0 - x^\star\|^2}{(k+1)^2},
 \end{equation}
 which is the \emph{optimal} first-order convergence rate for the class of $L$-smooth convex functions (Nesterov's 1983 lower bound). This is quadratically faster than gradient descent's $O(L/k)$ rate. The key innovation is evaluating the gradient at the \emph{extrapolated} point $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$, correcting for the direction of motion before taking the gradient step. This is equivalent to the FISTA formulation: setting $y_{k+1} = x_k + \beta_k(x_k - x_{k-1})$, $x_{k+1} = y_{k+1} - \alpha\nabla f(y_{k+1})$, which is recovered via the substitution $z_k = x_k - x_{k-1}$.
 
-In the code, the schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ approximates the Nesterov optimal auxiliary sequence $\lambda_k$ satisfying $\lambda_k^2 = \lambda_{k+1}^2 - \lambda_{k+1}$; the bound $\beta_{\max}$ caps the momentum to prevent instability on non-convex regions. The distinction from Heavy Ball (Algorithm~\ref{alg:heavyball}) is fundamental: Heavy Ball evaluates gradients at $x_k$ and has no proven $O(1/k^2)$ guarantee on general convex functions, while Nesterov's lookahead provides the corrective mechanism that enables the accelerated rate.
+The standard Nesterov sequence uses auxiliary variables $t_k$ satisfying $t_{k+1}^2 \leq t_{k+1} + t_k^2$, with the recursive solution $t_k = (1+\sqrt{1+4t_{k-1}^2})/2$ and momentum $\beta_k = (t_{k-1}-1)/t_k \to 1$ as $k \to \infty$. The code approximates this by $\beta_k = \min((k-1)/(k+2), \beta_{\max})$; the bound $\beta_{\max}$ caps momentum to prevent instability on non-convex regions.
+
+The FISTA (Beck \& Teboulle, 2009) formulation makes the lookahead explicit via two sequences: $y_{k+1} = x_k + \frac{t_k-1}{t_{k+1}}(x_k - x_{k-1})$ (extrapolation), $x_{k+1} = y_{k+1} - \frac{1}{L}\nabla f(y_{k+1})$ (gradient step). This is recovered from Algorithm~\ref{alg:nesterov} via the substitution $z_k = x_k - x_{k-1}$ (velocity equals last displacement), so that $\tilde{x}_k = x_k + \beta_k(x_k - x_{k-1})$ is exactly the FISTA extrapolation point.
+
+The distinction from Heavy Ball (Algorithm~\ref{alg:heavyball}) is fundamental: Heavy Ball evaluates gradients at $x_k$ (not the lookahead) and has no proven $O(1/k^2)$ guarantee on general convex functions. Nesterov's \emph{gradient at the lookahead} provides the corrective mechanism: by anticipating where the iterate will move, the gradient is evaluated at a more informative point, enabling the accelerated rate.
 
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
@@ -504,7 +508,7 @@ Adam & 0.4826 & 0.7244 & 1.5785 \\
 \end{tabular}
 \end{table}
 
-\textbf{Why Nesterov outperforms Adam on Rosenbrock.} Adam's per-coordinate scaling is most beneficial when different coordinates have different gradient magnitudes, as in the anisotropic Benchmark B. However, on Rosenbrock, the dominant challenge is not coordinate-wise scaling but rather \emph{direction misalignment}: the optimal descent direction is tangent to the curved valley $x_2 = x_1^2$, which rotates as the iterate moves. Adam's scaling is coordinate-aligned (diagonal $v_t$), so it cannot account for this off-diagonal curvature. Nesterov's momentum, in contrast, builds up an effective velocity vector along the valley floor direction without requiring curvature information, making it better suited to the banana-shaped landscape.
+\textbf{Why Nesterov outperforms Adam on Rosenbrock.} Adam's per-coordinate scaling is most beneficial when different coordinates have different gradient magnitudes. On Rosenbrock, the dominant challenge is not coordinate-wise scaling but \emph{direction misalignment}: the optimal descent direction is tangent to the curved valley $x_2 = x_1^2$, which rotates as $(x_1, x_2)$ changes. At a generic point $(x_1, x_2)$ on the valley, the gradient $\nabla f = [2(x_1-1) + 400x_1(x_1^2-x_2),\; 200(x_2 - x_1^2)]^T$ has a large component \emph{across} the valley (steep curvature) and a small component \emph{along} the valley (shallow gradient). Efficient descent requires combining both coordinates with appropriate signs, corresponding to off-diagonal curvature that Adam's diagonal scaling $v_t$ cannot represent. Nesterov's momentum, in contrast, accumulates a velocity vector $z_k$ along the consistent descent direction across iterations: since the valley direction changes only slowly relative to the step size, the momentum aligns itself with the valley floor, providing implicit second-order information about the problem's geometry without computing the Hessian.
 
 \subsection{Contour Trajectories}
 
@@ -566,7 +570,7 @@ The experiment is repeated with output noise scaled by factor 6: $y^{(i)} = {\th
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q2_sgd_noisy.pdf}
-\caption{Q2: Effect of label noise on SGD convergence. Left: original $\sigma=1$; Right: high-noise $\sigma=6$. The irreducible loss (noise floor) is $J^\star = \frac{1}{2m}\mathbb{E}[\|\varepsilon\|^2] = \frac{\sigma^2}{2m} \cdot m = \frac{\sigma^2}{2}$, so $J^\star({\sigma=6}) = 36 \cdot J^\star({\sigma=1}) \approx 36 \times 0.5 = 18$. Under high noise, the per-sample gradient variance $\sigma_g^2 \propto \sigma^2$ dominates the mini-batch sampling variance, equalising the relative advantage of small batches. Both batch sizes converge to the same noise floor at similar rates, demonstrating that the algorithm cannot reduce the \emph{irreducible} loss caused by measurement noise --- consistent with the information-theoretic lower bound that no estimator can achieve $J < \sigma^2/2$ on this problem.}
+\caption{Q2: Effect of label noise on SGD convergence. Left: original $\sigma=1$; Right: high-noise $\sigma=6$. The irreducible (Bayes) loss is $J^\star = \frac{1}{2m}\mathbb{E}[\|\varepsilon\|^2] = \frac{m\sigma^2}{2m} = \frac{\sigma^2}{2}$, so $J^\star(\sigma=6) = \frac{36}{2} = 18$ vs.\ $J^\star(\sigma=1) = \frac{1}{2} \approx 0.50$ (empirically $\approx 0.4826$ due to finite-sample noise). Under high noise, the per-sample gradient variance $\sigma_g^2 \propto \sigma^2$ dominates the mini-batch variance, equalising the relative advantage of small vs.\ large batches at each epoch. Both batch sizes converge to the same noise floor at similar rates, demonstrating that no estimator can reduce the \emph{irreducible} loss caused by measurement noise --- consistent with the information-theoretic lower bound $J \geq \sigma^2/2$ for unbiased estimators of $\theta^\star$ on this problem.}
 \label{fig:q2_sgd_noisy}
 \end{figure}
 
@@ -603,7 +607,11 @@ In $d$ dimensions, the Newton step $p_k = H_k^{-1} g_k$ is the solution to the l
 \theta_1 = \theta_0 - H^{-1}(H\theta_0 - b) = H^{-1}b = \theta^\star,
 \end{equation}
 i.e.\ the Newton step reaches the exact minimiser in one iteration, regardless of $\theta_0$. This is exactly the behaviour observed in Figure~\ref{fig:q3_fval_A} and Figure~\ref{fig:newton_illustration}.
-For $g(x) = x^4$, the true minimiser is $x^\star = 0$. Starting from $x_0 = 0.25$, a single Newton step gives $x_1 = 0.1667$, then $x_2 = 0.1667 - (4 \times 0.1667^3)/(12 \times 0.1667^2) = 0.1667/3 \approx 0.0556$, and so on, with linear convergence (not quadratic here because the Hessian vanishes at the minimum --- $g''(0) = 0$ --- so the standard quadratic convergence theorem does not apply).
+For $g(x) = x^4$, the true minimiser is $x^\star = 0$. The Newton update rule is:
+\begin{equation}
+x_{k+1} = x_k - \frac{g'(x_k)}{g''(x_k)} = x_k - \frac{4x_k^3}{12x_k^2} = x_k - \frac{x_k}{3} = \frac{2}{3}x_k.
+\end{equation}
+This gives the closed-form solution $x_k = (2/3)^k x_0$, so the error decays geometrically at rate $2/3$ --- \emph{linear} (not quadratic) convergence. The quadratic convergence theorem requires $g''(x^\star) \neq 0$ (Hessian non-singular at the minimum), which fails here since $g''(0) = 0$. The Hessian $12x_k^2 \to 0$ as $x_k \to 0$, so the Newton step becomes ill-conditioned near the optimum, preventing the quadratic convergence regime from activating.
 
 \begin{figure}[H]
 \centering
