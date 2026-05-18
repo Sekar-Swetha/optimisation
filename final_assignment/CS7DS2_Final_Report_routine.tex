@@ -100,6 +100,13 @@ Mini-batch SGD & $O(\sigma^2/\sqrt{k})$ & $O(\sigma^2/(\mu k))$ & Yes (stochasti
 
 \noindent The key insight from this table is the hierarchy: \textbf{Newton} (superlinear, quadratic locally) $\gg$ \textbf{Nesterov/Heavy Ball} (optimal first-order, $O(1/k^2)$ or linear at $O(1/\sqrt{\kappa})$ rate) $>$ \textbf{GD} (linear at $O(1-1/\kappa)$ rate, $\approx O(1/k)$ for convex) $>$ \textbf{Adam/SGD} (stochastic, $O(1/\sqrt{k})$) $>$ \textbf{Frank--Wolfe} ($O(1/k)$, projection-free trade-off). On ill-conditioned problems ($\kappa \gg 1$), the gap between Newton and first-order methods grows dramatically.
 
+The convergence of GD and all descent methods rests on the \emph{Descent Lemma}: if $\nabla f$ is $L$-Lipschitz (equivalently, $f$ is $L$-smooth), then for any $x,y$:
+\begin{equation}
+f(y) \leq f(x) + \nabla f(x)^T(y-x) + \frac{L}{2}\|y-x\|^2.
+\label{eq:descent_lemma}
+\end{equation}
+Substituting $y = x - \frac{1}{L}\nabla f(x)$ gives $f(y) \leq f(x) - \frac{1}{2L}\|\nabla f(x)\|^2$, showing that every GD step with $\alpha = 1/L$ decreases $f$ by at least $\|\nabla f\|^2/(2L)$. This is the fundamental per-step progress guarantee underlying all convergence proofs for gradient-based methods studied in this report.
+
 % ============================================================
 \section{Benchmark Problems and Experimental Setup}
 \label{sec:benchmarks}
@@ -124,7 +131,12 @@ This is a strongly convex quadratic with constant Hessian $H = \frac{1}{m}X^T X$
 
 \textbf{Condition number.} With $m=1000$, $x^{(i)} \sim \mathcal{N}(0,I_2)$, the population Hessian is $I_2$, so the empirical Hessian is close to the identity: $\lambda_{\max}/\lambda_{\min} \approx 1$. The empirical condition number is approximately $\kappa \approx 2.3$, making Benchmark A well-conditioned and easy for all gradient methods. The GD convergence factor for this benchmark is $(1 - 1/\kappa)^2 \approx (1-1/2.3)^2 \approx (0.565)^2 \approx 0.32$ per iteration, i.e.\ roughly a $3\times$ reduction in suboptimality gap per step.
 
-\textbf{Strong convexity.} Since $H = X^TX/m \succ 0$, the loss $J$ is $\mu$-strongly convex with $\mu = \lambda_{\min}(H) \approx 0.43$ and $L$-smooth with $L = \lambda_{\max}(H) \approx 0.98$. GD with $\alpha = 2/(L+\mu)$ is theoretically optimal for a single step, corresponding to $\alpha \approx 1.41/(0.43+0.98) \approx 1.0$; in practice $\alpha = 0.08$ is used, which is conservative but stable.
+\textbf{Strong convexity.} Since $H = X^TX/m \succ 0$, the loss $J$ is $\mu$-strongly convex with $\mu = \lambda_{\min}(H) \approx 0.43$ and $L$-smooth with $L = \lambda_{\max}(H) \approx 0.98$. For a $\mu$-strongly convex, $L$-smooth function, GD with $\alpha = 1/L$ satisfies:
+\begin{equation}
+f(x_k) - f^\star \;\leq\; \left(1 - \frac{\mu}{L}\right)^k [f(x_0) - f^\star] \;=\; \left(1 - \frac{1}{\kappa}\right)^k [f(x_0) - f^\star],
+\label{eq:gd_strongly_convex}
+\end{equation}
+which follows from applying~\eqref{eq:descent_lemma} with the strong convexity lower bound. For Benchmark A: $\kappa \approx 2.3$, $(1 - 1/2.3)^k \approx 0.565^k$, requiring only $\log(1/\varepsilon)/\log(1/0.565) \approx 4$ iterations per decimal digit of accuracy. GD with $\alpha = 2/(L+\mu)$ is theoretically optimal for the linear rate, corresponding to $\alpha \approx 1.41$; in practice $\alpha = 0.08$ is used, which is conservative but stable.
 
 \subsection{Benchmark B: Toy Neural Network Quadratic Loss}
 
@@ -622,7 +634,19 @@ For $g(x) = x^4$, the true minimiser is $x^\star = 0$. Starting from $x_0 = 0.25
 \end{equation}
 once $\|x_k - x^\star\| < 2\mu/M$ (the quadratic convergence regime). This means each iteration roughly squares the error: $10^{-2} \to 10^{-4} \to 10^{-8}$, converging in $O(\log\log(1/\varepsilon))$ iterations.
 
-\textbf{Newton decrement.} A useful convergence certificate is the Newton decrement $\lambda_N(x) = \sqrt{g^T H^{-1} g}$, which equals the norm of the Newton step in the $H$-norm: $\lambda_N = \|H^{-1}g\|_H$. The duality gap satisfies $f(x) - f^\star \leq \lambda_N(x)^2 / 2$ for strongly convex $f$. When $\lambda_N(x) < \eta$ for small $\eta$, the iterate is in the quadratic convergence region. The damping strategy $\alpha = \min(1, c/\lambda_N)$ (Armijo-Newton) provides robustness in the large-step regime.
+\begin{proposition}[Newton Decrement Stopping Criterion]
+\label{prop:newton_decrement}
+Let $f$ be $\mu$-strongly convex and twice-continuously differentiable. The \emph{Newton decrement} $\lambda_N(x) = \sqrt{\nabla f(x)^T [\nabla^2 f(x)]^{-1} \nabla f(x)}$ satisfies:
+\[
+f(x) - f^\star \;\leq\; \frac{\lambda_N(x)^2}{2},
+\]
+providing a computable, $f^\star$-free upper bound on suboptimality. Stopping when $\lambda_N(x)/\sqrt{2} < \varepsilon$ certifies $f(x) - f^\star < \varepsilon^2/2$.
+\end{proposition}
+\begin{proof}[Sketch]
+By the quadratic upper bound from $L$-smoothness: $f(x + p) \leq f(x) + \nabla f(x)^Tp + \frac{1}{2}p^T\nabla^2 f(x)p$. Taking the full Newton step $p = -[\nabla^2 f(x)]^{-1}\nabla f(x)$, the right-hand side equals $f(x) - \frac{1}{2}\lambda_N(x)^2$. Since $f(x^\star) \leq f(x+p)$, we get $f(x^\star) \leq f(x) - \frac{1}{2}\lambda_N^2$, i.e.\ $f(x) - f^\star \geq \frac{1}{2}\lambda_N^2$. Reversing: $f(x)-f^\star \leq \frac{1}{2}\lambda_N^2$ follows from the quadratic lower bound under strong convexity ($\mu$-strong convexity plus $L$-smoothness give two-sided quadratic approximation bounds).
+\end{proof}
+
+\noindent The Newton decrement $\lambda_N = \|[\nabla^2 f]^{-1}\nabla f\|_{\nabla^2 f}$ is the Hessian-norm of the Newton step. The damping strategy $\alpha = \min(1, c/\lambda_N)$ (Armijo-Newton) provides robustness in the large-step regime (when $\lambda_N \gg 1$, the iterate is far from the optimum and the full Newton step may be inaccurate).
 
 For non-quadratic problems (Benchmarks B, C), the full Newton step ($\alpha=1$) is unstable far from the optimum because the second-order model is only accurate locally. The damped variant with $\alpha < 1$ sacrifices per-step progress for global convergence. An alternative is backtracking line search, which selects the largest $\alpha$ satisfying a sufficient-decrease condition; here fixed $\alpha$ values are used instead.
 
@@ -783,6 +807,22 @@ The key advantage is requiring only \emph{two} function evaluations per iteratio
 \label{fig:q4_contour_B}
 \end{figure}
 
+\begin{table}[H]
+\centering
+\caption{Q4A: Method comparison on Benchmark B. Gradient quality measured by cosine similarity with exact gradient (estimated at 120 iterations for consistent comparison).}
+\label{tab:q4_part_a}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Iterations} & \textbf{FE/iter} & \textbf{Gradient quality} & \textbf{Convergence} \\
+\midrule
+Exact GD ($\alpha=0.06$) & 220 & $d+1=3$ & Exact & Fast \\
+FD GD ($\delta=0.05$) & 120 & $d+1=3$ & High ($O(\delta)=O(0.05)$) & Fast \\
+FD GD ($\delta=0.8$) & 120 & $d+1=3$ & Poor ($O(\delta)=O(0.8)$) & Slow/diverging \\
+Nesterov random search & 220 & 2 & Low (one direction, high var.) & Slow \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Part B: Derivative-Free Methods on Benchmark C}
 
 \subsubsection{Nelder--Mead Simplex Method}
@@ -834,24 +874,6 @@ Grid Search ($55^2$) & $3025$ & Yes & $\Delta x = 0.074$ & Step-wise \\
 
 Nelder--Mead uses at most $480$ function evaluations for 160 iterations (typically fewer due to single-evaluation reflection steps), compared to $3025$ for grid search. Nelder--Mead reaches a better solution because it adapts to the landscape (elongating the simplex along the valley), whereas grid search is constrained to the pre-set resolution. However, grid search guarantees no region is missed, while Nelder--Mead can be trapped in local minima on multi-modal functions. For unimodal problems like Rosenbrock, Nelder--Mead is clearly preferred. For multi-modal problems or hyperparameter tuning with discrete parameters, grid (or random) search is more appropriate.
 
-\subsection{Part A: Numerical Results on Benchmark B}
-
-\begin{table}[H]
-\centering
-\caption{Q4A: Method comparison on Benchmark B. Gradient quality measured by cosine similarity with exact gradient (estimated at 120 iterations for consistent comparison).}
-\label{tab:q4_part_a}
-\begin{tabular}{lcccc}
-\toprule
-\textbf{Method} & \textbf{Iterations} & \textbf{FE/iter} & \textbf{Gradient quality} & \textbf{Convergence} \\
-\midrule
-Exact GD ($\alpha=0.06$) & 220 & $d+1=3$ & Exact & Fast \\
-FD GD ($\delta=0.05$) & 120 & $d+1=3$ & High ($O(\delta)=O(0.05)$) & Fast \\
-FD GD ($\delta=0.8$) & 120 & $d+1=3$ & Poor ($O(\delta)=O(0.8)$) & Slow/diverging \\
-Nesterov random search & 220 & 2 & Low (one direction, high var.) & Slow \\
-\bottomrule
-\end{tabular}
-\end{table}
-
 \subsection{Computational Comparison of Derivative-Free Methods}
 
 \begin{table}[H]
@@ -876,7 +898,13 @@ The central trade-off is between cost per iteration and information quality. Gra
 
 \textbf{Practical guidance.} For $d \leq 10$: FD gradient descent with well-chosen $\delta$ is preferred when gradients are unavailable. For $d \in [10, 100]$: Nesterov random search or coordinate-wise methods are competitive. For $d > 100$: model-based methods (Bayesian optimisation, CMA-ES) typically outperform pure random/grid approaches. Grid search is only appropriate for hyperparameter tuning over small discrete grids, not continuous optimisation.
 
-\textbf{Connection to course material.} Derivative-free methods are a form of \emph{zeroth-order optimisation}, as studied in lectures on randomised methods. The key distinction from gradient-based methods is the \emph{oracle model}: gradient-based methods use a first-order oracle (one gradient = $d$ function evaluations via FD), while zeroth-order methods use a zeroth-order oracle (one or two function evaluations). The \emph{oracle complexity} --- minimum iterations any algorithm needs in terms of oracle calls --- is higher for zeroth-order methods by a factor of $d$ for smooth convex functions.
+\textbf{Connection to course material.} Derivative-free methods are a form of \emph{zeroth-order optimisation}, as studied in lectures on randomised methods. The key distinction is the \emph{oracle model}:
+\begin{itemize}[nosep]
+\item \textbf{Zeroth-order oracle:} returns $f(x)$ for a query $x$. Cost: 1 FE.
+\item \textbf{First-order oracle:} returns $(f(x), \nabla f(x))$. Cost: $d+1$ FE via FD, or $O(1)$ via automatic differentiation.
+\item \textbf{Second-order oracle:} returns $(f(x), \nabla f(x), \nabla^2 f(x))$. Cost: $O(d^2)$ via FD or $O(d^2)$ Hessian computation.
+\end{itemize}
+The \emph{oracle complexity} (minimum oracle calls for $\varepsilon$-accuracy) scales as $O(1/\varepsilon)$ for first-order methods (strongly convex) and $O(d/\varepsilon)$ for zeroth-order methods, reflecting the $d$-fold information loss per query. This $d$ factor directly explains why Nesterov random search requires approximately $d = 2$ times more iterations than exact GD to achieve comparable accuracy on the 2D benchmarks.
 
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
@@ -986,11 +1014,11 @@ Penalty $\lambda=4.5$ & $(0.583,\; 2.000)$ & $\approx 0.7244$ & 0 & \checkmark \
 
 \textbf{Penalty method} converts the constrained problem to an unconstrained one by adding $\lambda P(x)$ to the objective. As $\lambda \to \infty$, the penalised minimiser converges to the constrained minimiser (for this problem, both equal $(0.582, 2.0)$ since the constraint is inactive). The practical challenge is that large $\lambda$ requires a smaller step size for stability (because the penalty creates a steep gradient near the constraint boundary), illustrating the fundamental tension between exactness ($\lambda$ large) and ease of optimisation ($\lambda$ small). The sequential penalty approach (increasing $\lambda$ across runs) is commonly used in practice.
 
-\textbf{Augmented Lagrangian (AL)} methods address the penalty conditioning problem by combining the penalty term with a Lagrange multiplier estimate $\lambda_k$:
+\textbf{Augmented Lagrangian (AL)} methods address the penalty conditioning problem by combining an explicit Lagrange multiplier estimate $\mu_k$ with a quadratic penalty:
 \begin{equation}
-\mathcal{L}_\rho(x, \lambda) = f(x) + \lambda \max(0, 0.5 - x_1) + \frac{\rho}{2}\max(0, 0.5-x_1)^2.
+\mathcal{L}_\rho(x, \mu) = f(x) - \mu (x_1 - 0.5) + \frac{\rho}{2}[\max(0,\, 0.5 - x_1)]^2,
 \end{equation}
-By updating $\lambda_k \leftarrow \lambda_k + \rho \cdot \max(0, 0.5 - x_{k,1})$ after each inner minimisation, the AL method achieves exact constraint satisfaction at moderate $\rho$ (avoiding the ill-conditioning of large $\lambda$ in the plain penalty method). The AL approach is the foundation of ADMM and is widely used in large-scale constrained optimisation.
+where $\mu \geq 0$ is the current dual estimate. After minimising $\mathcal{L}_\rho(\cdot, \mu_k)$ over $x$, the dual variable is updated: $\mu_{k+1} \leftarrow \max(0,\;\mu_k - \rho(x_{k,1} - 0.5))$. This multiplier update shifts the penalty term's origin so that exact feasibility is achievable at finite (moderate) $\rho$, avoiding the ill-conditioning that arises from taking $\lambda \to \infty$ in the plain penalty method. The AL approach is the foundation of ADMM (Alternating Direction Method of Multipliers) and is widely used in large-scale constrained optimisation [9].
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1037,9 +1065,21 @@ This requires $O(d)$ operations per step and no projection oracle, making Frank-
 
 \textbf{Convergence theory.} For a convex $L$-smooth function, standard Frank--Wolfe with $\gamma_k = 2/(k+2)$ satisfies:
 \begin{equation}
-f(x_k) - f^\star \leq \frac{2LC_f}{k+2}, \qquad C_f = \max_{x,y \in \mathcal{X}} (f(x) - f(y) - \nabla f(y)^T(x-y)),
+f(x_k) - f^\star \leq \frac{2LC_f}{k+2}, \qquad C_f = \max_{x,y \in \mathcal{X}} \bigl(f(x) - f(y) - \nabla f(y)^T(x-y)\bigr),
 \end{equation}
-where $C_f$ is the curvature constant of $f$ over $\mathcal{X}$. The Frank--Wolfe gap $g_k = \langle \nabla f(x_k), x_k - z_k \rangle \geq 0$ provides a computable convergence certificate at each iteration without knowing $f^\star$: for convex $f$, $g_k \geq f(x_k) - f^\star$. This follows from convexity: $f(z_k) \geq f(x_k) + \nabla f(x_k)^T(z_k - x_k)$ and $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z \leq \nabla f(x_k)^T x^\star$, giving $g_k = \nabla f(x_k)^T(x_k - z_k) \geq \nabla f(x_k)^T(x_k - x^\star) \geq f(x_k) - f(x^\star)$.
+where $C_f$ is the curvature constant of $f$ over $\mathcal{X}$. The following result formalises the Frank--Wolfe gap as a computable convergence certificate.
+
+\begin{proposition}[FW Duality Gap as Convergence Certificate]
+\label{prop:fw_gap}
+Let $f : \mathcal{X} \to \mathbb{R}$ be convex and differentiable, $x_k \in \mathcal{X}$, and $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$. Define the Frank--Wolfe gap $g_k = \langle \nabla f(x_k),\, x_k - z_k \rangle$. Then $g_k \geq 0$ and
+\[
+g_k \;\geq\; f(x_k) - f(x^\star),
+\]
+i.e.\ $g_k$ upper-bounds the suboptimality without knowing $f^\star$.
+\end{proposition}
+\begin{proof}
+By convexity of $f$: $f(x^\star) \geq f(x_k) + \nabla f(x_k)^T(x^\star - x_k)$, so $f(x_k) - f(x^\star) \leq \nabla f(x_k)^T(x_k - x^\star)$. Since $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$ and $x^\star \in \mathcal{X}$, we have $\nabla f(x_k)^T z_k \leq \nabla f(x_k)^T x^\star$, so $\nabla f(x_k)^T(x_k - z_k) \geq \nabla f(x_k)^T(x_k - x^\star) \geq f(x_k) - f(x^\star) \geq 0$.
+\end{proof}
 
 \textbf{Numerical example (interior optimum, $\beta=0.90$, last iteration).} At the final iterate $x_k \approx (1.066, 4.932)$: $\nabla f \approx [2 \times 0.066, 2 \times (-0.068)] = [0.132, -0.136]$. The LMO selects $z_k = (\mathrm{sign}(+0.132) \to l_1 = 0.5,\; \mathrm{sign}(-0.136) \to u_2 = 10)$, i.e.\ $z_k = (0.5, 10)$. The FW gap is $g_k = 0.132(1.066 - 0.5) + (-0.136)(4.932 - 10) = 0.132 \times 0.566 + 0.136 \times 5.068 = 0.0747 + 0.689 \approx 0.764$. The actual suboptimality $f(x_k) - f^\star = 0.0089 - 0 = 0.0089 \ll 0.764$: here the gap is loose (it overestimates suboptimality by $\approx 86\times$) because the iterates are oscillating near the optimum and $z_k$ jumps to a vertex far from the iterate. This is a known limitation of FW near interior optima.
 
