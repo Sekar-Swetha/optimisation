@@ -2,6 +2,7 @@
 \usepackage[margin=2.2cm]{geometry}
 \usepackage{graphicx}
 \usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
 \usepackage{float}
 \usepackage{hyperref}
 \usepackage{caption}
@@ -332,6 +333,17 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \item \textbf{Summary:} In practice, exact $f^{\star}$ is rarely known, limiting Polyak's applicability. Adagrad and Heavy Ball provide robust alternatives: Adagrad through guaranteed step-size decay, Heavy Ball through momentum. RMSprop (and its extension Adam, Section~\ref{sec:q2}) are preferred in practice for deep learning due to adaptive per-coordinate scaling without full accumulation.
 \end{itemize}
 
+\subsection{Per-Coordinate Adaptive Scaling: Adagrad vs RMSprop}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q1_adaptive_percoord.pdf}
+\caption{Q1: Per-coordinate effective learning rate analysis on Benchmark B. Top-left: Adagrad's per-coordinate steps decay monotonically; $x_1$'s rate decays more slowly than $x_2$'s because the larger curvature in $x_2$ (eigenvalue $\approx 10$) means larger gradients and faster accumulation. Top-right: RMSprop maintains higher effective rates throughout, enabling faster convergence at later iterations than Adagrad on this benchmark. Bottom-left: the ratio $\alpha_1/\alpha_2$ for Adagrad quickly stabilises near the curvature ratio ($\approx 0.35$), effectively normalising the anisotropy. RMSprop's ratio also stabilises but at a slightly different level. Bottom-right: both methods automatically produce a step-size ratio that approximately matches the inverse curvature ratio, implicitly precondioning the gradient.}
+\label{fig:q1_percoord}
+\end{figure}
+
+The per-coordinate analysis reveals the key adaptive property: both Adagrad and RMSprop automatically assign smaller effective learning rates to the high-curvature direction ($x_2$ with curvature $\approx 10$) and larger rates to the low-curvature direction ($x_1$ with curvature $\approx 2$). This implicit preconditioning is what allows these methods to converge effectively on anisotropic problems without explicit knowledge of the Hessian.
+
 \begin{table}[H]
 \centering
 \caption{Q1: Summary of adaptive method properties and best benchmark performance.}
@@ -581,7 +593,15 @@ The \textbf{Newton direction} $p_k = H_k^{-1}g_k$ is the gradient preconditioned
 \begin{equation}
 \|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2,
 \end{equation}
-for some constant $C$ depending on the Lipschitz constant of $\nabla^2 f$. This means once the iterate is close to $x^{\star}$, the number of accurate digits \emph{doubles} per iteration. For a quadratic function, the Hessian is constant, so Newton takes \emph{exactly one step} to the minimiser with $\alpha = 1$.
+for some constant $C = L_H/(2\lambda_{\min}(\nabla^2 f(x^{\star})))$, where $L_H$ is the Lipschitz constant of $\nabla^2 f$. This means once the iterate is close to $x^{\star}$, the number of accurate digits \emph{doubles} per iteration (quadratic convergence).
+
+\textbf{One-step convergence for quadratics.} For $f(\theta) = \frac{1}{2m}\|X\theta - y\|^2$, the Hessian $H = X^TX/m$ is constant. The Newton update with $\alpha = 1$ is:
+\begin{align}
+\theta_{k+1} &= \theta_k - H^{-1}\nabla J(\theta_k) = \theta_k - H^{-1} H(\theta_k - \theta^{\star}_{\mathrm{OLS}}) = \theta^{\star}_{\mathrm{OLS}},
+\end{align}
+reaching the exact OLS solution in a single step regardless of starting point. This is confirmed by Figure~\ref{fig:q3_fval_A}.
+
+\textbf{Damped Newton for non-convex regions.} On Rosenbrock, the Hessian $H_C(x)$ can be indefinite far from the optimum (specifically when $2+1200x_1^2 < 400x_2$, i.e., when the off-diagonal dominates). The regularisation $H_k + \lambda I$ with $\lambda = 10^{-8}$ ensures positive definiteness throughout, though it is rarely needed given the small regularisation parameter. The step size $\alpha = 0.22$ provides the main safety net against overshooting.
 
 Settings: GD uses 80 iterations; Newton uses 20 iterations with Hessian damping $\lambda = 10^{-8}$.
 
@@ -732,7 +752,11 @@ In practice, a larger $\delta \in [10^{-5}, 10^{-3}]$ is often used to reduce se
 \end{algorithmic}
 \end{algorithm}
 
-This zeroth-order method estimates the directional derivative along a random unit vector $u_k$, requiring only \emph{two function evaluations per iteration} regardless of dimension $n$. The expected value of $\hat{g}_k$ (over the random direction) satisfies $\mathbb{E}[\hat{g}_k] = \nabla f(x_k)$ for any dimension, but with variance $O(n)$. The convergence rate is $O(1/\sqrt{k})$, the same as SGD, but with higher per-iteration variance than exact gradient methods. The advantage is extreme: on a $d$-dimensional function, FD requires $d+1$ evaluations per gradient, while Nesterov random search requires only 2.
+This zeroth-order method estimates the directional derivative along a random unit vector $u_k$, requiring only \emph{two function evaluations per iteration} regardless of dimension $n$. The gradient estimate is an unbiased estimator of a \emph{smoothed} gradient:
+\begin{equation}
+\mathbb{E}_u\!\left[\frac{f(x+\delta u) - f(x)}{\delta} u\right] = \nabla f_\delta(x), \qquad f_\delta(x) = \mathbb{E}_u[f(x + \delta u)],
+\end{equation}
+where $f_\delta$ is the Gaussian-smoothed version of $f$. As $\delta \to 0$, $\nabla f_\delta(x) \to \nabla f(x)$. The convergence rate is $O(1/\sqrt{k})$, the same order as SGD, but with higher effective variance than FD due to using only one random direction. The advantage is clear from scalability: on a $d$-dimensional function, FD requires $d+1$ evaluations per gradient (cost scales with $d$), while Nesterov random search requires only 2 (dimension-independent).
 
 \subsubsection{Finite Difference Step-Size Error Analysis}
 
@@ -763,14 +787,14 @@ This zeroth-order method estimates the directional derivative along a random uni
 
 \subsubsection{Nelder--Mead Simplex Method}
 
-The Nelder--Mead algorithm maintains a simplex of $n+1 = 3$ vertices in $\mathbb{R}^2$ and iteratively transforms it through four operations:
+The Nelder--Mead algorithm maintains a simplex of $n+1 = 3$ vertices $\{v_0, v_1, v_2\}$ in $\mathbb{R}^2$, ordered so $f(v_0) \leq f(v_1) \leq f(v_2)$ (best to worst). Let $\bar{x} = \frac{1}{n}\sum_{i=0}^{n-1} v_i$ be the centroid of all but the worst vertex. The four operations are:
 \begin{enumerate}[nosep]
-\item \textbf{Reflection} ($\alpha_r = 1.0$): move the worst vertex through the centroid of the remaining $n$ vertices.
-\item \textbf{Expansion} ($\gamma = 2.0$): if reflection improved, extend further in the same direction.
-\item \textbf{Contraction} ($\rho = 0.5$): if reflection worsened, contract between centroid and the best candidate.
-\item \textbf{Shrink} ($\sigma = 0.5$): if contraction fails, contract all vertices towards the best vertex.
+\item \textbf{Reflection} ($\alpha_r = 1.0$): $x_r = \bar{x} + \alpha_r(\bar{x} - v_2)$. If $f(v_0) \leq f(x_r) < f(v_1)$, replace $v_2 \leftarrow x_r$.
+\item \textbf{Expansion} ($\gamma = 2.0$): if $f(x_r) < f(v_0)$, try $x_e = \bar{x} + \gamma(\bar{x} - v_2)$; keep whichever of $x_r, x_e$ is better.
+\item \textbf{Contraction} ($\rho = 0.5$): if reflection failed, try $x_c = \bar{x} + \rho(\cdot - \bar{x})$ (outside or inside contraction).
+\item \textbf{Shrink} ($\sigma = 0.5$): if contraction fails, replace $v_i \leftarrow v_0 + \sigma(v_i - v_0)$ for $i > 0$.
 \end{enumerate}
-No gradient information is required --- the simplex explores the function landscape purely through function comparisons. Initial simplex step size: $0.35$, for $160$ iterations.
+No gradient information is required; the simplex explores the landscape purely through function evaluations. Standard parameters $(\alpha_r, \gamma, \rho, \sigma) = (1, 2, 0.5, 0.5)$ are used, with initial simplex step $0.35$ and $160$ iterations.
 
 \begin{figure}[H]
 \centering
@@ -810,7 +834,13 @@ Grid search & None & $O((1/\Delta x)^d)$ total & Very poor (exponential) & Grid-
 \end{tabular}
 \end{table}
 
-The fundamental trade-off is: higher gradient information accuracy requires more function evaluations, but enables faster convergence per evaluation. Grid search is the only method guaranteeing global optimum discovery within a resolution, at the cost of exponential scaling. Nelder--Mead is effective in practice for $d \leq 10$ but lacks convergence guarantees in general (counterexamples exist for $d \geq 2$). Nesterov random search is the preferred choice for high-dimensional black-box optimisation due to its $O(1)$ per-step evaluation cost.
+The fundamental trade-off is: higher gradient information accuracy requires more function evaluations, but enables faster convergence per evaluation. Three regimes are apparent:
+\begin{enumerate}[nosep]
+\item \emph{Gradient available} (exact or via FD with small $\delta$): use GD-based methods. Cost $O(d)$ per step, convergence $O(1/k)$ or faster.
+\item \emph{Low-dimensional black-box} ($d \leq 20$, $\leq 10^4$ evaluations budget): Nelder--Mead is effective and requires no hyperparameters beyond initial simplex size.
+\item \emph{High-dimensional black-box} ($d > 20$, stochastic objective): Nesterov random search scales with $O(1)$ evaluations/step. Grid search is never practical for $d > 3$.
+\end{enumerate}
+Nelder--Mead lacks convergence guarantees in general (McKinnon's counterexample for $d \geq 2$ shows convergence to non-stationary points is possible), but works reliably in practice for smooth functions in low dimensions.
 
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
@@ -903,6 +933,15 @@ Since the unconstrained minimum of $f_B$ at $(0.582, 2.0)$ satisfies $x_1^{\star
 
 \textbf{Penalty methods} trade exact feasibility for algorithmic simplicity. Only a modified gradient is needed; no projection is computed. The weight $\lambda$ controls the trade-off: small $\lambda$ is insufficient to discourage constraint violation, while large $\lambda$ enforces it more aggressively but requires smaller step sizes to maintain stability (the penalised objective has a larger Lipschitz constant near the constraint boundary). In this experiment, the inactive constraint means all penalty values ultimately achieve the same solution.
 
+\subsection{Penalty Method Analysis}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_analysis.pdf}
+\caption{Q5: Penalty method parameter analysis. Left: evolution of the $x_1$ coordinate over 100 iterations for all five methods. Projected GD immediately jumps to $x_1 = 0.5$ at iteration 1 (hard projection), then converges to $x_1^{\star} \approx 0.582$. The unconstrained GD enters the infeasible region ($x_1 < 0.5$) initially but converges to the same feasible optimum from the infeasible side. Penalty methods with larger $\lambda$ recover feasibility faster. Right: comparison of the penalty gradient magnitude (constant $\lambda$, active only when $x_1 < 0.5$) against the objective gradient $|\partial f_B/\partial x_1|$ in the infeasible region. A larger penalty gradient relative to the objective gradient drives faster feasibility recovery; with $\lambda = 4.5$, the penalty dominates near $x_1 = 0.5$, while $\lambda = 0.15$ is comparable to or dominated by the objective gradient.}
+\label{fig:q5_penalty}
+\end{figure}
+
 \textbf{KKT conditions.} The constrained problem $\min f_B(x)$ s.t. $x_1 \geq 0.5$ has Lagrangian $\mathcal{L}(x, \mu) = f_B(x) - \mu(x_1 - 0.5)$, $\mu \geq 0$. The KKT conditions at $x^{\star} = (0.582, 2.0)$ are:
 \begin{equation}
 \nabla f_B(x^{\star}) = \mu^{\star} e_1, \quad \mu^{\star}(x_1^{\star} - 0.5) = 0, \quad \mu^{\star} \geq 0.
@@ -951,7 +990,11 @@ The \textbf{Frank--Wolfe gap} provides a computable convergence certificate:
 \begin{equation}
 G_k := \nabla f(x_k)^T (x_k - z_k) = \max_{z \in \mathcal{X}} \nabla f(x_k)^T (x_k - z) \geq 0.
 \end{equation}
-At the optimum $x^{\star}$ of a convex function, $G_k = 0$ (since $\nabla f(x^{\star})^T(x^{\star} - z) \leq 0$ for all feasible $z$). Thus $G_k$ measures progress towards optimality without requiring knowledge of $f^{\star}$.
+At the optimum $x^{\star}$ of a convex function, $G_k = 0$ (since the first-order optimality condition $\nabla f(x^{\star})^T(z - x^{\star}) \geq 0$ for all $z \in \mathcal{X}$ implies $G_k \leq 0$, and $G_k \geq 0$ always). Thus $G_k$ measures progress towards optimality without requiring knowledge of $f^{\star}$. Moreover, for smooth convex $f$:
+\begin{equation}
+f(x_k) - f^{\star} \leq G_k,
+\end{equation}
+so $G_k$ provides an upper bound on the optimality gap that can be computed from quantities available at iteration $k$.
 
 \textbf{Convergence theorem.} For a smooth convex $f$ with gradient Lipschitz constant $L$, using the decaying step $\gamma_k = 2/(k+2)$ in $x_{k+1} = (1-\gamma_k)x_k + \gamma_k z_k$:
 \begin{equation}
@@ -1014,11 +1057,22 @@ Boundary, $\beta = 0.93$ & 140 & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 \end{tabular}
 \end{table}
 
+\subsection{Frank--Wolfe Gap Analysis}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_gap.pdf}
+\caption{Q6: Frank--Wolfe gap $G_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ (Left) and objective value (Right) for the interior optimum case. The FW gap decreases monotonically in expectation, providing a certificate of proximity to optimality: $f(x_k) - f^{\star} \leq G_k$ for convex $f$. The $O(1/k)$ reference curve (green dashed) matches the observed convergence rate qualitatively. The fixed-$\beta$ schedule converges but exhibits oscillation in the gap (not shown perfectly on log scale) due to the LP vertex $z_k$ oscillating between extremes. The conservative $\beta=0.985$ achieves lower $f$ and $G_k$ values after 180 iterations, consistent with less oscillation.}
+\label{fig:q6_gap}
+\end{figure}
+
 \subsection{Interior vs Boundary Behaviour}
 
 \textbf{Interior optimum.} Frank--Wolfe exhibits the characteristic $O(1/k)$ ``zig-zagging'' near an interior optimum. Since $z_k$ must be at a vertex of $\mathcal{X}$, the LP subproblem solution oscillates between extreme points as the gradient direction changes sign near the minimum. The iterate $x_k$ converges as an exponentially weighted average of these oscillating vertices. Smaller steps ($\beta = 0.985$, effective step $1-\beta = 0.015$) reduce oscillation near convergence.
 
-\textbf{Boundary optimum.} Frank--Wolfe is well-suited to boundary optima: once the gradient's sign stabilises (indicating which vertex to move towards), the LP vertex $z_k$ consistently selects the constraint-active face. The iterate approaches the boundary naturally without projection. For $f(x) = x_1^2 + x_2^2$, once $x_k$ is near $(0.5, 0)$, the gradient $\nabla f = (2x_1, 2x_2) \approx (1, 0)$, so $z_k = (0.5, \cdot)$ (lower bound for $x_1$). The gap to $f^{\star} = 0.25$ after 140 iterations reflects the slow $O(1/k)$ convergence of the fixed-$\beta$ schedule for boundary optima; the standard diminishing schedule $\gamma_k = 2/(k+2)$ would improve this.
+\textbf{Boundary optimum.} Frank--Wolfe is well-suited to boundary optima: once the gradient's sign stabilises (indicating which vertex to move towards), the LP vertex $z_k$ consistently selects the constraint-active face. The iterate approaches the boundary naturally without projection. For $f(x) = x_1^2 + x_2^2$, once $x_k$ is near $(0.5, 0)$, the gradient $\nabla f = (2x_1, 2x_2) \approx (1, 0)$, so $z_k = (0.5, -5)$ (lower bound for both, since the gradient of $x_2^2$ at $x_2 \approx 0$ is $\approx 0$, oscillating in sign). The gap to $f^{\star} = 0.25$ after 140 iterations ($f = 0.364$, gap $= 0.114$) is consistent with the theoretical $O(1/k)$ bound: $2C_f/(140+2) \approx 2 \cdot 20/142 \approx 0.28$ (where $C_f = (L/2)\cdot\mathrm{diam}(\mathcal{X})^2 \approx 20$). The standard diminishing schedule $\gamma_k = 2/(k+2)$ would achieve this bound exactly.
+
+\textbf{FW vs projected gradient comparison.} Frank--Wolfe avoids projection but converges at $O(1/k)$, while projected gradient descent achieves a faster $O(1/k^2)$ rate (with Nesterov acceleration) or $O(1/k)$ linear rate. Frank--Wolfe's advantage is the LP oracle cost: for $\mathcal{X}$ the nuclear norm ball, projection requires $O(n^3)$ SVD while the LP (maximising a linear functional over the nuclear norm ball) is also $O(n^3)$; but for structured sets (polytopes with few vertices, flow polytopes), the LP can be much cheaper.
 
 % ============================================================
 \section{Conclusion}
@@ -1038,6 +1092,17 @@ This report has demonstrated the comparative behaviour of 14 optimisation algori
 \textbf{Constrained optimisation (Q5).} Projected gradient descent provides hard feasibility guarantees at every iteration through the projection oracle, while penalty methods offer algorithmic simplicity at the cost of inexact constraint satisfaction during iterations. When the constraint is inactive at the optimum (as in this experiment), all methods ultimately converge to the same solution; the differences lie in feasibility recovery from the infeasible starting point.
 
 \textbf{Frank--Wolfe (Q6).} The conditional gradient algorithm handles linear constraints without projection, naturally reaching the optimum as a convex combination of vertices. Its $O(1/k)$ convergence rate (with the standard decaying schedule) and $O(d)$ LP subproblem cost make it attractive for large-scale sparse problems. Fixed-$\beta$ schedules cause oscillation near interior optima but can be stabilised by reducing $1-\beta$.
+
+\textbf{Cross-cutting observations.}
+\begin{enumerate}[nosep]
+\item \emph{Condition number is the dominant difficulty factor.} On Benchmark A ($\kappa \approx 2$), all well-specified methods converge to optimal in $\leq 20$ iterations. On Rosenbrock ($\kappa \approx 2508$), even the best first-order methods (Nesterov: $f = 0.479$) cannot reach the optimum in 150 iterations; Newton (which is immune to $\kappa$) reaches $f = 0.686$ in only 20 iterations.
+
+\item \emph{Knowledge of problem structure yields order-of-magnitude improvements.} Having $f^{\star}$ (Polyak), the Hessian (Newton), or a projection oracle (projected GD) all provide dramatic improvements --- but at the cost of requiring additional information. Methods that require less information (RMSprop, random search, Nelder--Mead) are more generally applicable but converge more slowly.
+
+\item \emph{The $O(1/k) \to O(1/k^2)$ gap is algorithmically meaningful.} Nesterov's acceleration achieves a 7-fold improvement over GD on Rosenbrock at 150 iterations. This gap grows with the condition number and iteration count, making acceleration methods increasingly important as problems become larger and harder.
+
+\item \emph{Second-order information is invaluable but expensive.} Newton's single-step convergence on quadratics and 5-fold improvement on Rosenbrock demonstrate the power of the Hessian, but the $O(d^3)$ cost restricts its use. Practical large-scale implementations (L-BFGS, conjugate gradient) approximate this information at lower cost.
+\end{enumerate}
 
 \textbf{Overall recommendation.} For general unconstrained optimisation: use Adam or Nesterov for deep learning (momentum + adaptivity); use L-BFGS (a quasi-Newton method) for small-scale smooth problems. For constrained problems: use projected gradient descent when projections are cheap, Frank--Wolfe when LP subproblems are cheap. For derivative-free objectives: use Nelder--Mead for $d \leq 10$, Nesterov random search or evolutionary methods for large $d$.
 
