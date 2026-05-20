@@ -565,6 +565,8 @@ so the noise floor is proportional to $\alpha/b$. To halve the floor, one must e
 
 The experiment is repeated with output noise scaled by 6 ($\sigma = 6$): $y_{\text{noisy}} = X\theta^{\star} + 6\varepsilon$.
 
+\textbf{SGD and non-convex optimisation.} An often-cited practical advantage of SGD is that gradient noise can help escape sharp local minima and saddle points, which deterministic GD would stagnate at (since GD has no mechanism to escape a point where $\nabla f = 0$ or the gradient is very small). Near a saddle point $x_s$ with $\nabla f(x_s) \approx 0$ and $H(x_s)$ indefinite, the SGD stochastic gradient $\hat{g} = \nabla f_{i_k}(x_s)$ has $\mathbb{E}[\hat{g}] \approx 0$ but substantial variance; the noise perturbations allow the iterate to drift off the saddle. This property is particularly important in deep learning where the loss landscape has many saddle points; see \cite{dauphin2014identifying} for empirical evidence. In our Benchmark A (convex quadratic), there are no saddle points, so this advantage does not apply, but it motivates the use of SGD in neural network training even beyond pure noise-floor analysis.
+
 \textbf{Irreducible noise floor analysis.} For the MSE loss with observation noise $\varepsilon \sim \mathcal{N}(0, \sigma^2)$, the best achievable expected loss (over all estimators) is:
 \begin{equation}
 J^{\star} = \frac{\sigma^2}{2},
@@ -626,6 +628,8 @@ The Newton step minimises $\hat{g}_2$: setting $\hat{g}_2'(x) = 0$ gives $x_{k+1
 The damping term $\lambda I$ with $\lambda = 10^{-8}$ ensures positive definiteness of $H_k$ when the Hessian has near-zero eigenvalues (as occurs on Rosenbrock away from the optimum). The damped Newton step ($\alpha < 1$) trades the quadratic convergence rate for stability when the quadratic model is inaccurate far from the optimum.
 
 \textbf{Linear solve via Cholesky factorisation.} For the regularised (positive definite) Hessian $H_k + \lambda I$, the Newton direction $p_k = (H_k+\lambda I)^{-1}g_k$ is computed by Cholesky factorisation: $(H_k + \lambda I) = LL^T$ with $L$ lower triangular, then solving two triangular systems $Lw = g_k$ and $L^T p_k = w$. This costs $O(d^3/3)$ flops for the factorisation and $O(d^2)$ for the two solves. For $d=2$ this is trivial; for large $n$ (e.g., deep learning with $d \sim 10^8$), this $O(d^3)$ cost is prohibitive, motivating quasi-Newton and conjugate gradient approaches. In our $d=2$ setting, \texttt{np.linalg.solve} performs an LU factorisation equivalent to Cholesky in $O(d^3) = O(8)$ flops.
+
+\textbf{Saddle-point issue.} On non-convex functions, the Newton direction $p_k = H_k^{-1}g_k$ is guaranteed to be a descent direction only when $H_k \succ 0$ (positive definite). At a saddle point $x_s$ where $\nabla f(x_s) = 0$ but $H(x_s)$ has negative eigenvalues, the unregularised Newton step $H^{-1}g_k$ is undefined (or zero), while the Hessian regularisation $H_k + \lambda I$ with $\lambda > |\lambda_{\min}(H_k)|$ makes the system positive definite but may direct the step towards a saddle-adjacent region rather than the minimum. A principled alternative: when a negative eigenvalue $\lambda_{\min}(H_k) < 0$ is detected, move in the direction of the corresponding eigenvector (the curvature ``escape'' direction) using a safeguarded step. The current implementation's $\lambda = 10^{-8}$ damping is sufficient for near-PD Hessians (as in Benchmarks A and B) but the effective regularisation on Rosenbrock may be insufficient at certain trajectory points where $\lambda_{\min}(H) \approx 0.4$ and $\lambda = 10^{-8} \ll 0.4$; there, $H$ is already PD and the damping is essentially inactive.
 
 \begin{theorem}[Newton Convergence Phases, \cite{nocedal2006numerical}]
 Let $f$ be twice continuously differentiable with $L_H$-Lipschitz Hessian and $\nabla^2 f(x^{\star}) \succ 0$. Newton's method exhibits two convergence phases:
@@ -1171,7 +1175,9 @@ Since $g^{\text{FW}} = 1.37 \geq f(x) - f^{\star} = 0.0046$, the certificate is 
 
 \textbf{Boundary optimum:} FW is particularly natural for boundary optima since the LP oracle consistently selects the vertex nearest the true optimum, allowing the iterate to approach the boundary directly. Unlike projected gradient descent, no explicit projection is needed: feasibility is maintained automatically by taking convex combinations. However, convergence is slower ($O(1/k)$ vs.\ linear for PGD) because the FW step is fundamentally ``open-loop'' in the standard formulation.
 
-\textbf{Improving FW convergence: away-step and pairwise variants.} A known limitation of standard FW is that iterates are convex combinations of vertices, which can prevent them from moving \emph{away} from vertices once they are in the convex hull interior. The \textbf{away-step FW} (Lacoste-Julien \& Jaggi, 2015) augments each step with an ``away step'' that removes weight from the vertex in the current support that most opposes descent, achieving \emph{linear convergence} on strongly convex objectives. The \textbf{pairwise FW} variant simultaneously moves weight from the worst vertex to the best LP vertex in one step. Both variants maintain feasibility by construction and are particularly effective for simplex-constrained problems where the active set of vertices is small.
+\textbf{Improving FW convergence: away-step and pairwise variants.} A known limitation of standard FW is that iterates are convex combinations of vertices, which can prevent them from moving \emph{away} from vertices once they are in the convex hull interior. The \textbf{away-step FW} \cite{lacoste2015global} augments each step with an ``away step'' that removes weight from the vertex in the current support that most opposes descent, achieving \emph{linear convergence} $O((1-\rho)^k)$ on $\mu$-strongly convex objectives (where $\rho$ depends on the curvature and constraint geometry), matching PGD's linear rate while remaining projection-free. The \textbf{pairwise FW} variant simultaneously moves weight from the worst vertex to the best LP vertex in one step. Both variants maintain feasibility by construction and are particularly effective for simplex-constrained problems where the active set of vertices is small.
+
+\textbf{Nuclear norm ball application.} For the matrix completion problem (low-rank matrix recovery), the constraint set is the nuclear norm ball $\mathcal{X} = \{X \in \mathbb{R}^{m \times n} : \|X\|_* \leq \tau\}$ (sum of singular values $\leq \tau$). The LP oracle $\min_{X \in \mathcal{X}} \nabla f(Y)^T X$ selects $X = -\tau u_1 v_1^T$ where $u_1, v_1$ are the leading singular vectors of $-\nabla f(Y)$, computed by a single power iteration (much cheaper than full SVD = $O(\min(m,n)^2\max(m,n))$). Frank--Wolfe iterates are automatically low-rank (each step adds one rank-1 term), ideal for large-scale problems where full-rank iterates would be prohibitive to store.
 
 \textbf{Advantages of Frank--Wolfe over projection-based methods:}
 \begin{itemize}[nosep]
@@ -1503,6 +1509,16 @@ Cambridge University Press.
 Johnson, R.\ \& Zhang, T.\ (2013).
 Accelerating stochastic gradient descent using predictive variance reduction.
 \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 26, 315--323.
+
+\bibitem{dauphin2014identifying}
+Dauphin, Y.N., Ganguli, S., Ganguli, S., Yuille, A., \& Bengio, Y.\ (2014).
+Identifying and attacking the saddle point problem in high-dimensional non-convex optimization.
+\textit{Advances in Neural Information Processing Systems (NeurIPS)}, 27.
+
+\bibitem{lacoste2015global}
+Lacoste-Julien, S.\ \& Jaggi, M.\ (2015).
+On the global linear convergence of Frank--Wolfe optimization variants.
+\textit{Advances in Neural Information Processing Systems (NeurIPS)}, 28.
 
 \end{thebibliography}
 
