@@ -219,9 +219,18 @@ baseline across all three benchmarks for 120 iterations.
 \end{algorithm}
 
 \begin{theorem}[Polyak convergence~\cite{polyak1987}]
-For a convex function $f$ with exact $f^{\star}$ and $\|g_k\|^2 > 0$, the Polyak step minimises
-an upper bound on $\|x_{k+1} - x^{\star}\|^2$ at each step, and the iterates satisfy
-$f(x_k) - f^{\star} = O(1/k)$ in the convex case.
+For a convex function $f$ with exact $f^{\star}$ and $\|g_k\|^2 > 0$, the Polyak step
+\begin{equation}
+\label{eq:polyak_optimal_step}
+\alpha_k^{\star} = \frac{f(x_k) - f^{\star}}{\|\nabla f(x_k)\|^2}
+\end{equation}
+minimises the upper bound $\|x_{k+1} - x^{\star}\|^2 \leq \|x_k - x^{\star}\|^2 - \alpha_k(2 - \alpha_k L)\cdot\|g_k\|^2$
+at each step (choosing $\alpha_k = \alpha_k^{\star}$ makes the gradient-norm term vanish).
+The iterates satisfy $f(x_k) - f^{\star} \leq \|x_0 - x^{\star}\|^2 / (2k\alpha_0^{\star})$
+in the convex case, where the rate is $O(1/k)$.
+For strongly convex $f$ with modulus $\mu$, the Polyak step achieves geometric convergence
+$\|x_{k+1} - x^{\star}\|^2 \leq (1 - \mu/L)\|x_k - x^{\star}\|^2$, matching the optimal
+rate of gradient descent without requiring knowledge of $L$ or $\mu$.
 \end{theorem}
 
 \begin{algorithm}[H]
@@ -242,6 +251,24 @@ Adagrad adapts the step size per coordinate based on the cumulative sum of squar
 Coordinates that have historically received large gradients are penalised with a smaller effective
 step size. The monotonically decreasing denominator $\sqrt{G_k}$ guarantees stability but can
 cause premature stagnation in later iterations.
+
+\begin{proposition}[Adagrad per-coordinate regret~\cite{duchi2011}]
+\label{prop:adagrad_regret}
+For convex $f$ with $\|x - x^{\star}\|_\infty \leq D$ and bounded gradients $\|g_k\|_\infty \leq G$,
+Adagrad satisfies the cumulative regret bound
+\begin{equation}
+\label{eq:adagrad_regret}
+\sum_{k=1}^K [f(x_k) - f^{\star}]
+  \leq \frac{D}{\alpha_0} \sum_{i=1}^d \sqrt{\sum_{k=1}^K g_{k,i}^2}.
+\end{equation}
+By the Cauchy--Schwarz inequality this is at most $O(DG\sqrt{Kd})$, matching constant
+step-size gradient descent in the worst case.
+The advantage appears when gradients are \emph{sparse or heterogeneous}: if coordinate $i$
+has small cumulative gradient $\sum_k g_{k,i}^2 \ll K G^2$, its term contributes little to
+the bound, and the effective learning rate on that coordinate remains large.
+This property is why Adagrad is particularly effective in NLP (sparse one-hot features)
+and on ill-conditioned problems where different coordinates have vastly different gradient scales.
+\end{proposition}
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -579,8 +606,14 @@ and allows the gradient to ``correct'' the direction before overshooting.
 The schedule $\beta_k = (k-1)/(k+2)$ increases the momentum parameter gradually from 0,
 matching the sequence used in Nesterov's proof of the $O(1/k^2)$ rate for convex functions.
 This schedule is derived from the requirement that the sequence $t_k$ satisfies
-$t_k^2 - t_k \leq t_{k-1}^2$ where $\beta_k = (t_{k-1}-1)/t_k$ and $t_k = (k+2)/2$
-(a standard algebraic construction in accelerated gradient proofs~\cite{nesterov1983}).
+$t_k^2 - t_k \leq t_{k-1}^2$ where $\beta_k = (t_{k-1}-1)/t_k$ and $t_k = (k+2)/2$.
+The Lyapunov function $\Phi_k = t_k^2(f(x_k) - f^{\star}) + \frac{1}{2\alpha}\|v_k - x^{\star}\|^2$
+is shown to be non-increasing (a standard algebraic construction in accelerated gradient
+proofs~\cite{nesterov1983}), yielding the potential:
+\begin{equation}
+\label{eq:nesterov_lyapunov}
+f(x_k) - f^{\star} \leq \frac{\Phi_0}{t_k^2} = \frac{2(f(x_0)-f^{\star}) + \|x_0 - x^{\star}\|^2/(2\alpha)}{(k+2)^2} = O\!\left(\frac{1}{k^2}\right).
+\end{equation}
 The clipping to $\beta_{\max}$ prevents instability on non-convex problems such as
 Rosenbrock, where the convexity assumption of the $O(1/k^2)$ proof breaks down.
 
@@ -608,6 +641,19 @@ The bias correction terms $(1-\beta_1^t)$ and $(1-\beta_2^t)$ compensate for
 the zero initialisation of $m_0$ and $v_0$: in early iterations $m_t \approx 0$
 because it is initialised at zero, so without correction the effective learning rate
 would be inappropriately small.
+
+\begin{remark}[Adam non-convergence and AMSGrad]
+Despite its empirical dominance, Adam is known to fail to converge on certain online convex
+problems. The issue is that the exponential moving average $\hat{v}_t$ can oscillate
+non-monotonically, allowing the effective per-coordinate step $\alpha/\sqrt{\hat{v}_t}$
+to \emph{increase} over time and violate the step-size decay condition required for
+stochastic convergence proofs. \textit{AMSGrad} (Reddi et al., 2018) addresses this
+by replacing $\hat{v}_t$ with $\tilde{v}_t = \max(\tilde{v}_{t-1}, \hat{v}_t)$, ensuring
+non-increasing effective steps per coordinate. In practice, this non-convergence pathology
+is rarely observed on standard benchmarks, and Adam's empirical performance on deep networks
+remains the state of the art. This illustrates a recurring theme: theoretical guarantees
+and empirical performance do not always align.
+\end{remark}
 
 % ----------------------------------------------------------
 \subsection{Hyperparameter Settings}
@@ -1063,9 +1109,28 @@ Despite its superior convergence rate, Newton's method has significant practical
 regularisation to ensure a descent direction;
 (iii)~in the Rosenbrock case, the curvature changes rapidly along the trajectory,
 so a full Newton step ($\alpha=1$) often overshoots, requiring line search or damping.
-Quasi-Newton methods (BFGS, L-BFGS) address (i) by maintaining a rank-$r$ approximation
+Quasi-Newton methods (BFGS, L-BFGS) address (i) by maintaining a low-rank approximation
 to $H^{-1}$ built from gradient difference vectors, achieving superlinear convergence
-at $O(rd)$ cost per iteration.
+at $O(md)$ cost per iteration, where $m$ is the number of stored vector pairs.
+
+\begin{remark}[L-BFGS two-loop recursion]
+\label{rem:lbfgs}
+L-BFGS maintains the $m$ most recent curvature pairs
+$\{(s_j, y_j)\}$, where $s_j = x_{j+1} - x_j$ encodes the step taken and
+$y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$ encodes the gradient change.
+The BFGS rank-2 update formula gives a sequence of approximate inverse Hessians:
+\begin{equation}
+\label{eq:bfgs_update}
+B_{k+1}^{-1} = \bigl(I - \rho_k s_k y_k^T\bigr)\, B_k^{-1}\, \bigl(I - \rho_k y_k s_k^T\bigr)
+             + \rho_k s_k s_k^T, \quad \rho_k = \frac{1}{y_k^T s_k}.
+\end{equation}
+Rather than storing $B_k^{-1}$ explicitly ($O(d^2)$), the two-loop recursion
+computes the product $B_k^{-1} g_k$ in $O(md)$ time using only the stored pairs.
+With $m \in \{5, 20\}$, L-BFGS achieves superlinear (near-quadratic in practice)
+convergence on smooth strongly convex problems, at a fraction of Newton's $O(d^3)$ cost.
+L-BFGS is the standard solver for large-scale smooth optimisation (e.g., logistic
+regression, $\ell_2$-penalised least squares) and is included in \texttt{scipy.optimize.minimize}.
+\end{remark}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -1138,6 +1203,25 @@ gradient descent in the limit. The variance of $\hat{g}_k$ is $O(d^2\|\nabla f\|
 (since we use a single direction out of $d$), meaning the estimator is highly noisy for
 large $d$ --- in $d=2$ the variance is already substantial compared to the signal,
 explaining why Nesterov random search converges much more slowly than FD gradient descent.
+
+\begin{theorem}[Nesterov random search convergence~\cite{nesterov2017}]
+\label{thm:nrs_convergence}
+For an $L$-smooth convex function $f$ with minimiser $x^{\star}$, using the
+normalised Gaussian direction estimator~\eqref{eq:nrs_bias} with smoothing parameter
+$\delta$ and step size $\alpha = 1/(2dL)$, the Nesterov random search satisfies
+\begin{equation}
+\label{eq:nrs_conv_bound}
+\mathbb{E}[f(x_k)] - f^{\star} \leq \frac{4d^2 L \|x_0 - x^{\star}\|^2}{k + 4d^2}.
+\end{equation}
+The $d^2$ factor (versus $O(1)$ for gradient descent) quantifies the statistical
+penalty of single-direction sampling: in $d$ dimensions, projecting the gradient onto
+one random direction introduces variance that scales as $d^2$.
+For $d=2$ (our Benchmark~B setting), the extra cost factor is $4\times 4 = 16$,
+meaning random search requires approximately $16\times$ more iterations than gradient
+descent to reach the same accuracy. For $d=100$, this factor is $40\,000\times$,
+making zeroth-order random search impractical at high dimension without additional
+variance reduction (e.g., coordinate-wise averaging or importance sampling).
+\end{theorem}
 
 \subsubsection{Results on Benchmark~B}
 \label{sssec:q4_results_B}
@@ -1336,8 +1420,17 @@ so the constrained and unconstrained optima coincide.
 \textbf{KKT conditions:} The Lagrangian is $\mathcal{L}(x,\mu) = f(x) - \mu(x_1 - 0.5)$
 with $\mu \geq 0$.
 At the constrained minimum $x^{\star} = (0.582, 2.0)$:
-$\nabla f(x^{\star}) - \mu[1, 0]^T = 0$, which gives $\mu = \partial f/\partial x_1|_{x^{\star}} = 0$.
-Since $\mu=0$ and $x_1^{\star} > 0.5$ (strict feasibility), the constraint is inactive at the optimum.
+\begin{equation}
+\label{eq:kkt_stationarity}
+\nabla_x \mathcal{L}(x^{\star}, \mu) = \nabla f(x^{\star}) - \mu\begin{bmatrix}1\\0\end{bmatrix} = 0
+\quad\Rightarrow\quad
+\mu = \left.\frac{\partial f}{\partial x_1}\right|_{x^{\star}} = 2(0.582-1) + \cos(0.582) \approx -0.836 + 0.836 = 0.
+\end{equation}
+The dual variable evaluates to $\mu = 0$, confirming the \emph{complementary slackness} condition
+$\mu(x_1^{\star} - 0.5) = 0 \cdot 0.082 = 0$ and the fact that the constraint is inactive at the optimum.
+If the unconstrained minimum were at $x_1^{\star} < 0.5$ (i.e., the constraint were active),
+we would have $x_1^{\star} = 0.5$ and $\mu > 0$ reflecting the shadow price of the constraint.
+Since $\mu=0$ and $x_1^{\star} > 0.5$ (strict feasibility), the constrained and unconstrained optima coincide.
 
 \begin{algorithm}[H]
 \caption{Projected Gradient Descent}
@@ -1565,6 +1658,18 @@ since by convexity and the definition of $z_k$:
 $f(x_k) - f^{\star} \leq f(x_k) - \min_{x\in\mathcal{X}} f(x) \leq \nabla f(x_k)^T(x_k - x^{\star})
 \leq \nabla f(x_k)^T(x_k - z_k) = g_k$.
 This provides a principled stopping criterion without knowledge of $f^{\star}$.
+
+\begin{proposition}[Frank--Wolfe gap as certificate~\cite{jaggi2013}]
+\label{prop:fw_gap}
+For any feasible point $x_k \in \mathcal{X}$ and any convex differentiable $f$,
+the Frank--Wolfe gap satisfies
+$f(x_k) - f^{\star} \leq g_k = \nabla f(x_k)^T(x_k - z_k)$,
+so the gap is an \emph{anytime certificate} of $\varepsilon$-optimality:
+if $g_k \leq \varepsilon$, then $x_k$ is within $\varepsilon$ of the global minimum.
+In this report's interior experiment, after 140 iterations with $\beta=0.985$,
+$g_{140} = \nabla f(x_{140})^T(x_{140} - z_{140}) \approx 2\|x_{140} - (1,5)\|^2 \approx 0.0092$,
+confirming that the iterate is $0.0092$-optimal without computing $f^{\star}$.
+\end{proposition}
 
 \begin{theorem}[Frank--Wolfe convergence~\cite{frank1956}]
 For an $L$-smooth convex function $f$ over a bounded convex set $\mathcal{X}$ with diameter $D$,
@@ -1836,6 +1941,28 @@ practical performance. For constrained problems, projected gradient descent is p
 when projection is cheap; Frank--Wolfe excels when the linear oracle is efficient.
 Newton's method remains unmatched for small-scale, well-conditioned problems
 where Hessian computation is affordable.
+
+\paragraph{Unified view: a hierarchy of curvature approximations.}
+All six algorithm families can be organised along a single axis of \emph{how much curvature
+information they exploit}, which directly determines their convergence rate and per-iteration cost:
+\begin{enumerate}[nosep]
+\item \textbf{Constant step (GD):} $x_{k+1} = x_k - \alpha g_k$. No curvature.
+  Rate $O(1/k)$ or $O((1-\mu/L)^k)$.
+\item \textbf{Momentum (Heavy Ball, Nesterov):} Implicit curvature via gradient history.
+  Nesterov achieves the optimal $O(1/k^2)$ first-order rate without Hessian access.
+\item \textbf{Diagonal preconditioning (Adagrad, RMSprop, Adam):} Explicit estimation of the
+  diagonal of the expected outer product $\mathbb{E}[g_k g_k^T] \approx \operatorname{diag}(H)$,
+  giving per-coordinate adaptive steps. Cost: $O(d)$ extra storage.
+\item \textbf{Low-rank Hessian approximation (BFGS, L-BFGS):} Maintains a rank-$2m$
+  implicit approximation to $H^{-1}$ from gradient differences. Superlinear convergence
+  at $O(md)$ cost per step.
+\item \textbf{Full Newton (Q3):} Exact $H_k^{-1}$ as preconditioner. Quadratic convergence
+  at $O(d^3)$ cost. Optimal when $d$ is small and $f$ is smooth.
+\end{enumerate}
+This hierarchy reveals the common structure: all adaptive methods are approximations to Newton's
+method, differing in how richly they represent the local curvature. The choice of level in this
+hierarchy is determined by problem dimension $d$, gradient availability, and the degree of
+problem non-convexity.
 
 \paragraph{Broader lessons from the Rosenbrock benchmark.}
 Benchmark~C (Rosenbrock) served as the critical discriminator between methods because
