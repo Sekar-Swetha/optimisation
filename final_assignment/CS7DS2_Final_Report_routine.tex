@@ -313,7 +313,19 @@ versus $O\!\left(e^{-k/\kappa}\right)$ for gradient descent~\cite{polyak1987}:
 \end{equation}
 This $\sqrt{\kappa}$ improvement in the exponent is especially significant for ill-conditioned
 problems: on Benchmark~C where $\kappa \approx 2504$, Heavy Ball's optimal rate improves
-from $e^{-k/2504}$ to $e^{-k/50}$, enabling much faster convergence along the valley floor.
+from $e^{-k/2504}$ to $e^{-k/\sqrt{2504}} \approx e^{-k/50}$, enabling much faster convergence.
+\begin{remark}[Optimal Heavy Ball parameters for Benchmark A]
+For Benchmark~A with $\mu = \lambda_{\min}(H) \approx 0.98$ and $L = \lambda_{\max}(H) \approx 1.02$
+(near-unit eigenvalues by Marchenko--Pastur, $\kappa \approx 1.04$), the optimal Heavy Ball parameters
+from~\eqref{eq:heavyball_optimal} give
+$\alpha^{\star} = 4/((\sqrt{L}+\sqrt{\mu})^2) \approx 4/(2.0+0.99)^2 \approx 0.447$
+and $\beta^{\star} = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2 \approx (0.02/2.02)^2 \approx 10^{-4}$.
+The near-unit condition number means that momentum provides minimal benefit on Benchmark~A:
+$\beta^{\star} \approx 0$ (nearly no momentum), and the convergence rate $e^{-k/\sqrt{\kappa}} \approx e^{-k}$
+is essentially the same as the GD rate $e^{-k(1-1/\kappa)} \approx e^{-k}$.
+In contrast, on Benchmark~C ($\kappa \approx 2504$): $\beta^{\star} \approx (0.96/2.96)^2 \approx 0.105$
+and $\alpha^{\star} \approx 0.002$, close to the tuned values $\beta=0.86$ and $\alpha=0.0008$.
+\end{remark}
 The hyperparameters in Table~\ref{tab:q1_params} are tuned to approximate these optimal values.
 
 % ----------------------------------------------------------
@@ -799,10 +811,23 @@ which is an unbiased estimator of $\nabla J(\theta)$ with variance
 \end{equation}
 The key SGD trade-off is between \emph{update frequency} and \emph{gradient noise}:
 smaller $b$ gives more updates per epoch (higher frequency) but noisier gradients (higher variance),
-while larger $b$ gives fewer, more accurate updates. For strongly convex quadratic losses,
-standard convergence theory shows that with appropriately decaying learning rate
-$\alpha_k = \alpha_0/(1 + \lambda k)$, SGD achieves $O(1/k)$ convergence in expectation,
-regardless of batch size, though the constant depends on gradient variance $\propto 1/b$.
+while larger $b$ gives fewer, more accurate updates.
+
+\begin{proposition}[SGD convergence with constant step size]
+\label{prop:sgd_convergence}
+For an $L$-smooth, $\mu$-strongly convex loss $f$ with per-sample gradient variance $\sigma^2$
+and a constant step size $\alpha \leq 1/L$, mini-batch SGD with batch size $b$ satisfies
+\begin{equation}
+\label{eq:sgd_conv}
+\mathbb{E}[f(\theta_k) - f^{\star}]
+  \leq (1 - \alpha\mu)^k (f(\theta_0) - f^{\star}) + \frac{\alpha\, \sigma^2}{2b\mu}.
+\end{equation}
+The first term decays geometrically at rate $(1-\alpha\mu)^k \to 0$; the second term is
+an irreducible \emph{noise floor} of $\alpha\sigma^2/(2b\mu)$, proportional to $1/b$.
+This makes the trade-off precise: a larger batch reduces the floor (better asymptotic accuracy),
+but a smaller step $\alpha$ slows the initial decay. The optimal strategy uses a decaying
+schedule $\alpha_k \to 0$ (e.g., $\alpha_k = C/k$), achieving $O(1/k)$ convergence with no floor.
+\end{proposition}
 
 \begin{algorithm}[H]
 \caption{Mini-Batch SGD}
@@ -1100,6 +1125,20 @@ This is structurally analogous to the per-coordinate preconditioning in Adagrad 
 approximation $\operatorname{diag}(G_k)^{-1}$. The diagonal approximation trades precision
 for $O(d)$ cost per iteration, motivating the family of adaptive gradient methods as
 cheap surrogates for Newton's method.
+
+\begin{remark}[Natural gradient and Fisher information]
+In statistical models where $f(\theta) = -\log p(y|\theta)$ is the negative log-likelihood,
+Newton's method uses the Hessian $H(\theta) = -\mathbb{E}[\nabla^2 \log p(y|\theta)]$.
+The \emph{natural gradient} method (Amari, 1998) replaces $H$ with the \emph{Fisher information matrix}
+$F(\theta) = \mathbb{E}_y[\nabla\log p(y|\theta)\nabla\log p(y|\theta)^T]$,
+which equals the Hessian at the maximum likelihood estimate (by the Fisher--Rao identity).
+Natural gradient descent $\theta_{k+1} = \theta_k - F_k^{-1}\nabla f(\theta_k)$
+is invariant to reparameterisation of the model (a property standard GD lacks) and
+underpins K-FAC and other approximate natural gradient methods for deep learning.
+In this report's context, Adagrad's diagonal $\operatorname{diag}(\sum_k g_k g_k^T)^{-1}$
+is a diagonal approximation to $F(\theta)^{-1}$, connecting adaptive gradient methods
+to the natural gradient framework.
+\end{remark}
 
 \paragraph{Limitation of Newton's method.}
 Despite its superior convergence rate, Newton's method has significant practical limitations:
@@ -1934,8 +1973,28 @@ magnitude, while Adam ($f=1.578$) and Adagrad ($f=2.20$) occupy an intermediate 
 \label{fig:final_values_bar}
 \end{figure}
 
-The choice of algorithm depends critically on the problem structure: gradient availability,
-function smoothness, constraint type, and problem dimension.
+The choice of algorithm depends critically on the problem structure.
+Table~\ref{tab:practical_guide} provides a concise decision guide based on the findings of this report.
+
+\begin{table}[H]
+\centering
+\caption{Practical algorithm selection guide based on problem characteristics.}
+\label{tab:practical_guide}
+\begin{tabular}{p{4.5cm}p{4.5cm}p{4.5cm}}
+\toprule
+\textbf{Problem type} & \textbf{Recommended method} & \textbf{Rationale} \\
+\midrule
+Smooth, well-conditioned ($\kappa \lesssim 10$), $f^{\star}$ unknown & Adam or Nesterov & Robust, fast; no $f^{\star}$ needed \\[2pt]
+Smooth, ill-conditioned ($\kappa \gg 100$), $f^{\star}$ known & Polyak step & Achieves near-optimal per-step progress; step is self-tuned \\[2pt]
+Smooth, small $d$ ($d \leq 1000$) & Newton / L-BFGS & Quadratic / superlinear convergence; worth the cost \\[2pt]
+Non-differentiable, low-dim ($d \leq 10$) & Nelder--Mead & No gradient needed; robust to noise \\[2pt]
+Black-box, high-dim ($d \leq 100$) & Nesterov random search & No gradient, $O(1)$ evaluations per step \\[2pt]
+Linear constraint, cheap LMO & Frank--Wolfe & Projection-free; exploits LP structure \\[2pt]
+General convex constraint & Projected GD & Hard feasibility; $O(1)$ projection for box \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 For smooth unconstrained problems, Nesterov acceleration and Adam offer the best
 practical performance. For constrained problems, projected gradient descent is preferred
 when projection is cheap; Frank--Wolfe excels when the linear oracle is efficient.
