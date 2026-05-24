@@ -882,12 +882,20 @@ guarantee requires no such tuning.
 \centering
 \includegraphics[width=0.88\textwidth]{figures/q2_contour_B.pdf}
 \caption{Q2: Trajectories on Benchmark~B.  Nesterov's trajectory shows the characteristic
-smooth arc of accelerated methods: the lookahead step predicts the gradient at the anticipated
-future location, preventing oscillation across the narrow $x_2$ direction.  Adam takes more
-direct per-step movements by independently scaling each coordinate, achieving fast $x_2$
-convergence (10$\times$ steeper) while maintaining appropriate progress in $x_1$ (1.45$\times$
-shallower).  Both methods avoid the zig-zag pattern that constant-step GD would exhibit on
-anisotropic surfaces.}
+smooth arc: at each step, the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$
+(the extrapolated lookahead point), which lies ahead in the direction of momentum.  For
+Benchmark~B near the minimum, the momentum $z_k$ points roughly in the $-x_2$ direction
+(towards $x_2 = 2.0$); the lookahead $\tilde{x}_k$ is already near $x_2 = 2.0$, so
+$\nabla f(\tilde{x}_k)$ has near-zero $x_2$ component, and the algorithm corrects for the
+overshooting momentum \emph{before it happens}.  GD with $\alpha = 0.06$ would zig-zag at
+$\kappa_B = 6.9$ because $\alpha \lambda_{\max} = 0.06 \times 10 = 0.6 < 1$ (stable) but
+$\alpha \lambda_{\max} / \alpha \lambda_{\min} = 10/0.087 \approx 7\times$ too large for the
+slow direction, causing moderate oscillation.
+Adam takes more direct per-step movements by independently scaling each coordinate:
+$x_2$ step $\approx \alpha \hat{m}_t^{(2)} / \sqrt{\hat{v}_t^{(2)}} \approx \pm\alpha$
+(bounded near $\pm 0.08$) provides a $7\times$ larger effective scaling for $x_2$ curvature
+compared to a fixed-step GD, effectively acting as a preconditioner with diagonal
+$D \approx \text{diag}(1, 7)$.  Both methods avoid the GD zig-zag pattern.}
 \label{fig:q2_contour_B}
 \end{figure}
 
@@ -1157,9 +1165,16 @@ but for larger $\kappa$ or higher-dimensional problems, this advantage grows dra
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q3_fval_B.pdf}
 \caption{Q3: Newton vs GD on Benchmark~B.  Newton converges in approximately 5 iterations.
-The Hessian $H(x) = \text{diag}(2 - \sin(x_1),\, 10)$ varies slowly (the $\sin$ perturbation
-is small), so the local quadratic model remains accurate over several Newton steps.
-The $x = 0.85$ damping factor compensates for mild nonlinearity.
+The Hessian $H(x) = \text{diag}(2 - \sin(x_1),\, 10)$ varies slowly with $x_1$: the
+maximum change in $H_{11}$ over the trajectory is $|\sin(x_1^{\rm final}) - \sin(x_1^0)|
+= |\sin(0.582) - \sin(-1)| \approx |0.546 - (-0.841)| = 1.39$, while $H_{11} \approx 1.45$
+at the minimum.  This $\sim 96\%$ variation in $H_{11}$ means the Hessian is only
+approximately constant, explaining why damping $\alpha = 0.85 < 1.0$ is needed: the
+quadratic model overestimates the step length by $\sim (H^{\rm max}/H^{\rm min})^{0.5}
+\approx (1+0.96)^{0.5} \approx 1.4\times$, and damping corrects for this.  Despite the
+mild nonlinearity, the quadratic model is accurate enough that each Newton step reduces
+the distance to the minimum by $\approx \|x_k - x^\star\|$, yielding super-linear convergence
+visible as the rapidly decreasing update norms in Figure~\ref{fig:q3_update}.
 Final value: Newton $f = 0.7244$ matching GD but in $\sim 16\times$ fewer iterations.}
 \label{fig:q3_fval_B}
 \end{figure}
@@ -1454,6 +1469,16 @@ in $\mathbb{R}^2$ and iteratively transforms it through four operations:
 No gradient information is required; the algorithm adapts to the function landscape through
 the simplex geometry.  Settings: initial step $= 0.35$, iterations $= 160$.
 
+\noindent\textbf{Convergence rates of each Nelder--Mead operation:}  The four operations have
+different roles in convergence.  Reflection + expansion perform coarse optimisation (moving the
+simplex towards better regions at $O(1)$ distance); contraction refines the simplex near a
+candidate minimum (shrinking diameter by $\sigma = 0.5$ per step, or $O(1/2^k)$ linear
+convergence in the contraction phase); shrink is a last resort that reduces all vertex
+distances to the best by factor $0.5$.  On smooth unimodal functions, the typical operational
+sequence near the optimum is: expansion (found a better direction) $\to$ repeated reflection
+(following the valley) $\to$ eventual contraction/shrink as the simplex closes in.  The
+overall convergence is approximately linear with rate $\approx 0.5$ per simplex reduction.
+
 \noindent\textbf{Why Nelder--Mead succeeds on Rosenbrock despite having no convergence
 guarantee for non-convex functions:}  The Rosenbrock function has a \emph{unique} global
 minimum $(1,1)$ and a narrow curved valley $x_2 \approx x_1^2$ with a known shape.
@@ -1462,11 +1487,16 @@ The simplex exploits this geometry through two mechanisms:
   \item \textbf{Elongation:} The simplex stretches along the valley axis via repeated
     reflections in the same direction, effectively approximating the gradient direction
     without computing it.  The simplex ``learns'' the valley orientation through $\sim 100$
-    function comparisons.
+    function comparisons.  The initial simplex with step $0.35$ creates vertices at
+    $(-1, 1)$, $(-0.65, 1)$, and $(-1, 1.35)$; after the first reflection, the simplex
+    is repositioned in the direction of best improvement.
   \item \textbf{Contraction:} Near the minimum, the simplex contracts through shrink and
     inside-contraction steps, achieving super-linear convergence as the simplex diameter
     becomes small relative to the local curvature radius.  This implicit exploitation of
     local quadratic structure is the key to Nelder--Mead's success on smooth unimodal functions.
+    When the simplex diameter falls below $\approx 1/\sqrt{L} = 1/\sqrt{1001} \approx 0.03$,
+    the local quadratic approximation is accurate and contraction converges at rate $\sigma = 0.5$
+    per step towards the exact minimum.
 \end{enumerate}
 In contrast, grid search finds the best of $55^2 = 3025$ pre-specified points and cannot
 adapt to the function landscape: its accuracy is limited by grid resolution $\Delta x \approx 0.074$,
@@ -1896,7 +1926,8 @@ diameter of $\mathcal{X}$.  This gives $O(1/k)$ convergence, matching GD but wit
 projection step.  The fixed-$\beta$ variant used here achieves similar convergence but with
 different constant factors depending on $\beta$.
 
-\textbf{Frank--Wolfe gap:} A natural convergence certificate is the Frank--Wolfe (FW) gap
+\textbf{Frank--Wolfe gap:} A natural convergence certificate is the Frank--Wolfe (FW) gap,
+also called the \emph{conditional gradient} or \emph{linear} gap:
 \begin{equation}
   \text{gap}_k = \nabla f(x_k)^T (x_k - z_k) \geq 0,
 \end{equation}
