@@ -427,15 +427,22 @@ Here $f^\star = 0$ is \emph{correctly} specified, so Polyak converges well ($f =
 demonstrating that its adaptive step is highly effective when $f^\star$ is accurately known.
 Heavy Ball achieves $f = 1.40$, substantially outperforming GD ($f = 3.51$) through momentum
 acceleration along the valley floor.  Adagrad reaches $f = 2.20$: its monotonically decaying
-step helps navigate the highly anisotropic curvature in early iterations, but the eventual
-vanishing step size limits final accuracy.
+step helps navigate the highly anisotropic curvature in early iterations (large early gradients
+rapidly build $G_k$, reducing the step in the steep direction), but the cumulative sum grows
+to $G_k \sim k \cdot \|\nabla f\|^2_{\rm avg}$, causing the step to decay as $\alpha_0/\sqrt{k}$
+independent of whether a direction is currently difficult or easy --- the ``old'' cross-valley
+gradients continue to penalise the valley-floor step long after the iterate has descended to
+the valley.
 RMSprop ($f = 3.12$) underperforms with $\alpha_0 = 0.0035$; the small base rate required for
-stability gives limited progress.  Fundamentally, RMSprop's diagonal curvature estimate from
-gradient magnitudes alone is insufficient for the Rosenbrock valley: the gradient magnitudes
-in the steep cross-valley direction dominate the EMA, causing the effective step in the shallow
-valley-floor direction to also be reduced.  RMSprop cannot distinguish between the steep and
-shallow directions without off-diagonal curvature information (the Hessian's cross-term
-$H_{12} = -400x_1$ that captures the valley's curvature is inaccessible from gradient magnitudes).}
+stability gives limited progress.  Fundamentally, RMSprop's EMA $v_k^{(i)} = \beta v_{k-1}^{(i)}
++ (1-\beta)(g_k^{(i)})^2$ tracks a different scale per coordinate, but on Rosenbrock both
+components $g_k^{(1)}$ (cross-valley, $O(1000)$ near $x_0$) and $g_k^{(2)}$ (valley-floor,
+$O(0.4)$) are large in early iterations, so both $v_k^{(1)}$ and $v_k^{(2)}$ are dominated
+by the initial large cross-valley gradients and become approximately equal.  When the iterate
+reaches the valley floor, the cross-valley gradient drops but the EMA $v_k$ retains memory of
+past large values for $\sim W = 10$ iterations, keeping the valley-floor step suppressed for
+too long.  This is why momentum (Heavy Ball) outperforms adaptive scaling (RMSprop) on the
+Rosenbrock valley: the key constraint is not curvature estimation but directional acceleration.}
 \label{fig:q1_fval_C}
 \end{figure}
 
@@ -620,7 +627,21 @@ explaining the observed improvement from $f = 3.51$ to $f = 1.40$ in 120 iterati
   RMSprop's exponential moving average $v_k = \beta v_{k-1} + (1-\beta)g_k^2$ tracks a
   finite window (effective window size $\approx 1/(1-\beta) = 10$ for $\beta = 0.9$),
   preventing the step from vanishing.  RMSprop is strictly preferred for non-stationary
-  problems or long training runs.
+  problems or long training runs.  However, \emph{neither} method has a momentum term: both
+  adjust the step size per coordinate but do not accumulate velocity.  This is why Heavy Ball
+  outperforms both on Rosenbrock ($f=1.40$ vs Adagrad's $f=2.20$): momentum along the
+  consistent valley-floor direction is the key ingredient, not curvature scaling.
+
+\item \textbf{Why Heavy Ball beats Adagrad on Benchmark C despite less curvature information:}
+  Adagrad's diagonal scaling effectively reduces the per-coordinate learning rates based on
+  gradient magnitudes, but on Rosenbrock the large cross-valley gradients dominate both
+  coordinates' accumulators equally, providing no directional discrimination.  Heavy Ball's
+  momentum $z_{k+1} = \beta z_k + \alpha g_k$ accumulates gradient history in a \emph{directional}
+  sense: if the gradient repeatedly points in the valley-floor direction, $z_k$ grows in that
+  direction, amplifying progress.  On Benchmark C, the valley-floor gradient component is
+  consistent across iterations, allowing Heavy Ball to build $\sim \alpha/(1-\beta) \approx 5.7\times$
+  amplification of the valley-floor step vs the single-iteration GD step.  Adagrad's scalar
+  accumulation $G_k^{(i)} = \sum g_k^{(i)^2}$ cannot exploit this directional consistency.
 
 \item \textbf{Practical recommendation:}
   In practice, exact $f^\star$ is rarely known, limiting Polyak's applicability.  RMSprop
@@ -850,7 +871,12 @@ valley-floor direction; by iteration 150, the trajectory has advanced substantia
 parabolic valley.  GD's constant step size provides insufficient acceleration along the
 shallow valley direction: each step is dominated by the steep cross-valley curvature
 ($\lambda_{\max} \approx 1000$), and the shallow valley direction ($\lambda_{\min} \approx 0.4$)
-advances at only $0.4/1001 \approx 0.04\%$ of the maximum possible speed.}
+advances at only $\alpha \lambda_{\min} \approx 0.0012 \times 0.4 = 0.00048$ per step along
+the valley-floor eigenvector, while Nesterov's momentum term adds a velocity proportional to
+$\sum_j \beta^j g_{k-j}$: after $k$ iterations of consistent valley-floor gradients, the
+accumulated velocity reaches $\alpha g/(1-\beta_k) \approx 10\times$ the instantaneous GD step.
+This momentum amplification is why Nesterov advances $\sim 7\times$ further along the valley
+floor in 150 iterations despite similar stability constraints.}
 \label{fig:q2_contour_C}
 \end{figure}
 
@@ -999,11 +1025,17 @@ proportional to $1/\sqrt{|g'''|} \approx 0.2$ around $x_0 = 0.25$.
 \includegraphics[width=0.85\textwidth]{figures/q3_approximation.pdf}
 \caption{Q3: Local approximations of $g(x) = x^4$ at $x_0 = 0.25$ (black dot).
 The first-order approximation (tangent line, blue dashed) deviates rapidly from the true
-function beyond a small neighbourhood and points away from the minimum.
+function beyond a small neighbourhood.  Its minimum is at $-\infty$ (the tangent line is
+monotone), so a gradient step $x_0 - \alpha g'(x_0) = 0.25 - 0.0625\alpha$ requires choosing
+$\alpha$ by some external rule (e.g., line search or fixed step).
 The second-order approximation (parabola, red dash-dot) captures local curvature and fits the
-function well near $x_0$; its minimum at $x \approx 0.17$ is a better estimate of the true
-minimum than a gradient step.  The motivation for Newton's method is clear: minimising the
-local quadratic model produces a superior descent step whenever the model is accurate.}
+function well near $x_0$; its minimum at $x^\text{Newton} = 0.1667$ is computed from
+$x_0 - g'(x_0)/g''(x_0) = 0.25 - 0.0625/0.75$, exactly 67\% of the way towards the true
+minimum $x^\star = 0$ from $x_0 = 0.25$.  A gradient step with optimal rate $\alpha^\star = 1/(g''(x_0)) = 1/0.75 = 1.33$
+would give the same result (for a quadratic model), confirming that Newton's method is equivalent
+to gradient descent with the inverse-Hessian preconditioner as the step size.
+The residual error of the quadratic model at $x^\text{Newton} = 0.1667$: $|R_2| = |g(0.1667) -
+q(0.1667)| = |0.1667^4 - 0.003125| \approx 7.4 \times 10^{-4}$, confirming $O(h^3)$ accuracy.}
 \label{fig:q3_approx}
 \end{figure}
 
@@ -1327,12 +1359,18 @@ high, leading to a noisy and gradual convergence.}
 \centering
 \includegraphics[width=0.88\textwidth]{figures/q4_contour_B.pdf}
 \caption{Q4A: Trajectories on Benchmark~B.  Exact GD and good FD ($\delta = 0.05$) follow
-nearly identical paths, confirming that the finite-difference approximation preserves gradient
-fidelity when $\delta$ is small.  Poor FD ($\delta = 0.8$) deviates significantly: the
-gradient direction is biased towards averaging the function over a large region, misidentifying
-the local descent direction.  Nesterov random search follows a noisy, wandering trajectory due
-to random directional sampling; each step moves along a random unit vector rather than the
-true gradient, requiring many iterations to average towards the correct direction.}
+nearly identical paths, confirming the finite-difference approximation preserves gradient
+fidelity when $\delta$ is small.  Poor FD ($\delta = 0.8$) deviates significantly: at the
+starting point $x_0 = (-1, 4)$, the true gradient is $(-3.46, 20.0)$, but the FD estimate
+at $\delta = 0.8$ evaluates $f$ at $(-0.2, 4)$ for the $x_1$ partial, yielding
+$\hat{g}_1 \approx -2.40$ (31\% relative error) and for $x_2$: $\hat{g}_2 \approx 24.0$
+(20\% relative error).  More critically, near the minimum $(0.58, 2.0)$ where $g_1 \approx -0.004$,
+the FD estimate $\hat{g}_1 \approx (f(1.38, 2.0) - f(0.58, 2.0))/0.8 \approx 0.505$
+has the \emph{wrong sign}: the $\delta = 0.8$ perturbation crosses the minimum and evaluates
+the function on the other side, giving a completely wrong descent direction near convergence.
+Nesterov random search follows a noisy, wandering trajectory due to random directional sampling;
+each step moves along a random unit vector rather than the true gradient, requiring many
+iterations to average towards the correct direction.}
 \label{fig:q4_contour_B}
 \end{figure}
 
@@ -1583,9 +1621,16 @@ to $f$ at the feasible optimum.}
 \includegraphics[width=0.88\textwidth]{figures/q5_contour.pdf}
 \caption{Q5: Contour plot with constraint boundary $x_1 = 0.5$ (dashed red) and infeasible
 region (shaded red).  Starting point $(0.2, 4.0)$ is infeasible.
-Projected GD immediately clips to $x_1 = 0.5$ at iteration 1 and then follows the feasible
-boundary initially (while the gradient pulls towards smaller $x_1$), before converging along
-the boundary and then into the interior towards $(0.582, 2.0)$.
+Projected GD immediately clips to $x_1 = 0.5$ at iteration 1, then \emph{slides along} the
+boundary $x_1 = 0.5$ while the gradient's $x_1$-component $\partial f/\partial x_1 = 2(x_1-1)+\cos(x_1)$
+is negative (i.e., pointing towards smaller $x_1$, into the infeasible region); the projection
+returns the iterate to the boundary.  Once the iterate moves along the boundary to the point
+where $x_2 \approx 2.0$, the $x_1$-gradient becomes positive (since $x_1 = 0.5 < 1.0$ but
+the gradient-zero at $x_1^\star \approx 0.582$ is barely inside the feasible region), and the
+trajectory transitions from boundary-sliding to interior convergence.  This active-constraint
+phase (constraint is tight at $x_1 = 0.5$) corresponds exactly to the KKT condition
+$\mu^\star > 0$ with $x_1 - 0.5 = 0$; the constraint becomes inactive only after the iterate
+enters the interior.
 Unconstrained GD passes through the infeasible region (crossing $x_1 = 0.5$) before reaching
 the feasible optimum.
 Penalty methods with increasing $\lambda$ are progressively steered back towards the feasible
@@ -1703,7 +1748,7 @@ Q5 uses a simple half-space constraint ($x_1 \geq 0.5$) and compares methods tha
 enforce or penalise the constraint.  Q6 uses a box constraint with the same $x_1$ lower bound
 ($0.5 \leq x_1 \leq 5$), but introduces the Frank--Wolfe approach, which enforces constraints
 implicitly through convex combinations rather than projection or penalty.  The LP analysis in
-the LP analysis in this section also demonstrates that for a \emph{linear} objective over the box, the constrained
+this section also demonstrates that for a \emph{linear} objective over the box, the constrained
 minimum is at a vertex, providing context for why the LMO always selects a vertex of $\mathcal{X}$.
 
 \subsection{Feasible Set and Linear Programme}
@@ -1809,16 +1854,21 @@ $1-\beta = 0.10$ towards LMO vertex) and $\beta = 0.985$ (step size $0.015$).
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q6_fw_convergence.pdf}
 \caption{Q6-II: Frank--Wolfe convergence for the interior optimum $f^\star = 0$ at $(1, 5)$.
-Both curves exhibit characteristic $O(1/k)$ convergence: the fixed-$\beta$ step size
-$1-\beta$ is constant (not decreasing), so the convergence constant differs from the standard
-$\gamma_k = 2/(k+2)$ analysis but achieves a similar asymptotic rate.
+Both curves exhibit characteristic $O(1/k)$ convergence on a log-log scale: the fixed-$\beta$
+step size $1-\beta$ is constant, so the convergence constant differs from the standard
+$\gamma_k = 2/(k+2)$ analysis but achieves a similar asymptotic rate in practice.
 $\beta = 0.985$ achieves better final accuracy ($f = 0.0046$) than $\beta = 0.90$ ($f = 0.0089$)
-after 180 iterations.  The ratio of final gaps ($0.0089/0.0046 \approx 1.9$) is consistent
-with larger steps causing more oscillation: $1-0.90 = 0.10$ vs $1-0.985 = 0.015$, a $6.7\times$
-larger step that amplifies the zig-zag between vertices near the optimum.  For the decreasing
-schedule $\gamma_k = 2/(k+2)$, the gap at $k = 180$ would be bounded by $2LD^2/182 \approx 10.8$
-(with $L = 2$, $D = 15.66$), consistent with the actual values being much smaller (indicating
-the constant-$\beta$ schedule is more aggressive than the analysis would predict).}
+after 180 iterations.  This counter-intuitive result (smaller step $\Rightarrow$ better accuracy)
+arises because the zig-zag between LMO vertices is suppressed: at $\beta = 0.90$, each step
+moves $1-0.90 = 0.10$ of the distance to a vertex, causing the iterate to overshoot the optimum
+and oscillate; at $\beta = 0.985$, each step moves only $0.015$ towards a vertex, so oscillations
+are $6.7\times$ damped.  Near the interior optimum $(1,5)$, the gradient $\nabla f(x_k)$ is
+small and the vertex $z_k$ alternates between $(0.5, 10)$ and $(5, 10)$ as the sign of
+$\partial f/\partial x_1$ fluctuates; a large step $(1-\beta = 0.10)$ amplifies this oscillation.
+The theoretical bound $f(x_{180}) - f^\star \leq 2LD^2/182 \approx 10.8$ (with $L = 2$, $D = 15.66$)
+is extremely loose; the actual gaps ($0.0046$ and $0.0089$) are $1000\times$ smaller because the
+constant-$\beta$ schedule adapts more aggressively than the worst-case decreasing-$\gamma$
+analysis predicts.}
 \label{fig:q6_fw_conv}
 \end{figure}
 
