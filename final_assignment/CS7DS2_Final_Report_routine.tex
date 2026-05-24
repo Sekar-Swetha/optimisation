@@ -276,11 +276,19 @@ variable-rate convergence with no curvature knowledge required.
 \end{algorithmic}
 \end{algorithm}
 
-\noindent\textbf{Theoretical motivation:} Adagrad was introduced by Duchi et al.\ (2011) to
-perform better adaptation for sparse or heterogeneous gradients.  The effective per-coordinate
-step size $\alpha_k^{(i)} = \alpha_0 / \sqrt{\sum_{j \leq k} g_j^{(i)^2}}$ monotonically
-\emph{decreases}, which is beneficial early on (large gradients reduce the step) but harmful
-later (the step can become negligibly small before reaching the minimum).
+\noindent\textbf{Theoretical motivation:} Adagrad (Duchi et al., 2011) was designed for
+sparse or heterogeneous gradient problems, where different coordinates have very different
+gradient magnitudes.  The effective per-coordinate step size
+$\alpha_k^{(i)} = \alpha_0 / \sqrt{\sum_{j \leq k} g_j^{(i)^2}}$ provides implicit
+\emph{preconditioning}: if coordinate $i$ has consistently large gradients (high curvature),
+its step is automatically reduced; if gradients are small (low curvature), the step remains
+large.  This diagonal approximation to the inverse Hessian is particularly effective in
+natural language processing and recommendation systems where feature gradients span many
+orders of magnitude.  However, the cumulative sum $\sum g_j^2$ grows without bound, so the
+step monotonically \emph{decreases} and can become negligible before the minimum is reached.
+The Adagrad regret bound $R_T \leq O(\sqrt{T}\|\nabla f\|)$ ensures sublinear average regret
+in the online learning setting, but for offline minimisation, the vanishing step causes
+convergence to stagnate (Reddi et al., 2018).
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -298,10 +306,18 @@ later (the step can become negligibly small before reaching the minimum).
 \end{algorithmic}
 \end{algorithm}
 
-\noindent\textbf{Theoretical motivation:} RMSprop (Hinton, 2012) corrects Adagrad's monotone
-decay by replacing cumulative with exponential averaging ($\beta = 0.9$ here).  The effective
-step $\alpha_0 / \sqrt{v_k}$ reflects recent gradient magnitudes rather than all historical
-gradients, allowing the step size to recover if curvature decreases.
+\noindent\textbf{Theoretical motivation:} RMSprop (Hinton, 2012; unpublished lecture notes)
+corrects Adagrad's monotone decay by replacing the cumulative sum with an exponential
+moving average of squared gradients:
+\begin{equation}
+  v_k^{(i)} = \beta\, v_{k-1}^{(i)} + (1-\beta)\, (g_k^{(i)})^2 \approx
+  \frac{1}{W}\sum_{j=k-W}^{k} (g_j^{(i)})^2, \quad W \approx \frac{1}{1-\beta}.
+\end{equation}
+For $\beta = 0.9$, the effective window $W \approx 10$: the step reflects only the last $\sim 10$
+gradient observations, allowing it to adapt to changing curvature rather than being permanently
+biased by large early gradients.  Unlike Adagrad, RMSprop's step size can \emph{increase} if
+gradients become consistently small (e.g., near a flat region), preventing premature stagnation.
+This makes RMSprop better suited to non-stationary objectives and long training runs.
 
 \begin{algorithm}[H]
 \caption{Polyak Momentum / Heavy Ball}
@@ -400,7 +416,12 @@ acceleration along the valley floor.  Adagrad reaches $f = 2.20$: its monotonica
 step helps navigate the highly anisotropic curvature in early iterations, but the eventual
 vanishing step size limits final accuracy.
 RMSprop ($f = 3.12$) underperforms with $\alpha_0 = 0.0035$; the small base rate required for
-stability gives limited progress.}
+stability gives limited progress.  Fundamentally, RMSprop's diagonal curvature estimate from
+gradient magnitudes alone is insufficient for the Rosenbrock valley: the gradient magnitudes
+in the steep cross-valley direction dominate the EMA, causing the effective step in the shallow
+valley-floor direction to also be reduced.  RMSprop cannot distinguish between the steep and
+shallow directions without off-diagonal curvature information (the Hessian's cross-term
+$H_{12} = -400x_1$ that captures the valley's curvature is inaccessible from gradient magnitudes).}
 \label{fig:q1_fval_C}
 \end{figure}
 
@@ -623,11 +644,25 @@ per-iteration error reduction ($1 - 0.9608 \approx 0.0392$ vs $1 - 0.9992 \appro
 Over 150 iterations, the remaining fraction of the initial error is:
 $0.9608^{150} \approx 2.5 \times 10^{-3}$ (Nesterov) vs $0.9992^{150} \approx 0.887$ (GD), predicting
 that Nesterov reduces error by $\sim 400\times$ while GD reduces it by only $\sim 1.13\times$.
-This theoretical prediction is broadly consistent with the observed $7\times$ improvement in
-final objective ($0.479$ vs $3.39$), with the discrepancy explained by the Rosenbrock's
-non-quadratic nature (the theoretical rates apply to strongly convex quadratics).  The schedule $\beta_k = \min\!\left(\frac{k-1}{k+2},
-\beta_{\max}\right)$ starts at zero (pure gradient step) and grows towards $\beta_{\max}$,
-ensuring stability while building up momentum.
+The theoretical prediction of $400\times$ error reduction for Nesterov vs $1.13\times$ for GD
+is broadly \emph{qualitatively} consistent with the observed $7\times$ improvement in
+final objective ($f = 0.479$ vs $f = 3.39$), but the ratio is lower than predicted.
+The discrepancy arises from three factors:
+\begin{enumerate}[nosep]
+  \item \textbf{Non-quadratic objective:} The theoretical rates hold for strongly convex quadratics.
+    Rosenbrock's Hessian varies across the landscape; the effective $\kappa$ experienced during
+    the trajectory (from $x_0 = (-1,1)$ to $\sim(0.5, 0.3)$) may be lower than $\kappa^\star = 2508$
+    at the minimum.
+  \item \textbf{Non-optimal GD step:}  The theoretical GD rate uses $\alpha^\star = 2/(L + \mu) \approx
+    0.002$, while the experiment uses $\alpha = 0.0012$ (constrained by numerical stability);
+    the true GD rate is somewhat better than the table prediction.
+  \item \textbf{Finite iterations:}  At 150 iterations, neither method has entered its
+    asymptotic regime.  Nesterov's $O(1/k^2)$ advantage is most pronounced at large $k$;
+    at $k = 150$, the quadratic speedup may not yet be fully manifested.
+\end{enumerate}
+The schedule $\beta_k = \min\!\left(\frac{k-1}{k+2},\ \beta_{\max}\right)$ starts at zero (pure
+gradient step) and grows towards $\beta_{\max}$, ensuring stability while building up momentum.
+This warm-up avoids the oscillation that would occur if full momentum were applied from $k=1$.
 
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
@@ -1437,13 +1472,24 @@ The violation at $x^\star_\lambda$ satisfies $\max(0, 0.5 - x^\star_{\lambda,1})
 for some constant $c$, meaning the constraint error decays as $1/\lambda$.
 
 However, large $\lambda$ increases the Lipschitz constant of $\nabla F_\lambda$ in the
-infeasible region: the effective ``stiffness'' in the $x_1$ direction becomes
-$\lambda_{\max}(H_{F_\lambda}) \approx \lambda$ when $x_1 < 0.5$, requiring step sizes
-$\alpha < 2/\lambda$ for stability there.  This explains the required step size reduction:
-$\alpha = 0.03 < 2/\lambda = 2/4.5 = 0.44$ for $\lambda = 4.5$.  An alternative that avoids
-this ill-conditioning is the \emph{augmented Lagrangian} method, which introduces a Lagrange
-multiplier $\mu$ alongside the penalty term and updates $\mu \leftarrow \mu + \lambda\, c(x)$
-at each outer iteration, achieving exact constraint satisfaction at finite $\lambda$.
+infeasible region: the effective Hessian $H_{F_\lambda}(x) = H_f(x) + \lambda\, e_1 e_1^T \cdot
+\mathbf{1}_{x_1 < 0.5}$ has eigenvalues approximately $\{\lambda_i(H_f) + \lambda, \lambda_j(H_f)\}$
+for $i$ corresponding to $e_1$ and $j \neq i$.  At the starting point $(0.2, 4.0)$ (infeasible),
+$H_f \approx \text{diag}(1.45, 10)$, so $H_{F_\lambda} \approx \text{diag}(1.45 + \lambda, 10)$.
+The effective condition number in the infeasible region is approximately
+\begin{equation}
+  \kappa(H_{F_\lambda}) \approx \frac{1.45 + \lambda}{1.45} = 1 + \lambda/1.45.
+\end{equation}
+For $\lambda = 4.5$: $\kappa_{\rm eff} \approx 4.1$; stable step size $\alpha < 2/(1.45 + 4.5) = 0.33$.
+The experiment uses $\alpha = 0.03 \ll 0.33$, indicating conservative safety margin.
+An alternative that avoids this ill-conditioning is the \emph{augmented Lagrangian} method:
+\begin{equation}
+  \mathcal{L}_\lambda(x, \mu) = f(x) + \mu \max(0, 0.5 - x_1) + \frac{\lambda}{2}\max(0, 0.5 - x_1)^2,
+\end{equation}
+with dual update $\mu_{k+1} \leftarrow \mu_k + \lambda \max(0, 0.5 - x_k)$.  By maintaining a
+Lagrange multiplier $\mu$ that tracks the constraint violation, the augmented Lagrangian achieves
+exact constraint satisfaction at a \emph{finite} penalty $\lambda$ without increasing $\lambda
+\to \infty$, thus avoiding the ill-conditioning problem.
 
 Settings: Projected GD ($\alpha = 0.08$); Penalty with $\lambda \in \{0.15, 1.8, 4.5\}$
 ($\alpha = 0.05$ for $\lambda \leq 1.8$; $\alpha = 0.03$ for $\lambda = 4.5$);
@@ -1635,8 +1681,20 @@ the gradient points.}
 \noindent\textbf{Key property: Projection-free.}
 Since $\mathcal{X}$ is convex and both $x_k, z_k \in \mathcal{X}$, the convex combination
 $\beta x_k + (1-\beta) z_k \in \mathcal{X}$ for all $\beta \in [0,1]$, without any projection.
-This is the principal advantage over projected gradient descent for complex constraint sets
-(e.g., the nuclear norm ball, the simplex) where the projection oracle is expensive.
+This is the principal advantage over projected gradient descent for complex constraint sets.
+Practical examples where Frank--Wolfe's LMO is cheaper than projection:
+\begin{itemize}[nosep]
+  \item \textbf{Nuclear norm ball} $\{M : \|M\|_* \leq \tau\}$ (used in matrix completion/
+    recommender systems): \emph{projection} requires full SVD ($O(\min(m,n)^2\max(m,n))$);
+    \emph{LMO} returns the rank-1 outer product of leading left and right singular vectors
+    ($O(mn)$ via power iteration).
+  \item \textbf{Probability simplex} $\{p \geq 0 : \sum_i p_i = 1\}$ (multinomial distributions):
+    \emph{projection} requires sorting ($O(d \log d)$); \emph{LMO} is simply $e_{i^\star}$ where
+    $i^\star = \arg\min_i \nabla f_i$ ($O(d)$).
+  \item \textbf{Spectrahedron} $\{X \succeq 0 : \text{tr}(X) = 1\}$ (SDPs, Wainwright--Jordan):
+    \emph{projection} requires full eigendecomposition; \emph{LMO} requires only the leading
+    eigenvector.
+\end{itemize}
 
 For box constraints, the LMO decomposes per coordinate (cost $O(d)$):
 \begin{equation}
