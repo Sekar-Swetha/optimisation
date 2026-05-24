@@ -711,6 +711,19 @@ The schedule $\beta_k = \min\!\left(\frac{k-1}{k+2},\ \beta_{\max}\right)$ start
 gradient step) and grows towards $\beta_{\max}$, ensuring stability while building up momentum.
 This warm-up avoids the oscillation that would occur if full momentum were applied from $k=1$.
 
+\noindent\textbf{Connection between the two Nesterov rate results:}
+The $O(1/k^2)$ convex rate and the $\rho = (\sqrt\kappa-1)/(\sqrt\kappa+1)$ strongly convex
+linear rate describe the \emph{same} algorithm but in different regimes.  For large $k$ on a
+strongly convex function, $f(x_k) - f^\star \leq C \rho^k$ where $C$ depends on the initial
+distance.  For a convex function with no strong convexity, the algorithm converges polynomially.
+The transition between regimes occurs at $k \approx \sqrt\kappa$: below this threshold, the
+$O(1/k^2)$ regime dominates; above it, the linear regime dominates.  For $\kappa = 2508$,
+the crossover is at $k \approx 50$, suggesting that iterations 1--50 in the experiments are
+primarily in the $O(1/k^2)$ phase and iterations 50--150 in the linear phase with
+$\rho = 0.9608$.  This is consistent with the faster initial descent seen in
+Figure~\ref{fig:q2_fval_C}: the first 50 iterations show super-linear improvement, followed
+by geometric decay at rate $\approx 0.9608$ in the later iterations.
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
 \label{alg:adam}
@@ -1231,9 +1244,15 @@ $x^+ - x = -H^{-1}g = -(H\theta - b)/\|H\| \to 0$ once $\theta = \theta_{\text{O
 GD's update decays geometrically with rate $\rho \approx 0.057$ per iteration.
 \emph{Benchmark~B} (centre): Newton's update decreases approximately $5\times$ each step
 near the minimum, consistent with the quadratic convergence bound
-$\|x^+ - x^\star\| \lesssim C\|x - x^\star\|^2$.  If at step $k$ the error is $\varepsilon_k$,
-then $\varepsilon_{k+1} \lesssim C\varepsilon_k^2$: after $j$ more steps, the number of
-correct decimal digits doubles.
+$\|x^+ - x^\star\| \lesssim C\|x - x^\star\|^2$ where $C \approx M/(2\mu) \approx 0.5/2 = 0.25$
+($M \approx 0.5$ is the Lipschitz constant of $\nabla^2 f$, $\mu \approx 1.45$ is the smallest
+Hessian eigenvalue on Benchmark~B).  If at step $k$ the error is $\varepsilon_k$,
+then $\varepsilon_{k+1} \lesssim 0.25\,\varepsilon_k^2$: starting from $\varepsilon_0 \approx 1.5$,
+the bound gives $\varepsilon_1 \lesssim 0.56$, $\varepsilon_2 \lesssim 0.079$, $\varepsilon_3 \lesssim 0.0016$
+--- the number of correct decimal digits roughly doubles at each step once $C\varepsilon_k < 1$.
+The constant factor $\alpha = 0.85$ (damping) delays entry into the quadratic phase slightly,
+consistent with the slightly slower than $5\times$ per-step reduction observed in the first few
+iterations.
 \emph{Benchmark~C} (right): Newton's update stays large (high-magnitude productive steps),
 while GD's steps are tiny due to $\lambda_{\max} \approx 1000$.  Newton on Rosenbrock has not
 yet entered the quadratic convergence regime after 20 iterations (the iterate at $(0.18, 0.02)$
@@ -1346,12 +1365,21 @@ with $d$, requiring more iterations for accurate gradient estimation at high dim
 \includegraphics[width=0.85\textwidth]{figures/q4_fval_B.pdf}
 \caption{Q4A: Convergence comparison on Benchmark~B.  Exact GD converges fastest.
 FD GD with $\delta = 0.05$ closely tracks exact GD throughout all 120 iterations, confirming
-that the gradient approximation is accurate when $\delta$ is appropriately small.
-FD GD with $\delta = 0.8$ stalls at a much higher objective: the large perturbation introduces
-systematic bias in the gradient direction, pointing the iterate away from the true descent
-direction.  Nesterov random search (220 iterations) converges slowest: estimating only the
-gradient component along one random direction per step, the effective gradient variance is
-high, leading to a noisy and gradual convergence.}
+that the gradient approximation is accurate when $\delta$ is appropriately small (relative
+error $\leq \delta L/\|\nabla f\| \approx 0.05 \times 10/5 = 10\%$ at the starting point, $\to 0$
+near the minimum as $\|\nabla f\| \to 0$ slower than $\delta \to 0$).
+FD GD with $\delta = 0.8$ stalls at a much higher objective: near the minimum, the $\delta = 0.8$
+perturbation evaluates $f$ beyond the local basin of the minimum (e.g., at $x_0 + 0.8\,e_1$
+the function value is dominated by curvature from outside the near-minimum region), producing
+a FD gradient with the wrong sign along the dominant convergence direction.  This ``stalling''
+is not slow convergence but a fundamental bias: the algorithm follows a biased gradient that
+does not point towards the true minimum.
+Nesterov random search (220 iterations) converges slowest: at each step, $\hat{g}_k =
+\frac{f(x+\delta u)-f(x)}{\delta}\,u$ estimates only the directional derivative $\nabla f \cdot u$
+along one random unit vector $u$.  The effective gradient variance is $\text{Var}(\hat{g}_k)
+\propto \|\nabla f\|^2 / d$ per coordinate: with $d = 2$, each component of $\hat{g}_k$ has
+noise $\sim \|\nabla f\|/\sqrt{2}$, so roughly $2 \times$ more iterations are needed vs full
+gradient GD.  Over 220 iterations, convergence is slower but the objective does decrease.}
 \label{fig:q4_fval_B}
 \end{figure}
 
@@ -1880,14 +1908,21 @@ required).  The constrained minimum is at $(0.5, 0)$ on the boundary, with $f^\s
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q6_fw_contour.pdf}
-\caption{Q6: Frank--Wolfe trajectories.  Left (interior optimum): both trajectories converge
-towards $(1, 5)$ from the starting point $(1, 1)$, following zig-zag paths as the LP vertex
-alternates between sides of the feasible box.  Right (boundary optimum): the trajectory
-converges towards the boundary point $(0.5, 0)$.  The boundary case is interesting: the LP
-oracle $z_k = (0.5, 0)$ is selected frequently (since the gradient $\nabla f(x_k) = 2x_k > 0$
-always points towards lower-left, sending the LMO to the lower-left vertex), allowing the
-iterate to move progressively towards $(0.5, 0)$ through repeated convex combinations.
-Frank--Wolfe handles boundary optima naturally, without explicit projection.}
+\caption{Q6: Frank--Wolfe trajectories.  Left (interior optimum $f(x) = (x_1-1)^2+(x_2-5)^2$,
+$f^\star = 0$ at $(1,5)$): both trajectories converge towards $(1, 5)$ from $(1, 1)$,
+following zig-zag paths as the LP vertex alternates between sides of the feasible box.  At $x_k$
+near $(1, 5)$, the gradient $\nabla f(x_k) = 2(x_k - (1,5))$ is small and changes sign frequently
+as $x_k$ oscillates around the optimum; the LMO $z_k = \arg\min_{\mathcal{X}} g^T x$ therefore
+selects different vertices on successive iterations.  The convex combination damps these oscillations:
+$x_{k+1} = \beta x_k + (1-\beta)z_k$ only moves $(1-\beta)$ of the way to each vertex.
+Right (boundary optimum $f(x) = x_1^2 + x_2^2$, constrained min at $(0.5, 0)$): the gradient
+$\nabla f(x_k) = 2x_k$ has $\partial f/\partial x_1 = 2x_1 > 0$ for all $x_1 > 0$ and
+$\partial f/\partial x_2 = 2x_2$ which changes sign at $x_2 = 0$.  Consequently the LMO selects
+$z_k^{(1)} = 0.5$ (always, since $g_1 > 0$) and $z_k^{(2)} = -5$ if $x_2 > 0$, then $z_k^{(2)} = 10$
+once $x_2 < 0$.  This creates oscillation in $x_2$: the iterate overshoots to $x_2 < 0$,
+then corrects back.  The $x_1$ convergence is monotone because $z_k^{(1)} = 0.5 < x_k^{(1)}$
+consistently.  Frank--Wolfe handles boundary optima naturally, without explicit projection,
+through this one-sided LMO selection.}
 \label{fig:q6_fw_contour}
 \end{figure}
 
@@ -2060,30 +2095,44 @@ The experimental results are broadly consistent with these theoretical rates:
 \subsection{Method-by-Method Summary}
 
 \begin{itemize}
-  \item \textbf{Polyak step:} Best when $f^\star$ is exactly known; diverges otherwise.
-    Practically limited but theoretically elegant.
+  \item \textbf{Polyak step:} Best when $f^\star$ is exactly known ($f=0.009$ on Benchmark C
+    with $f^\star=0$ correctly specified); diverges otherwise ($f=2.72$ on Benchmark A with
+    $f^\star=0$ misspecified by $0.48$).  Practically limited but theoretically elegant.
   \item \textbf{Adagrad:} Per-coordinate adaptation is beneficial for sparse or heterogeneous
-    problems; monotone step decay causes stagnation on long runs.
-  \item \textbf{RMSprop:} Corrects Adagrad's decay via exponential averaging; the most robust
-    adaptive method in practice.
-  \item \textbf{Heavy Ball:} Effective momentum method on quadratics; no convergence guarantee
-    on non-convex problems; momentum parameter $\beta$ requires tuning.
-  \item \textbf{Nesterov:} Theoretically optimal first-order method on convex problems;
-    lookahead gradient prevents oscillation.  Best choice for ill-conditioned convex problems.
-  \item \textbf{Adam:} Combines momentum and adaptive scaling; excellent empirical performance
-    across benchmarks; no general convergence proof for non-convex problems.
-  \item \textbf{Newton:} Achieves quadratic convergence but requires Hessian computation
-    ($O(d^2)$ storage, $O(d^3)$ inversion); impractical for large $d$ without approximation.
+    gradient problems (NLP, recommendation); monotone step decay $\alpha_0/\sqrt{k}$ causes
+    stagnation on long deterministic runs ($f=2.20$ on Benchmark C vs Heavy Ball's $1.40$).
+  \item \textbf{RMSprop:} Corrects Adagrad's decay via EMA with window $\approx 1/(1-\beta) = 10$
+    observations; the most robust adaptive method for non-stationary objectives, but cannot
+    exploit directional momentum ($f=3.12$ on Benchmark C).
+  \item \textbf{Heavy Ball:} Effective momentum method on quadratics ($f=1.40$ on Benchmark C,
+    $1.5\times$ better than Adagrad); no convergence guarantee on non-convex problems; optimal
+    $\beta^\star = ((\sqrt\kappa-1)/(\sqrt\kappa+1))^2 \approx 0.923$ requires knowing $\kappa$.
+  \item \textbf{Nesterov:} Theoretically optimal first-order method on convex problems ($O(1/k^2)$
+    vs GD's $O(1/k)$); achieves $f=0.479$ on Benchmark C vs GD's $3.39$; lookahead gradient
+    prevents oscillation; stable for any $\beta_{\max} < 1$.
+  \item \textbf{Adam:} Combines momentum and adaptive scaling; $f=1.578$ on Benchmark C;
+    excellent empirical performance in deep learning; no general convergence proof for
+    non-convex problems; effective step bounded in $(-\alpha, \alpha)$ per coordinate.
+  \item \textbf{Newton:} Achieves quadratic convergence near minimum; 1 step on Benchmark A,
+    $\sim5$ steps on Benchmark B, $5.4\times$ objective improvement on Benchmark C with
+    $4\times$ fewer iterations; requires $O(d^2)$ Hessian storage and $O(d^3)$ inversion
+    per step --- impractical for $d > 10^4$ without low-rank or quasi-Newton approximation.
   \item \textbf{Finite differences:} Provides gradient-like quality with $O(\delta)$ accuracy;
-    $\delta$ must be chosen carefully to balance truncation and rounding error.
-  \item \textbf{Nelder--Mead:} Derivative-free; adapts simplex to local landscape; suited to
-    smooth low-dimensional problems where gradient computation is unavailable.
-  \item \textbf{Projected GD:} Enforces hard constraint satisfaction at every iteration;
-    requires cheap projection oracle; preferred when constraints are simple.
+    $\delta$ must be chosen to balance truncation ($O(\delta)$) and rounding ($O(\varepsilon_m/\delta)$)
+    errors; optimal $\delta^\star = \sqrt{\varepsilon_m/L} \approx 10^{-8}$ for double precision.
+  \item \textbf{Nelder--Mead:} Derivative-free; adapts simplex to local landscape via reflection,
+    expansion, contraction; converges to exact Rosenbrock minimum ($f=0$) in 160 iterations,
+    $\sim 400$ evaluations; suited to smooth unimodal problems with $d \leq 20$.
+  \item \textbf{Projected GD:} Enforces hard constraint satisfaction at every iteration ($0$
+    violation from step 1); projection cost $O(1)$ for half-space; requires cheap oracle.
   \item \textbf{Penalty methods:} Require no projection oracle; $\lambda$ controls
-    feasibility-objective trade-off; large $\lambda$ introduces ill-conditioning.
-  \item \textbf{Frank--Wolfe:} Projection-free constrained optimisation; natural for structured
-    constraint sets; $O(1/k)$ convergence; handles interior and boundary optima.
+    feasibility-objective trade-off ($\lambda = 4.5$ achieves feasibility in $\sim 10$ iterations);
+    large $\lambda$ increases effective condition number $\kappa_{\rm eff} = 1 + \lambda/1.45$,
+    requiring smaller step sizes.
+  \item \textbf{Frank--Wolfe:} Projection-free constrained optimisation; $O(1/k)$ convergence
+    ($f \to 0.0046$ in 180 iterations for interior problem); handles interior and boundary optima;
+    preferred when LMO is cheap (box: $O(d)$; nuclear norm: $O(mn)$ rank-1 SVD) and projection
+    is expensive (nuclear norm: $O(\min(m,n)^2\max(m,n))$ full SVD).
 \end{itemize}
 
 \subsection{Practical Guidance}
