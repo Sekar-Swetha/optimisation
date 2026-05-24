@@ -411,11 +411,16 @@ causing unbounded step sizes and numerical divergence.}
 \caption{Q1: Convergence on Benchmark~B (Toy Neural Network, $\kappa \approx 6.9$).
 The same $f^\star = 0$ misspecification affects Polyak: the true minimum is
 $f^\star \approx 0.7244$, so the Polyak step grows as $\alpha_k = f(x_k)/\|g_k\|^2 \to \infty$
-and the algorithm diverges to $f = 24.07$.  At $\kappa = 6.9$, GD's optimal rate $\rho = 0.747$
-is already mediocre: the theoretical Heavy Ball rate $\rho = 0.449$ should give $\sim 7\times$
-faster error reduction, consistent with Heavy Ball reaching the minimum in $\sim 30$ iterations
-vs GD's $\sim 80$.  Adagrad matches GD's final accuracy ($f = 0.7244$) in similar iteration count;
-the per-coordinate scaling is modestly beneficial at $\kappa = 6.9$ but not dramatically so.}
+and the algorithm diverges to $f = 24.07$.  At $\kappa = 6.9$, GD's optimal rate $\rho = (6.9-1)/(6.9+1)
+= 0.747$, while the theoretical Heavy Ball rate is $\rho_{\rm HB} = (\sqrt{6.9}-1)/(\sqrt{6.9}+1)
+= (1.628)/3.628 \approx 0.449$.  The per-step advantage is $(1-0.449)/(1-0.747) \approx 2.2\times$,
+meaning Heavy Ball reduces the error $2.2\times$ faster per iteration than GD.  Over 80 iterations:
+GD error $\propto 0.747^{80} \approx 4 \times 10^{-10}$; Heavy Ball error $\propto 0.449^{80} \approx
+3 \times 10^{-28}$ --- both essentially reach machine precision, consistent with the figure showing
+both converging fully at Benchmark~B.  Adagrad matches GD's final accuracy ($f = 0.7244$) in similar
+iteration count; at $\kappa = 6.9$, the per-coordinate scaling provides only modest benefit since the
+curvature ratio between $x_2$ (eigenvalue 10) and $x_1$ (eigenvalue 1.45) is $\approx 7$:1, already
+partially compensated by Adagrad's diagonal step reduction in the $x_2$ direction.}
 \label{fig:q1_fval_B}
 \end{figure}
 
@@ -857,13 +862,19 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 \\
 
 \noindent\textbf{Why Nesterov outperforms Adam on Rosenbrock:}
 Adam's per-coordinate scaling with $\beta_2 = 0.999$ maintains a long memory of squared
-gradients.  On the curved Rosenbrock valley, the gradient direction rotates significantly
-between iterates (the valley curves along $x_2 = x_1^2$), so gradient history from 50+
-iterations ago can become \emph{misleading}.  The large $\beta_2$ causes the second moment
-$v_t$ to be dominated by old gradient magnitudes that no longer reflect the current
-geometry.  Nesterov avoids this by using only the current lookahead gradient, adapting
-fully to the current location's curvature.  A smaller $\beta_2$ (e.g., 0.9 instead of 0.999)
-would help Adam on highly nonlinear problems at the cost of noisier estimates.
+gradients: the EMA second moment $v_t$ has effective window size $1/(1-\beta_2) = 1000$ steps,
+so gradients from 500+ iterations ago still contribute with weight $\beta_2^{500} \approx 0.61$.
+On the curved Rosenbrock valley, the gradient direction rotates significantly as the iterate
+moves along $x_2 = x_1^2$ (near $x_1 = -1$, the valley gradient is predominantly in the
+$x_1$ direction; near $x_1 = 0.5$, it rotates substantially), so stale gradient magnitudes
+from early iterations give a misleading second moment.  The effective step $\alpha/\sqrt{\hat{v}_t}$
+is over-shrunk by the large historical $v_t$, slowing convergence.
+Nesterov avoids this entirely by using only the \emph{current} lookahead gradient $\nabla f(\tilde{x}_k)$
+--- there is no per-coordinate second-moment accumulation.  The result is $f = 0.479$ vs
+$f = 1.578$ after 150 iterations ($3.3\times$ better objective).  A smaller $\beta_2 = 0.9$
+(effective window 10) would reduce this stale-gradient problem at the cost of higher step-size
+variance; but in practice this must be tuned per problem, whereas Nesterov's $O(1/k^2)$
+guarantee requires no such tuning.
 
 \subsection{Contour Trajectories}
 
@@ -987,11 +998,21 @@ expected loss cannot drop below $\frac{\alpha L \sigma^2_{\rm sg}}{2\mu}$.  This
 \noindent\textbf{Practical implication:}  The noise floor explains the \emph{oscillation} near
 the minimum seen in Figure~\ref{fig:q2_sgd_batch}: with $\alpha = 0.06$ and $b = 5$, the iterate
 reaches the noise floor $\sim \frac{\alpha L \sigma^2_\varepsilon}{b \mu} > 0$ and then
-\emph{random-walks} around the minimum rather than converging to it.  The full-batch GD converges
-monotonically to the exact minimum because its gradient is exact ($\sigma^2_{\rm sg} = 0$).
-In deep learning, this means the training loss \emph{never} reaches the global minimum under
-constant learning rates, necessitating learning rate schedules (step decay, cosine annealing)
-that reduce $\alpha$ to zero during training.
+\emph{random-walks} around the minimum rather than converging to it.  Plugging in the experimental
+values ($\alpha = 0.06$, $L \approx \lambda_{\max}(H) \approx 1$ on Benchmark~A, $\sigma_\varepsilon^2 = 1$,
+$b = 5$, $\mu \approx \lambda_{\min}(H) \approx 1$):
+\begin{equation}
+  \text{noise floor} = \frac{\alpha L \sigma^2_{\rm sg}}{2\mu}
+  = \frac{0.06 \times 1 \times (1/5)}{2 \times 1} = 0.006.
+\end{equation}
+Adding this to the irreducible label-noise floor $J^\star \approx 0.48$, the expected oscillation
+plateau is $\approx 0.48 + 0.006 = 0.486$, consistent with the $b=5$ curve plateauing slightly
+above $0.48$ in Figure~\ref{fig:q2_sgd_batch}.  For $b = 40$: noise floor $= 0.06 \times 1
+\times (1/40) / 2 = 0.00075$, making the plateau essentially indistinguishable from $J^\star$.
+The full-batch GD converges monotonically to the exact minimum because its gradient is exact
+($\sigma^2_{\rm sg} = 0$).  In deep learning, this means the training loss \emph{never} reaches
+the global minimum under constant learning rates, necessitating learning rate schedules (step
+decay, cosine annealing) that reduce $\alpha$ to zero during training.
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -1317,10 +1338,16 @@ that avoids cancellation errors when $f$ values are large.  In practice, $\delta
 is the operational range where both error sources are controlled.
 
 For comparison, a centred finite-difference scheme $[f(x+\delta e_i) - f(x-\delta e_i)]/(2\delta)$
-has truncation error $O(\delta^2)$ rather than $O(\delta)$, so $\delta = 0.8$ would give error
-$\leq \delta^2 L_3/6 \approx 0.05$ (assuming $L_3 \approx 0.5$) --- substantially better.  The
-forward-difference scheme requires only $d+1 = 3$ function evaluations per step vs $2d = 4$
-for centred, making it more economical in high dimensions.
+has truncation error $O(\delta^2)$ rather than $O(\delta)$: the odd-order Taylor terms cancel,
+so $|{\rm error}| \leq \delta^2 |f'''(\xi)|/6$.  For Benchmark~B with $|f'''(x)| \leq |{\sin}(x_1)|
+\leq 1$ for the $x_1$ component, at $\delta = 0.8$: centred error $\leq 0.64/6 \approx 0.11$
+vs forward-difference error $\leq 4.0$ --- a $36\times$ improvement.  At $\delta = 0.05$:
+centred error $\leq 0.0025/6 \approx 4 \times 10^{-4}$ vs forward error $\leq 0.25$.
+The trade-off: centred requires $2d = 4$ evaluations per step vs forward's $d+1 = 3$, a
+$33\%$ overhead for $d = 2$ that grows to $2d/(d+1) \to 2\times$ as $d \to \infty$.
+In practice, centred differences are always preferred when function evaluation cost is not
+prohibitive, since the $O(\delta^2)$ accuracy allows using $\delta \approx 10^{-3}$ instead of
+$\delta^\star \approx 10^{-8}$, avoiding numerical cancellation issues.
 
 \subsubsection{Nesterov Random Search}
 
