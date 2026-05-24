@@ -96,10 +96,16 @@ adaptive and momentum-based methods, second-order Newton's method, derivative-fr
 and constrained optimisation algorithms.
 
 All methods are evaluated on three benchmark functions of deliberately increasing difficulty:
-a well-conditioned quadratic (Benchmark A), a moderately anisotropic nonlinear function
-(Benchmark B), and the notoriously ill-conditioned Rosenbrock function (Benchmark C).
+a well-conditioned quadratic (Benchmark A, $\kappa \approx 1.1$), a moderately anisotropic
+nonlinear function (Benchmark B, $\kappa \approx 6.9$), and the notoriously ill-conditioned
+Rosenbrock function (Benchmark C, $\kappa \approx 2508$).
 This progression allows the report to isolate the specific conditions under which each method's
-theoretical advantages become practically significant.
+theoretical advantages become practically significant.  The condition number $\kappa$ plays the
+role of a \emph{discriminative signal}: on Benchmark~A, virtually all methods behave similarly;
+on Benchmark~C, methods diverge by up to two orders of magnitude in final objective value,
+making it the critical test of theoretical claims.  This report uses the benchmark progression
+to connect algorithmic theory (convergence rate formulae) to empirical observations
+(final objective values and trajectory shapes).
 
 The report is structured as follows:
 \begin{itemize}[nosep]
@@ -653,6 +659,18 @@ bounding the effective step in $(-\alpha, \alpha)$.  The bias corrections
 $(1 - \beta_1^t)^{-1}$ and $(1 - \beta_2^t)^{-1}$ compensate for initialising $m_0 = v_0 = 0$,
 which otherwise causes underestimation in early iterations.
 
+\noindent\textbf{Effect of bias correction in early iterations:}
+At $t = 1$ with $\beta_1 = 0.82$:\ $\hat{m}_1 = g_1 / (1 - 0.82) = 5.56\, g_1$,
+so the effective first step is $5.56\times$ larger than the raw gradient $g_1$, compensating
+for the cold start.  At $t = 1$ with $\beta_2 = 0.999$:\ $\hat{v}_1 = g_1^2 / (1 - 0.999)
+= 1000\, g_1^2$, so $\sqrt{\hat{v}_1} \approx 31.6\, |g_1|$ --- the denominator scales the
+step to $\approx \alpha / 31.6 \cdot \hat{m}_1 / |g_1| = \alpha \cdot 5.56/31.6 \cdot \text{sign}(g_1)
+\approx 0.176\,\alpha\,\text{sign}(g_1)$ at $t=1$.  As $t$ grows, the bias correction factors
+approach 1 and the effective step approaches $\alpha\,\text{sign}(g_t)$ when the gradient
+direction is consistent.  This bounded effective step is what makes Adam robust to step-size
+tuning in deep learning: regardless of the gradient magnitude, each coordinate moves at most
+$\alpha$ per step.
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1124,18 +1142,31 @@ which is minimised at $\delta^\star \sim \sqrt{\varepsilon_{\text{machine}}} \ap
 Practically, $\delta$ in the range $[10^{-5}, 10^{-3}]$ works well for smooth functions.
 
 The assignment tests two $\delta$ values on Benchmark~B (where $\lambda_{\max} = 10$,
-so the Lipschitz constant of $\nabla f$ satisfies $L_2 \leq \lambda_{\max} = 10$):
+so the Lipschitz constant of $\nabla f$ satisfies $L \leq \lambda_{\max} = 10$):
 
 \begin{itemize}
-  \item \textbf{Good:} $\delta = 0.05$ --- truncation error $\leq \delta L_2 / 2 = 0.05 \cdot 10 / 2 = 0.25$.
+  \item \textbf{Good:} $\delta = 0.05$ --- truncation error $\leq \delta L / 2 = 0.05 \cdot 10 / 2 = 0.25$.
     For a gradient of magnitude $\|g\| \approx 5$ at the starting point, the \emph{relative}
     error is $\lesssim 0.25/5 = 5\%$.  This is small enough that gradient descent still
-    converges reliably towards the minimum.
+    converges reliably towards the minimum.  The FD gradient is $\hat{g}_i = (f(x + 0.05\,e_i) -
+    f(x))/0.05$; since $f$ is slowly varying compared to the $\delta$ step, this closely
+    tracks the true $\partial f / \partial x_i$.
   \item \textbf{Poor:} $\delta = 0.8$ --- truncation error $\leq 0.8 \cdot 10 / 2 = 4.0$.
     A relative error of $\sim 80\%$ means the finite-difference direction is substantially
     different from the true gradient direction; the algorithm takes steps that largely do not
-    correspond to descent.  This explains why FD GD with $\delta = 0.8$ fails to converge.
+    correspond to descent.  The $\delta$-step of 0.8 samples the function over a region where
+    the gradient direction has changed (the $\sin(x_1)$ coupling in Benchmark~B has period $2\pi$),
+    producing an averaged direction that poorly approximates the local gradient.
 \end{itemize}
+
+\noindent\textbf{Optimal $\delta$ for Benchmark~B:}  The optimal $\delta^\star$ minimises
+the sum of truncation and rounding errors.  Setting $d/d\delta(\delta L/2 + 2\epsilon_m/\delta) = 0$
+gives $\delta^\star = 2\sqrt{\epsilon_m / L}$.  For $L = 10$ and machine epsilon $\epsilon_m \approx
+10^{-16}$: $\delta^\star = 2\sqrt{10^{-16}/10} = 2 \times 10^{-8}$.  The experiment uses $\delta =
+0.05 \gg \delta^\star$, trading numerical precision (not a concern here) for a larger perturbation
+that avoids cancellation errors when $f$ values are large.  In practice, $\delta \in [10^{-5}, 10^{-2}]$
+is the operational range where both error sources are controlled.
+
 For comparison, a centred finite-difference scheme $[f(x+\delta e_i) - f(x-\delta e_i)]/(2\delta)$
 has truncation error $O(\delta^2)$ rather than $O(\delta)$, so $\delta = 0.8$ would give error
 $\leq \delta^2 L_3/6 \approx 0.05$ (assuming $L_3 \approx 0.5$) --- substantially better.  The
@@ -1233,6 +1264,26 @@ in $\mathbb{R}^2$ and iteratively transforms it through four operations:
 \end{enumerate}
 No gradient information is required; the algorithm adapts to the function landscape through
 the simplex geometry.  Settings: initial step $= 0.35$, iterations $= 160$.
+
+\noindent\textbf{Why Nelder--Mead succeeds on Rosenbrock despite having no convergence
+guarantee for non-convex functions:}  The Rosenbrock function has a \emph{unique} global
+minimum $(1,1)$ and a narrow curved valley $x_2 \approx x_1^2$ with a known shape.
+The simplex exploits this geometry through two mechanisms:
+\begin{enumerate}[nosep]
+  \item \textbf{Elongation:} The simplex stretches along the valley axis via repeated
+    reflections in the same direction, effectively approximating the gradient direction
+    without computing it.  The simplex ``learns'' the valley orientation through $\sim 100$
+    function comparisons.
+  \item \textbf{Contraction:} Near the minimum, the simplex contracts through shrink and
+    inside-contraction steps, achieving super-linear convergence as the simplex diameter
+    becomes small relative to the local curvature radius.  This implicit exploitation of
+    local quadratic structure is the key to Nelder--Mead's success on smooth unimodal functions.
+\end{enumerate}
+In contrast, grid search finds the best of $55^2 = 3025$ pre-specified points and cannot
+adapt to the function landscape: its accuracy is limited by grid resolution $\Delta x \approx 0.074$,
+regardless of the function smoothness.  The $\sim 7.5\times$ more function evaluations
+(3025 vs 400) combined with $\infty \times$ lower accuracy ($f = 0.0016$ vs $f = 0$)
+illustrates the fundamental superiority of adaptive search on smooth problems.
 
 \begin{figure}[H]
 \centering
@@ -1528,6 +1579,15 @@ eventually equals zero, recovering the unconstrained condition.
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
 % ============================================================
+
+\noindent\textit{Note on connection to Question 5:}  Both Q5 and Q6 deal with constrained
+optimisation, but with different constraint structures and algorithmic approaches.
+Q5 uses a simple half-space constraint ($x_1 \geq 0.5$) and compares methods that explicitly
+enforce or penalise the constraint.  Q6 uses a box constraint with the same $x_1$ lower bound
+($0.5 \leq x_1 \leq 5$), but introduces the Frank--Wolfe approach, which enforces constraints
+implicitly through convex combinations rather than projection or penalty.  The LP analysis in
+\S\ref{sec:q6}.1 also demonstrates that for a \emph{linear} objective over the box, the constrained
+minimum is at a vertex, providing context for why the LMO always selects a vertex of $\mathcal{X}$.
 
 \subsection{Feasible Set and Linear Programme}
 
