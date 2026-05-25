@@ -725,6 +725,34 @@ which increases with $\sigma^2$ (observed noise), decreases with $b$ (larger bat
 \label{fig:q2_sgd_theory}
 \end{figure}
 
+\subsubsection*{Theorem: SGD Convergence with Constant Step Size}
+
+\begin{theorem}[SGD Convergence~\cite{bottou2018}]
+\label{thm:sgd}
+Let $f$ be $\mu$-strongly convex and $L$-smooth. Let $\hat{g}_k$ be an unbiased stochastic gradient with bounded variance $\mathbb{E}[\|\hat{g}_k - \nabla f(x_k)\|^2] \leq \sigma^2$. Running SGD with constant step $\alpha \leq 1/L$:
+\begin{equation}
+\mathbb{E}[f(x_k) - f^\star] \leq (1 - \alpha \mu)^k (f(x_0) - f^\star) + \frac{\alpha \sigma^2}{2\mu}.
+\end{equation}
+The first term decays exponentially to zero; the second is the irreducible \emph{noise floor} $\propto \alpha$. The optimal constant step balances speed and noise: choosing $\alpha = \mu/(L\sigma^2) \cdot \varepsilon$ yields a noise floor of $\varepsilon/2$, requiring $O((L\sigma^2/(\mu^2 \varepsilon))\log(1/\varepsilon))$ iterations.
+\end{theorem}
+
+\paragraph{Proof sketch.} From strong convexity: $\mathbb{E}[\|x_{k+1} - x^\star\|^2] = \mathbb{E}[\|x_k - \alpha \hat{g}_k - x^\star\|^2]$. Expanding:
+\begin{align*}
+&= \|x_k - x^\star\|^2 - 2\alpha \mathbb{E}[\hat{g}_k^T(x_k - x^\star)] + \alpha^2 \mathbb{E}[\|\hat{g}_k\|^2]\\
+&= \|x_k - x^\star\|^2 - 2\alpha \nabla f(x_k)^T(x_k - x^\star) + \alpha^2(\|\nabla f(x_k)\|^2 + \sigma^2).
+\end{align*}
+By strong convexity, $\nabla f(x_k)^T(x_k - x^\star) \geq f(x_k) - f^\star + \frac{\mu}{2}\|x_k - x^\star\|^2$. Using $L$-smoothness, $\|\nabla f(x_k)\|^2 \leq 2L(f(x_k) - f^\star)$. Substituting and rearranging gives the recursion, which unrolls to the stated bound. $\square$
+
+\paragraph{SVRG: Variance Reduction Proof Sketch.} SGD's $O(\sigma^2 \alpha)$ noise floor can be eliminated by variance reduction. SVRG~\cite{bottou2018} computes a full gradient $\tilde{\mu} = \nabla f(\tilde{x})$ periodically and uses the control variate estimate:
+\begin{equation}
+v_k = \hat{g}(x_k) - \hat{g}(\tilde{x}) + \tilde{\mu}.
+\end{equation}
+Since $\mathbb{E}[\hat{g}(x_k) - \hat{g}(\tilde{x})] = \nabla f(x_k) - \nabla f(\tilde{x})$, we have $\mathbb{E}[v_k] = \nabla f(x_k)$. The key variance bound is:
+\begin{equation}
+\mathbb{E}[\|v_k - \nabla f(x_k)\|^2] \leq 4L(f(x_k) - f^\star) + 4L(f(\tilde{x}) - f^\star),
+\end{equation}
+which vanishes as both $x_k$ and $\tilde{x}$ approach $x^\star$. This gives SVRG geometric convergence $\mathbb{E}[f(x_k) - f^\star] \leq (1-\theta)^k$ for some $\theta > 0$ depending on $\mu/L$, matching full-batch GD's linear rate at $O(1)$ cost per iteration (amortised $O(n/m)$ for the periodic full gradient computation). The empirical verification is shown in Figure~\ref{fig:q2_sgd_theory}.
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
 \label{sec:q3}
@@ -1093,6 +1121,25 @@ Grid search is the only method guaranteeing global optimality (to grid resolutio
 
 \paragraph{Curse of dimensionality for grid search.} A $55 \times 55$ grid in $\mathbb{R}^2$ requires $3025$ evaluations. To achieve the same resolution in $\mathbb{R}^d$ would require $55^d$ evaluations: $\approx 1.7 \times 10^5$ for $d = 3$, $5 \times 10^8$ for $d = 5$, and $\approx 10^{17}$ for $d = 10$. In contrast, Nesterov random search still requires only 2 evaluations per iteration in $\mathbb{R}^{10}$, at the cost of slower $O(10/k) = O(d/k)$ convergence. This trade-off between sample complexity and scalability is the defining challenge of derivative-free and zeroth-order optimisation.
 
+\paragraph{Optimal finite-difference perturbation derivation.} The total error of the forward difference estimator is:
+\begin{equation}
+\text{error}(\delta) = \underbrace{\frac{M_2 \delta}{2}}_{\text{truncation}} + \underbrace{\frac{\varepsilon_{\mathrm{mach}} |f(x)|}{\delta}}_{\text{round-off}}
+\end{equation}
+where $M_2 = \max |f''|$ and $\varepsilon_{\mathrm{mach}} \approx 2.2 \times 10^{-16}$. Minimising over $\delta$ by setting $\mathrm{d}(\text{error})/\mathrm{d}\delta = 0$:
+\begin{equation}
+\frac{M_2}{2} - \frac{\varepsilon_{\mathrm{mach}} |f(x)|}{\delta^2} = 0 \implies \delta^\star = \sqrt{\frac{2\varepsilon_{\mathrm{mach}} |f(x)|}{M_2}}.
+\end{equation}
+For Benchmark~B with $|f| \approx 1$ and $M_2 \approx 10$: $\delta^\star \approx \sqrt{2 \times 10^{-16} / 10} \approx 4.5 \times 10^{-9}$. At this optimum, truncation $= $ round-off $\approx M_2 \delta^\star / 2 \approx 2.2 \times 10^{-8}$, which is the achievable accuracy floor for forward differences.
+
+For central differences (error $= M_3 \delta^2/6 + \varepsilon_{\mathrm{mach}} |f(x)| / \delta$), the optimal perturbation is $\delta^\star_{\mathrm{CD}} = (3 \varepsilon_{\mathrm{mach}} |f(x)| / M_3)^{1/3} \approx 10^{-5}$, with minimum error $\approx 10^{-11}$ --- about $3000\times$ better than forward differences. This quantifies why central differences are preferred when extra function evaluations are affordable.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q4_detailed_analysis.pdf}
+\caption{Q4: Extended derivative-free analysis. \emph{Top-left:} Nelder--Mead vs GD and FD GD on Rosenbrock (200 iterations); Nelder--Mead converges from the challenging $x_0 = (-1.5, 2)$ start using only function evaluations. \emph{Top-centre:} simplex diameter evolution shows three phases: initial exploration (large simplex), contraction toward valley floor (shrinking), and fine convergence (near-zero diameter). \emph{Top-right:} simplex snapshots overlaid on the Rosenbrock contour at iterations $k \in \{0, 5, 15, 40, 80, 130, 180, 200\}$, colour-coded from red (early) to green (late); the simplex shrinks and aligns with the valley before finally contracting onto the minimum. \emph{Bottom-left:} forward difference vs central difference gradient error as a function of $\delta$ on Rosenbrock; empirical slopes match the theoretical $O(\delta)$ and $O(\delta^2)$. \emph{Bottom-centre:} random search convergence for dimensions $d \in \{2, 5, 10, 20\}$ on a quadratic; solid lines are empirical, dashed are the $O(d/k)$ theoretical prediction --- the slower convergence with larger $d$ is clearly visible. \emph{Bottom-right:} convergence as a function of total function evaluation budget; exact GD dominates for small budgets, while random search's 2-evaluations-per-step advantage only pays off at very large budgets when $d \gg 2$.}
+\label{fig:q4_detail}
+\end{figure}
+
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
 \label{sec:q5}
@@ -1289,6 +1336,20 @@ For an $L$-smooth convex function $f$ over a convex compact set $\mathcal{X}$ wi
 f(x_k) - f^\star \leq \frac{2LD^2}{k+2} = O(1/k).
 \end{equation}
 \end{theorem}
+
+\paragraph{Proof sketch of Theorem~\ref{thm:fw}.} Let $h_k = f(x_k) - f^\star$. By $L$-smoothness of $f$:
+\begin{align*}
+f(x_{k+1}) &\leq f(x_k) + \nabla f(x_k)^T(x_{k+1} - x_k) + \frac{L}{2}\|x_{k+1} - x_k\|^2.
+\end{align*}
+With $x_{k+1} = x_k + \gamma_k(z_k - x_k)$, we have $x_{k+1} - x_k = \gamma_k(z_k - x_k)$, so:
+\begin{equation}
+f(x_{k+1}) \leq f(x_k) + \gamma_k \nabla f(x_k)^T(z_k - x_k) + \frac{\gamma_k^2 L}{2}\|z_k - x_k\|^2.
+\end{equation}
+By convexity: $\nabla f(x_k)^T(z - x_k) \leq f^\star - f(x_k)$ for any $z \in \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$ (since $x^\star \in \mathcal{X}$ and $z_k$ minimises the linear function). Thus $\gamma_k \nabla f(x_k)^T(z_k - x_k) \leq \gamma_k(f^\star - f(x_k)) = -\gamma_k h_k$. Also $\|z_k - x_k\| \leq D$. Hence:
+\begin{equation}
+h_{k+1} \leq (1 - \gamma_k) h_k + \frac{\gamma_k^2 L D^2}{2}.
+\end{equation}
+Setting $\gamma_k = 2/(k+2)$ and unrolling this recursion by induction gives $h_k \leq 2LD^2/(k+2)$. $\square$
 
 \begin{lemma}[Frank--Wolfe Descent Lemma]
 \label{lem:fw_descent}
@@ -1556,6 +1617,13 @@ The hierarchy is: Newton $\gg$ Nesterov $\geq$ Heavy Ball $\approx$ GD (by $\sqr
 \includegraphics[width=\textwidth]{figures/algorithm_complexity_table.pdf}
 \caption{Computational complexity summary for all 13 algorithm variants. \emph{Top:} per-iteration cost ($O(\cdot)$ in $d$), memory footprint, and theoretical convergence rate for each method. Newton dominates on rate but pays $O(d^3)$ per step. Random search and Nelder--Mead are oracle-cheap at $O(1)$ gradient cost but converge as $O(d/k)$ or $O(1/k)$ for the simplex. \emph{Bottom:} theoretical convergence curves $f(x_k) - f^\star$ vs.\ iteration for $\kappa = 2508$; Newton's quadratic rate collapses the error in 5--10 steps while GD requires $O(\kappa \log(1/\varepsilon)) \approx 10\,000$ steps for $\varepsilon = 10^{-4}$.}
 \label{fig:complexity_table}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/comprehensive_analysis.pdf}
+\caption{Comprehensive theoretical and empirical comparison of all methods. \emph{Top-left:} iterations to reach $\varepsilon = 10^{-4}$ vs.\ condition number $\kappa$; GD requires $O(\kappa \log 1/\varepsilon)$ which grows linearly in $\kappa$, while Nesterov's $O(\sqrt{\kappa/\varepsilon})$ grows as $\sqrt{\kappa}$ --- a $\sqrt{2508} \approx 50\times$ advantage at $\kappa = 2508$. Newton (constant line) converges in $O(\log\log 1/\varepsilon) \approx 6$ iterations regardless of $\kappa$. \emph{Top-centre:} theoretical convergence rate curves for $\kappa = 2508$; Newton's quadratic convergence reaches machine precision in $\sim\!7$ steps while GD requires $\sim\!200$. \emph{Top-right:} per-iteration cost vs.\ dimension $d$; Newton's $O(d^3)$ becomes prohibitive above $d \approx 1000$ while first-order methods scale linearly. \emph{Bottom-left:} empirical final objective on Benchmark C (Rosenbrock) for all 11 methods tested; Newton achieves $f \approx 0.005$, nearly $700\times$ better than vanilla GD. \emph{Bottom-centre:} memory footprint in units of $O(d)$ vectors; Adagrad/RMSprop require 2 vectors while Newton requires $O(d)$ vectors for the Hessian. \emph{Bottom-right:} convergence quality vs.\ per-iteration cost phase diagram, with Newton in the high-cost/high-quality quadrant and random search in the low-cost/low-quality quadrant.}
+\label{fig:comprehensive_all}
 \end{figure}
 
 \subsection{Practical Recommendations}
