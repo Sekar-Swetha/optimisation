@@ -462,6 +462,15 @@ This is optimal: no first-order method can achieve better than $O(1/k^2)$ on smo
 
 The key distinction from Heavy Ball (Algorithm~\ref{alg:heavyball}) is the evaluation of $\nabla f$ at the \emph{lookahead point} $\tilde{x}_k = x_k + \beta_k z_k$ rather than at $x_k$. This ``look before you leap'' strategy allows Nesterov to correct its trajectory before overshooting the optimum, providing the $O(1/k^2)$ rate versus Heavy Ball's $O(1/k)$ on convex functions. However, this improvement is specific to convex settings; on non-convex problems like Rosenbrock, Nesterov does not have the same provable advantage but still benefits from momentum.
 
+\paragraph{Momentum schedule $\beta_k = (k-1)/(k+2)$.} The increasing momentum schedule is critical for achieving the $O(1/k^2)$ rate. The clipping at $\beta_{\max}$ prevents the momentum from becoming too large early, when the quadratic model is inaccurate. Figure~\ref{fig:q2_nesterov_anal} shows the momentum schedule shape and its effect on convergence speed for different clipping values $\beta_{\max} \in \{0.60, 0.75, 0.85, 0.90, 0.95, 0.99\}$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_nesterov_analysis.pdf}
+\caption{Q2: Nesterov momentum schedule analysis. \emph{Left:} Nesterov with standard monotone restart (function value criterion): the test function starts below the restart threshold for this problem, so no restarts are triggered, confirming the algorithm is already well-behaved. \emph{Centre:} effect of $\beta_{\max}$ on Rosenbrock convergence (300 iterations). Too small $\beta_{\max} = 0.60$ limits the benefit of momentum; too large $\beta_{\max} = 0.99$ causes oscillation in the narrow Rosenbrock valley. The selected $\beta_{\max} = 0.90$ provides a good balance. \emph{Right:} the momentum schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ for each clipping value: the unconstrained schedule increases monotonically to 1; clipping creates a two-phase schedule with linear ramp and saturated plateau.}
+\label{fig:q2_nesterov_anal}
+\end{figure}
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser~\cite{kingma2014}}
 \label{alg:adam}
@@ -599,6 +608,15 @@ Adam's performance depends on two key hyperparameters: the learning rate $\alpha
 \includegraphics[width=\textwidth]{figures/q2_adam_sensitivity.pdf}
 \caption{Q2: Adam hyperparameter sensitivity on Rosenbrock (150 iterations). \emph{Left:} increasing $\alpha$ accelerates early convergence but can cause oscillation ($\alpha = 0.02$). The choice $\alpha = 0.006$ provides a good balance. \emph{Right:} $\beta_1$ controls the momentum weighting; too low ($\beta_1 = 0.5$) provides insufficient momentum, while too high ($\beta_1 = 0.95$) causes overshoot in the narrow Rosenbrock valley. The selected $\beta_1 = 0.80$ provides sufficient momentum without excessive overshoot.}
 \label{fig:q2_adam_sens}
+\end{figure}
+
+\paragraph{Adam internals: bias correction in practice.} The bias correction terms $1 - \beta_1^t$ and $1 - \beta_2^t$ play a critical role in early iterations. At $t=1$: $1 - 0.80^1 = 0.20$ for $\hat{m}$ and $1 - 0.999^1 = 0.001$ for $\hat{v}$. Without correction, $m_1 = (1-\beta_1)g_1 = 0.2g_1$ would underestimate the gradient by $5\times$, and $v_1 = (1-\beta_2)g_1^2 = 0.001 g_1^2$ would underestimate the second moment by $1000\times$. The correction restores $\hat{m}_1 = g_1$ and $\hat{v}_1 = g_1^2$ exactly at $t=1$. Figure~\ref{fig:q2_adam_int} shows how quickly the bias corrections approach 1 (after $\sim\!20$ steps for $\beta_1 = 0.80$ and $\sim\!7000$ steps for $\beta_2 = 0.999$).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_adam_internals.pdf}
+\caption{Q2: Adam bias correction and internal state evolution on Benchmark~B (80 iterations). \emph{Top-left:} bias correction factors $1 - \beta_1^t$ (blue) and $1 - \beta_2^t$ (red). The first-moment correction saturates by $t \approx 20$; the second-moment correction ($\beta_2 = 0.999$) has not yet reached 1 at $t = 80$, meaning the second moment is still being progressively unbiased throughout the run. \emph{Top-right:} effective step magnitude $\|\Delta x_t\|$ --- large initially (due to bias correction of the second moment amplifying the step at early $t$), then decays as the iterate nears the minimum. \emph{Bottom:} raw vs bias-corrected first and second moments. The first moment correction is dramatic at $t = 1$: $\hat{m}_1$ is $5\times$ larger than $m_1$. The second moment correction is even larger early on.}
+\label{fig:q2_adam_int}
 \end{figure}
 
 \subsection{Mini-Batch Stochastic Gradient Descent}
@@ -834,6 +852,15 @@ At the starting point $x_0 = (-1, 1)$: $h_{11} = 2 - 400 + 1200 = 802$, $h_{12} 
 \end{figure}
 
 The dramatic variation of $\kappa$ along the Newton path has an important practical implication: the optimal damping factor $\alpha$ is not constant. When $\kappa$ is large (near start and near $x^\star$), the quadratic model is poorly aligned with the true objective and conservative $\alpha$ is needed. When $\kappa$ is moderate (interior of the valley), the model is more accurate and larger $\alpha$ would be appropriate. This is the motivation for \emph{backtracking line search}, which adaptively selects $\alpha$ at each step via the Armijo condition $f(x_k - \alpha p_k) \leq f(x_k) - c\alpha \nabla f(x_k)^T p_k$ for $c \in (0, 1)$. The fixed $\alpha = 0.22$ used here is a conservative choice tuned for the worst-case (large $\kappa$) encountered near the starting point.
+
+\paragraph{Newton decrement as a stopping criterion.} A principled stopping criterion for Newton's method is the \emph{Newton decrement} $\lambda^2(x) = \nabla f(x)^T H^{-1} \nabla f(x)$, which measures the expected decrease in $f$ from one full Newton step: $f(x) - f(x - p) \approx \lambda^2(x)/2$ where $p = H^{-1}\nabla f(x)$. The stopping criterion $\lambda^2/2 \leq \varepsilon$ guarantees $f(x) - f^\star \leq \varepsilon$ for convex functions. Figure~\ref{fig:q3_newton_quad} shows the Newton decrement converging to machine precision within 10 steps for Benchmark~B (near-quadratic), confirming rapid convergence, while for Rosenbrock it remains large even after 30 damped steps.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_newton_quadratic.pdf}
+\caption{Q3: Newton's method convergence analysis. \emph{Top-left:} error $\|x_k - x^\star\|$ for GD vs Newton on Benchmark~B. Newton reaches machine precision in $\sim\!10$ steps; GD requires 60+ steps. \emph{Top-right:} log-log plot of $\|x_{k+1} - x^\star\|$ vs $\|x_k - x^\star\|$ for Newton on Benchmark~B. The slope $\approx 2$ confirms quadratic convergence (Theorem~\ref{thm:newton}): each iteration roughly squares the error. \emph{Bottom-left:} gradient norm $\|\nabla f(x_k)\|$ comparison; Newton's gradient norm drops superlinearly while GD's decreases linearly. \emph{Bottom-right:} Newton decrement $\lambda^2_k = \nabla f(x_k)^T H_k^{-1} \nabla f(x_k)$ for both benchmarks. Benchmark B reaches $\lambda^2 < 10^{-28}$ (machine precision), confirming exact convergence. Benchmark C's decrement remains $\sim\!0.15$ after 30 iterations, indicating the damped Newton method is still in the global phase where the quadratic approximation does not yet dominate.}
+\label{fig:q3_newton_quad}
+\end{figure}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -1095,7 +1122,14 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 \\
 \end{equation}
 meaning the feasibility error decays as $1/\lambda$. This explains why $\lambda = 4.5$ achieves near-exact feasibility (Table~\ref{tab:q5_final}), while $\lambda = 0.15$ leaves a residual violation.
 
-\textbf{Connection to augmented Lagrangian (ALM):} The pure penalty method can be improved by augmenting with a Lagrange multiplier term: $F_{\lambda,\mu}(x) = f(x) + \mu \cdot \text{violation}(x) + (\lambda/2)\|\text{violation}(x)\|^2$. The ALM avoids the need for $\lambda \to \infty$ by updating the multiplier $\mu$ at each outer iteration (via $\mu^{k+1} = \mu^k + \lambda \cdot \text{violation}(x^\lambda)$), achieving exact feasibility at finite $\lambda$. This is beyond the scope of the current investigation but represents a standard practical improvement~\cite{nocedal2006}.
+\textbf{Connection to augmented Lagrangian (ALM):} The pure penalty method can be improved by augmenting with a Lagrange multiplier term: $F_{\lambda,\mu}(x) = f(x) + \mu \cdot \text{violation}(x) + (\lambda/2)\|\text{violation}(x)\|^2$. The ALM avoids the need for $\lambda \to \infty$ by updating the multiplier $\mu$ at each outer iteration (via $\mu^{k+1} = \mu^k + \lambda \cdot \text{violation}(x^\lambda)$), achieving exact feasibility at finite $\lambda$. Figure~\ref{fig:q5_auglag} empirically compares PGD, penalty, and augmented Lagrangian.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_auglag_comparison.pdf}
+\caption{Q5: Augmented Lagrangian vs penalty vs PGD (100 iterations, infeasible start $(0.2, 4.0)$). \emph{Left:} objective value convergence. ALM (magenta dotted) achieves the constrained minimum $f^\star = 0.724$ with 5 outer iterations of 20 inner steps each; it converges more smoothly than pure penalty. \emph{Centre:} constraint violation on log scale. PGD achieves zero violation immediately; ALM achieves near-zero within 40 iterations at finite $\lambda = 1.0$, while penalty $\lambda = 4.5$ achieves near-zero only by step 80. \emph{Right:} steady-state violation and objective quality as a function of $\lambda$ (200 iterations each). As $\lambda$ increases, violation decreases monotonically (red, left axis); beyond $\lambda \approx 5$ the violation reaches near-zero. The objective quality (blue, right axis) is non-monotone: very large $\lambda$ overstiffens the problem and may converge to a slightly suboptimal point due to step-size limitations.}
+\label{fig:q5_auglag}
+\end{figure}
 
 \paragraph{Stability of penalty GD.} The penalty method introduces an effectively larger Lipschitz constant for the penalised objective: $L_\lambda = L + \lambda \cdot L_g$, where $L_g$ is the constraint gradient Lipschitz constant. For the linear constraint $g(x) = 0.5 - x_1$, $L_g = 1$, so $L_\lambda \approx L + \lambda$. This requires step size $\alpha \leq 1/(L+\lambda)$, explaining why the step size must decrease as $\lambda$ increases (from $\alpha = 0.05$ for $\lambda = 1.8$ to $\alpha = 0.03$ for $\lambda = 4.5$).
 
