@@ -196,11 +196,23 @@ v_k = \beta v_{k-1} + (1-\beta) g_{k-1}^2, \qquad x_k = x_{k-1} - \frac{\alpha_0
 \end{equation}
 The forgetting factor $\beta$ (here 0.9) prevents step sizes from decaying to zero, allowing RMSprop to adapt to recent curvature rather than the entire optimisation history.
 
+\begin{remark}[Adagrad vs.\ RMSprop step-size decay]
+The key difference is the memory horizon. Adagrad's $G_k = \sum_{t=0}^k g_t^2$ grows without bound when gradients are non-zero: if $\|g_t\|_2^2 \geq c > 0$ for all $t$, then $G_{k,i} \geq ck$, so the effective step $\alpha_0/\sqrt{G_{k,i}} \leq \alpha_0/\sqrt{ck} \to 0$. In contrast, RMSprop's EMA $v_k \approx (1-\beta^k)^{-1}(1-\beta)\sum_{t=0}^k \beta^{k-t} g_t^2$ has an effective window of $1/(1-\beta) = 10$ recent iterations (for $\beta = 0.9$). Thus $v_k \approx \overline{g^2}$ (the recent gradient second moment), giving a \emph{stable} effective step $\approx \alpha_0/\sqrt{\overline{g^2}}$ that does not decay to zero. This is why, on Benchmark C, RMSprop's small initial base rate $\alpha_0 = 0.0035$ persists throughout training while Adagrad's (larger $\alpha_0 = 0.45$) eventually decays to a comparable scale.
+\end{remark}
+
 \paragraph{Heavy Ball (Polyak momentum).} The heavy-ball method adds a momentum term to gradient descent:
 \begin{equation}
 z_{k+1} = \beta z_k + \alpha \nabla f(x_k), \qquad x_{k+1} = x_k - z_{k+1}.
 \end{equation}
 On strongly convex quadratics, the optimal parameters are $\alpha^{\star} = \frac{4}{(\sqrt{L}+\sqrt{\mu})^2}$ and $\beta^{\star} = \left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^2$, achieving the optimal convergence rate $\rho^k$ with $\rho = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$, substantially faster than GD's $(1-\mu/L)^k$ when $\kappa \gg 1$.
+
+\begin{remark}[Heavy Ball on Rosenbrock: theory vs.\ practice]
+For Benchmark C, using the local Hessian eigenvalues at the optimum ($L \approx 800$, $\mu \approx 0.4$, $\kappa \approx 2000$), the theoretically optimal Heavy Ball parameters are:
+\begin{equation}
+\beta^{\star} = \left(\frac{\sqrt{2000}-1}{\sqrt{2000}+1}\right)^2 \approx \left(\frac{43.7}{45.7}\right)^2 \approx 0.914, \qquad \alpha^{\star} = \frac{4}{(\sqrt{800}+\sqrt{0.4})^2} \approx \frac{4}{29.5^2} \approx 0.0046,
+\end{equation}
+with optimal rate $\rho = (\sqrt{2000}-1)/(\sqrt{2000}+1) \approx 0.957$ per iteration. The implementation uses $\beta = 0.86$ (vs.\ theoretical 0.91) and $\alpha = 0.0012$ (vs.\ theoretical 0.0046), both more conservative to ensure global stability away from the quadratic approximation region. The sub-optimal $\beta$ still provides a meaningful improvement over GD's rate of $1 - \mu/L = 1 - 0.0005 = 0.9995$ per iteration.
+\end{remark}
 
 \subsection{Algorithm Formulations}
 
@@ -462,6 +474,10 @@ where $\hat{m}_t = m_t/(1-\beta_1^t)$ and $\hat{v}_t = v_t/(1-\beta_2^t)$ are bi
 
 The $\beta_{\max}$ cap prevents the momentum from growing too large in early iterations (when the schedule $\beta_k = (k-1)/(k+2)$ is still small) and ensures stability on non-convex problems.
 
+\begin{remark}[Saturation of the $\beta_k$ schedule]
+The schedule $\beta_k = (k-1)/(k+2)$ grows from 0 at $k=1$ and asymptotes to 1. Once $\beta_k \geq \beta_{\max}$ (which occurs at $k^{\star} = 3\beta_{\max}/(1-\beta_{\max}) + 1$), the schedule is clamped. For $\beta_{\max} = 0.90$, saturation occurs at $k^{\star} = 28$. After saturation, the algorithm reduces to \emph{Heavy Ball with a fixed momentum $\beta_{\max}$}, losing the theoretical $O(1/k^2)$ convergence guarantee and transitioning to a linear convergence rate governed by $\beta_{\max}$ and $\alpha$. This explains the log-scale convergence plot in the Conclusions (Figure~\ref{fig:qall_rates}): Nesterov shows a steep initial slope ($\approx O(1/k^2)$ regime) that transitions to a flatter slope consistent with linear convergence after $k \approx 28$.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
 \label{alg:adam}
@@ -608,6 +624,19 @@ Polyak with exact $f^{\star}$ remains superior on the Rosenbrock, since the Poly
 Adam's per-coordinate step sizes are governed by $\hat{v}_{t,i}^{-1/2}$, which estimates the reciprocal of the local gradient scale per coordinate. On the Rosenbrock, the dominant challenge is the \emph{correlation} between coordinates: progress requires navigating along the parabolic valley $x_2 \approx x_1^2$, which couples $x_1$ and $x_2$ in a nonlinear way. Adam's coordinate-wise scaling cannot capture this correlation (the Hessian has large off-diagonal terms $-400x_1$ near the valley), so it cannot efficiently align steps with the valley direction. Nesterov's momentum, by contrast, accumulates velocity in the \emph{joint} descent direction via $z_k$, which naturally aligns with the valley tangent over time.
 
 Adam, while popular in deep learning practice due to its robustness across diverse architectures and stochastic gradient settings, underperforms Nesterov on these smooth deterministic benchmarks. Its adaptive scaling is most beneficial when different model parameters have vastly different gradient scales (e.g., embeddings vs.\ attention weights in transformers), not when the challenge is coupled ill-conditioning.
+
+\paragraph{SGD convergence rate and noise floor.}
+For a $\mu$-strongly convex, $L$-smooth objective $f$ with mini-batch gradient noise variance $\sigma^2_b = \sigma^2/b$ (variance of batch-averaged gradient), SGD with constant step size $\alpha$ satisfies:
+\begin{equation}
+\mathbb{E}[f(x_k)] - f^{\star} \leq (1 - \alpha\mu)^k \bigl(f(x_0) - f^{\star}\bigr) + \frac{\alpha L \sigma^2_b}{2\mu}.
+\label{eq:sgd_rate}
+\end{equation}
+The first term decays geometrically (same as GD) and the second is the \emph{noise floor}: $f_{\text{floor}} = \alpha L \sigma^2_b / (2\mu)$. Setting $\alpha = O(1/(L\sqrt{k}))$ (decaying schedule) eliminates the noise floor, yielding the classical $O(\sigma^2/(b\sqrt{k}))$ rate for convex $f$. Three consequences are visible in the experiment:
+\begin{enumerate}[nosep]
+\item \textbf{Smaller batch $\to$ higher noise floor}: the noise floor for $b = 5$ is $8\times$ higher than $b = 40$, causing the $b = 5$ curves to level off earlier.
+\item \textbf{Higher noise $\to$ higher minimum}: with $\sigma = 6$, the irreducible noise floor $f^{\star}(\sigma) \approx \sigma^2/2 \approx 18$ dominates, independent of batch size.
+\item \textbf{Batch size $b$ vs.\ gradient updates per epoch}: smaller $b$ makes $m/b$ updates per epoch, and each update costs $O(b)$ operations (total: $O(m)$ per epoch regardless of $b$). The noise floor trades off with frequency of updates; the optimal batch size for a \emph{time budget} is $b^{\star} \approx \sqrt{m}$ in many practical settings.
+\end{enumerate}
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -792,7 +821,13 @@ requiring $d + 1$ function evaluations for an $n$-dimensional gradient (one eval
 \begin{equation}
 \left| \frac{f(x + \delta e_i) - f(x)}{\delta} - \frac{\partial f}{\partial x_i}(x) \right| \leq \underbrace{\frac{\delta}{2}\left|\frac{\partial^2 f}{\partial x_i^2}(x)\right|}_{\text{truncation error}} + \underbrace{\frac{2\varepsilon_{\text{machine}}}{\delta}}_{\text{round-off error}}.
 \end{equation}
-Minimising the total error over $\delta$ gives the optimal step $\delta^{\star} \sim \sqrt{\varepsilon_{\text{machine}}} \approx 1.5 \times 10^{-8}$. The assignment tests $\delta = 0.05$ (near-optimal for this problem) and $\delta = 0.8$ (too large, dominated by truncation error).
+Minimising the total error over $\delta$ gives the machine-precision optimal step $\delta^{\star} \sim \sqrt{\varepsilon_{\text{machine}}} \approx 1.5 \times 10^{-8}$, achieving per-coordinate error $\approx 3 \times 10^{-8}$.
+
+\begin{remark}[Optimisation-adequate vs.\ approximation-optimal $\delta$]
+The machine-precision optimal $\delta^{\star} \approx 1.5\times 10^{-8}$ minimises the absolute approximation error $|\hat{g}_i - \partial_i f|$. However, for \emph{optimisation}, what matters is whether the approximate gradient direction is preserved: if $\|\nabla f(x)\|$ is much larger than the approximation error, the direction is unaffected. On Benchmark B, $\|\nabla f(x)\| \sim O(1)$ at typical iterates, so a truncation error of $O(\delta) = O(0.05) \approx 0.3$ per coordinate is tolerable---the gradient direction is still reliable. In contrast, at $\delta = 0.8$, the truncation error $O(0.8 \times 10/2) = O(4)$ can exceed the true gradient magnitude, corrupting the descent direction. Thus $\delta = 0.05$ is \emph{optimisation-adequate} (not approximation-optimal) for this problem, while $\delta = 0.8$ causes visible convergence degradation.
+\end{remark}
+
+The assignment tests $\delta = 0.05$ (optimisation-adequate: gradient direction preserved since $\|\nabla f\| \gg 0.3$) and $\delta = 0.8$ (too large: truncation error can exceed $\|\nabla f\|$).
 
 Central differences $[f(x + \delta e_i) - f(x - \delta e_i)]/(2\delta)$ reduce the truncation error to $O(\delta^2)$ with optimal $\delta^{\star} \sim \varepsilon_{\text{machine}}^{1/3} \approx 10^{-5.3}$, at the cost of $2d$ function evaluations per gradient. For this assignment, forward differences are used.
 
@@ -1117,6 +1152,13 @@ Frank--Wolfe exhibits a characteristic $O(1/k)$ convergence rate: the duality ga
 
 \paragraph{Boundary optimum.}
 For objectives with unconstrained minimum outside $\mathcal{X}$, the gradient at the constrained solution points into the feasible set interior. The LP oracle then consistently selects the vertex near the constrained solution, driving iterates to the boundary. Frank--Wolfe is ideally suited for this case: it approaches the boundary naturally without a projection step.
+
+\paragraph{Away-step Frank--Wolfe and linear convergence.}
+Standard Frank--Wolfe is $O(1/k)$ even for strongly convex objectives, because the LP oracle can only \emph{move towards} a new vertex, never \emph{away} from an existing one. The \textbf{away-step} variant (Lacoste-Julien \& Jaggi, 2015) adds an ``away direction'' $d_k^{\text{away}} = x_k - s_k^{\star}$ where $s_k^{\star} = \arg\max_{s \in S_k} \nabla f(x_k)^T s$ is the worst active vertex in the current representation. The combined Frank--Wolfe step then chooses the better descent direction:
+\begin{equation}
+x_{k+1} = x_k + \gamma_k \begin{cases} (z_k - x_k) & \text{(FW step: towards vertex)} \\ (x_k - s_k^{\star}) & \text{(away step: away from vertex)} \end{cases}
+\end{equation}
+Away-step FW achieves \emph{linear convergence} $(1 - \mu/L\, \delta_F^2)^k$ for $\mu$-strongly convex $f$ over a polytope with pyramidal width $\delta_F > 0$, matching projected GD's rate. The zig-zag phenomenon is eliminated because away steps remove mass from bad vertices, not just adding mass to good ones. The main cost is maintaining the active set $S_k$ (current representation as convex combination of vertices), which is manageable for box constraints where $|S_k| \leq 4$ in $d = 2$ dimensions.
 
 \paragraph{Comparison with projected gradient descent.}
 Projected GD requires a projection oracle but can exploit any gradient-based acceleration (Nesterov, Adam, etc.) and achieves linear convergence on strongly convex objectives. Frank--Wolfe replaces projection with an LP oracle and has an inherent $O(1/k)$ rate (even on strongly convex objectives, unless ``away-step'' or ``pairwise'' variants are used). The practical choice depends on:
