@@ -569,7 +569,7 @@ The results on Rosenbrock ($f = 0.479$ for Nesterov vs.\ $1.579$ for Adam) revea
 This distinction has a practical implication: in deep learning with batch normalisation (which whitens layer inputs, making the effective Hessian more diagonal), Adam is typically preferred. For problems with strong coordinate coupling or known geometric structure, Nesterov or L-BFGS (quasi-Newton) methods are more appropriate.
 
 \begin{remark}[Adam convergence subtleties]
-Standard Adam does not always converge to the global optimum even on simple convex problems. Reddi et al.\ (2018) showed that Adam can diverge on certain online convex optimisation problems due to non-monotone effective step sizes: a large gradient at step $t$ inflates $v_t$, reducing the effective step at step $t+1$ even if subsequent gradients are small. The fix, AMSGrad, replaces $\hat{v}_t$ with a monotonically non-decreasing maximum $\hat{v}_t^{\max} = \max(\hat{v}_{t-1}^{\max}, \hat{v}_t)$, restoring convergence guarantees. In the deterministic full-batch setting used here, Adam's performance is reliable because the gradient signal is consistent; stochastic training (where this issue manifests) is not tested. The empirical success of Adam in practice (especially for neural network training) is attributed to its ability to adapt to gradient scale differences across layers rather than its theoretical convergence rate.
+Standard Adam does not always converge to the global optimum even on simple convex problems. Reddi et al.~\cite{reddi2018amsgrad} showed that Adam can diverge on certain online convex optimisation problems due to non-monotone effective step sizes: a large gradient at step $t$ inflates $v_t$, reducing the effective step at step $t+1$ even if subsequent gradients are small. The fix, AMSGrad, replaces $\hat{v}_t$ with a monotonically non-decreasing maximum $\hat{v}_t^{\max} = \max(\hat{v}_{t-1}^{\max}, \hat{v}_t)$, restoring convergence guarantees. In the deterministic full-batch setting used here, Adam's performance is reliable because the gradient signal is consistent; stochastic training (where this issue manifests) is not tested. The empirical success of Adam in practice (especially for neural network training) is attributed to its ability to adapt to gradient scale differences across layers rather than its theoretical convergence rate.
 \end{remark}
 
 \textbf{Key finding from Question 2:} On well-conditioned problems (A, B), all three methods (GD, Nesterov, Adam) converge to the same optimal value $f^\star$ within 150 iterations --- the moderate condition number $\kappa \leq 7$ is not a bottleneck. The significant differentiator is Benchmark C ($\kappa \approx 2504$): Nesterov's accumulated momentum along the consistent Rosenbrock valley direction produces $f = 0.479$, a $\mathbf{7\times}$ improvement over GD's $3.388$, while Adam's coordinate-wise scaling (effective on diagonal Hessians) provides only a $2\times$ improvement ($f = 1.578$). This quantifies the principle that \emph{momentum methods outperform adaptive methods on strongly coupled, ill-conditioned objectives}.
@@ -1393,20 +1393,32 @@ Estimating $\kappa$ can be done cheaply via the ratio of successive gradient mag
 Several limitations of the present study should be acknowledged:
 
 \begin{enumerate}[nosep]
-  \item \textbf{Low dimensionality:} All benchmarks use $d = 2$. In high dimensions ($d \geq 100$), the relative performance of methods changes significantly: Newton's $O(d^3)$ cost becomes prohibitive, Nesterov random search's $O(d/\varepsilon)$ overhead grows, and Adam's coordinate-wise scaling becomes more beneficial.
+  \item \textbf{Low dimensionality:} All benchmarks use $d = 2$. In high dimensions ($d \geq 100$), the relative performance of methods changes significantly: Newton's $O(d^3)$ cost becomes prohibitive, Nesterov random search's $O(d/\varepsilon)$ overhead grows, and Adam's coordinate-wise scaling becomes more beneficial. Methods like L-BFGS, which approximate the inverse Hessian using $m$-step history (typical $m = 5$--$20$), should be preferred over exact Newton for $d \gg 100$.
 
-  \item \textbf{Fixed iteration budgets:} Results are compared after fixed iteration counts (80--220), not after equal computational effort. Some methods (Newton, with $d=2$) have lower per-step cost than others (FD GD), and wall-clock comparisons would yield different conclusions.
+  \item \textbf{Fixed iteration budgets:} Results are compared after fixed iteration counts (80--220), not after equal computational effort. Some methods (Newton, with $d=2$) have lower per-step cost than others (FD GD, which requires $2d$ function evaluations per gradient), and wall-clock comparisons would yield different conclusions. At $d = 2$, FD overhead is negligible, but at $d = 1000$ each gradient estimate costs $2000$ function calls vs.\ one for exact GD.
 
-  \item \textbf{Hyperparameter sensitivity:} The hyperparameters reported (Tables~\ref{tab:q1_params}--\ref{tab:q3_params}) were tuned manually for each benchmark. Automated methods (e.g., line search, learning rate schedules, Bayesian optimisation over hyperparameters) could potentially improve all results.
+  \item \textbf{Hyperparameter sensitivity:} The hyperparameters reported (Tables~\ref{tab:q1_params}--\ref{tab:q3_params}) were tuned manually for each benchmark. Automated methods (e.g., Armijo backtracking line search, cosine annealing schedules, Bayesian optimisation over hyperparameters) could potentially improve all results without manual effort.
 
-  \item \textbf{Convergence to local vs.\ global minima:} Rosenbrock is unimodal; the experiments do not test global optimisation. For multimodal problems, derivative-free methods (Nelder--Mead, genetic algorithms, simulated annealing) or stochastic methods may be preferred for their ability to escape local minima.
+  \item \textbf{Convergence to local vs.\ global minima:} Rosenbrock is unimodal; the experiments do not test global optimisation. For multimodal problems, derivative-free methods (Nelder--Mead, genetic algorithms, simulated annealing) or stochastic methods may be preferred for their ability to escape local minima. Basin-hopping strategies combining local Newton steps with random restarts are practical alternatives.
 
-  \item \textbf{Stochastic Adam:} The Adam experiments use full-batch gradients. Adam's advantage over Nesterov is most pronounced in the \emph{stochastic} setting (mini-batch training), where coordinate-wise variance reduction is more impactful.
+  \item \textbf{Stochastic Adam:} The Adam experiments use full-batch gradients. Adam's advantage over Nesterov is most pronounced in the \emph{stochastic} setting (mini-batch training), where coordinate-wise variance reduction is more impactful. In this report's stochastic setting (Q1 mini-batch SGD), we observed a residual noise floor caused by variance in the mini-batch gradient estimator; variance-reduction methods such as SVRG~\cite{johnson2013accelerating} and SAGA~\cite{defazio2014saga} eliminate this floor by maintaining full-gradient snapshots, achieving linear convergence for finite-sum problems at $O(n + \kappa)$ gradient evaluations per epoch rather than $O(n\kappa)$ for vanilla SGD.
+
+  \item \textbf{Frank--Wolfe and non-vertex optima:} The Frank--Wolfe algorithm (Q6) converges at $O(1/k)$ only when the optimum $x^\star$ lies at a \emph{vertex} of the feasible set. For Benchmark B on the box $[0.5, 5] \times [-5, 10]$, the unconstrained minimiser $(0.714, 2)$ is in the interior and the constrained minimiser $(0.714, 2)$ lies on the interior side of the $x_1 = 0.5$ face. However, for Benchmark C with $f(x) = x_1^2 + x_2^2$ and the same box, the minimum is at $(0.5, 0)$, where $x_2^\star = 0$ is not a vertex: the LP oracle alternates between $x_2 = -5$ and $x_2 = 10$, causing oscillation and convergence to only $f = 0.364$ vs.\ $f^\star = 0.25$. Away-step Frank--Wolfe~\cite{lacoste2015global} resolves this by including steps that explicitly move away from ``bad'' vertices, achieving a linear convergence rate for strongly convex objectives.
+
+  \item \textbf{Finite difference accuracy:} The forward-difference approximation used in Q4 suffers from the precision--truncation trade-off: large $h$ introduces $O(h)$ truncation error while small $h$ amplifies floating-point cancellation error (scaling as $O(\varepsilon_{\rm mach}/h)$), yielding optimal $h^\star \sim \sqrt{\varepsilon_{\rm mach}} \approx 10^{-8}$. The complex-step method---evaluating $\operatorname{Im}[f(x + ih)] / h$ for purely imaginary perturbation $h \approx 10^{-50}$---achieves machine-precision accuracy without cancellation, providing a practical drop-in replacement for derivative-free workflows where the function can be evaluated in complex arithmetic.
 \end{enumerate}
 
-Future directions include: (a) extending to constrained Newton methods (e.g., interior point) for Q5, (b) comparing augmented Lagrangian vs.\ penalty in Q5, (c) implementing the optimal Frank--Wolfe line search (away-step Frank--Wolfe) for faster convergence, and (d) evaluating these methods on a real-world machine learning dataset to assess practical performance beyond toy benchmarks.
+Future directions include:
+\begin{enumerate}[label=(\alph*), nosep]
+  \item Constrained Newton methods (e.g., primal-dual interior point) for Q5, avoiding the penalty parameter tuning issue entirely.
+  \item Comparing augmented Lagrangian~\cite{bertsekas1996constrained} vs.\ penalty methods in Q5 across a range of constraint violation tolerances.
+  \item Implementing away-step Frank--Wolfe~\cite{lacoste2015global} for Benchmark C in Q6, verifying that linear convergence is restored.
+  \item Evaluating SVRG or SAGA on the linear regression benchmark (A) with increasing mini-batch fraction to confirm the noise-floor elimination at finite $n$.
+  \item Extending to real-world datasets (e.g., UCI regression, MNIST logistic regression) to assess whether condition-number-based algorithm selection generalises beyond toy problems.
+  \item Implementing adaptive-restart Nesterov NAG~\cite{odonoghue2015adaptive} to validate whether the $O(1/k^2)$ guarantee translates to faster empirical convergence on ill-conditioned objectives without manual $\beta_{\max}$ tuning.
+\end{enumerate}
 
-This study confirms that algorithm selection is not merely a technical detail but a fundamental aspect of applied optimisation: the correct choice can reduce computation by orders of magnitude (Newton's $1$ vs.\ GD's $80$ iterations on Benchmark A) while an incorrect choice (Polyak with misspecified $f^\star$) can cause complete failure.
+This study confirms that algorithm selection is not merely a technical detail but a fundamental aspect of applied optimisation: the correct choice can reduce computation by orders of magnitude (Newton's $1$ vs.\ GD's $80$ iterations on Benchmark A) while an incorrect choice (Polyak with misspecified $f^\star$, or Frank--Wolfe on an interior-constrained problem) can cause complete failure or slow oscillation. The condition number $\kappa$, availability of gradient/Hessian information, and constraint geometry together determine which method achieves the best convergence--cost trade-off.
 
 % ============================================================
 \newpage
@@ -1555,5 +1567,99 @@ def frank_wolfe(grad_fn, loss_fn, x0, bounds, beta, n_iters):
         f_hist.append(loss_fn(x))
     return np.array(x_hist), np.array(f_hist), np.array(z_hist)
 \end{lstlisting}
+
+% ============================================================
+\newpage
+\begin{thebibliography}{99}
+\bibitem{polyak1969}
+  B.T.\ Polyak,
+  \textit{Minimization of unsmooth functionals},
+  USSR Computational Mathematics and Mathematical Physics, 9(3):14--29, 1969.
+
+\bibitem{duchi2011adagrad}
+  J.\ Duchi, E.\ Hazan, Y.\ Singer,
+  \textit{Adaptive subgradient methods for online learning and stochastic optimization},
+  Journal of Machine Learning Research, 12:2121--2159, 2011.
+
+\bibitem{tieleman2012rmsprop}
+  T.\ Tieleman, G.\ Hinton,
+  \textit{Lecture 6.5 -- RMSprop: Divide the gradient by a running average of its recent magnitude},
+  COURSERA: Neural Networks for Machine Learning, 2012.
+
+\bibitem{polyak1964heavyball}
+  B.T.\ Polyak,
+  \textit{Some methods of speeding up the convergence of iteration methods},
+  USSR Computational Mathematics and Mathematical Physics, 4(5):1--17, 1964.
+
+\bibitem{nesterov1983}
+  Y.\ Nesterov,
+  \textit{A method for solving the convex programming problem with convergence rate $O(1/k^2)$},
+  Soviet Mathematics Doklady, 27(2):372--376, 1983.
+
+\bibitem{kingma2014adam}
+  D.P.\ Kingma, J.\ Ba,
+  \textit{Adam: A method for stochastic optimization},
+  International Conference on Learning Representations (ICLR), 2015.
+
+\bibitem{reddi2018amsgrad}
+  S.J.\ Reddi, S.\ Kale, S.\ Kumar,
+  \textit{On the convergence of Adam and beyond},
+  International Conference on Learning Representations (ICLR), 2018.
+
+\bibitem{nesterov2017}
+  Y.\ Nesterov, V.\ Spokoiny,
+  \textit{Random gradient-free minimization of convex functions},
+  Foundations of Computational Mathematics, 17(2):527--566, 2017.
+
+\bibitem{nelder1965}
+  J.A.\ Nelder, R.\ Mead,
+  \textit{A simplex method for function minimization},
+  The Computer Journal, 7(4):308--313, 1965.
+
+\bibitem{frank1956}
+  M.\ Frank, P.\ Wolfe,
+  \textit{An algorithm for quadratic programming},
+  Naval Research Logistics Quarterly, 3(1--2):95--110, 1956.
+
+\bibitem{lacoste2015global}
+  S.\ Lacoste-Julien, M.\ Jaggi,
+  \textit{On the global linear convergence of Frank-Wolfe optimization variants},
+  Advances in Neural Information Processing Systems (NeurIPS), 28, 2015.
+
+\bibitem{johnson2013accelerating}
+  R.\ Johnson, T.\ Zhang,
+  \textit{Accelerating stochastic gradient descent using predictive variance reduction},
+  Advances in Neural Information Processing Systems (NeurIPS), 26:315--323, 2013.
+
+\bibitem{defazio2014saga}
+  A.\ Defazio, F.\ Bach, S.\ Lacoste-Julien,
+  \textit{SAGA: A fast incremental gradient method with support for non-strongly convex composite objectives},
+  Advances in Neural Information Processing Systems (NeurIPS), 27:1646--1654, 2014.
+
+\bibitem{bertsekas1996constrained}
+  D.P.\ Bertsekas,
+  \textit{Constrained Optimization and Lagrange Multiplier Methods},
+  Athena Scientific, 1996.
+
+\bibitem{odonoghue2015adaptive}
+  B.\ O'Donoghue, E.\ Cand\`es,
+  \textit{Adaptive restart for accelerated gradient schemes},
+  Foundations of Computational Mathematics, 15(3):715--732, 2015.
+
+\bibitem{lyness1967}
+  J.N.\ Lyness, C.B.\ Moler,
+  \textit{Numerical differentiation of analytic functions},
+  SIAM Journal on Numerical Analysis, 4(2):202--210, 1967.
+
+\bibitem{nocedal2006}
+  J.\ Nocedal, S.\ Wright,
+  \textit{Numerical Optimization},
+  2nd ed., Springer, 2006.
+
+\bibitem{boyd2004convex}
+  S.\ Boyd, L.\ Vandenberghe,
+  \textit{Convex Optimization},
+  Cambridge University Press, 2004.
+\end{thebibliography}
 
 \end{document}
