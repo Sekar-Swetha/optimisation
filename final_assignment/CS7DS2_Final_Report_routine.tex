@@ -56,7 +56,9 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a comprehensive comparative study of optimisation algorithms applied to three benchmark problems: a linear regression quadratic loss (Benchmark A), a toy neural network loss with sinusoidal perturbation (Benchmark B), and the Rosenbrock function (Benchmark C). Six categories of methods are investigated: (1) adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball), (2) momentum-based and stochastic methods (Nesterov acceleration, Adam, mini-batch SGD), (3) Newton's method with local second-order approximations, (4) derivative-free approaches (finite differences, Nesterov random search, Nelder--Mead, grid search), (5) constrained optimisation via projected gradient descent and penalty methods, and (6) the Frank--Wolfe conditional gradient algorithm for linear-constrained problems. Each method is evaluated in terms of convergence speed, trajectory behaviour, stability, and computational trade-offs. Key findings include: the Polyak step size diverges when $f^\star$ is misspecified; Newton's method converges in a single step on quadratic objectives; Nesterov acceleration achieves the theoretically optimal $O(1/k^2)$ rate on convex problems; and projected gradient descent enforces feasibility as a hard constraint from the first iteration, unlike penalty methods which satisfy constraints only asymptotically.
+This report presents a comprehensive comparative study of optimisation algorithms applied to three benchmark problems: a linear regression quadratic loss (Benchmark A, condition number $\kappa \approx 1$), a toy neural network loss with sinusoidal perturbation (Benchmark B, $\kappa \approx 7$), and the Rosenbrock function (Benchmark C, $\kappa \approx 2504$). Twelve algorithms across six categories are investigated and evaluated on convergence speed, trajectory behaviour, stability, and computational trade-offs: (1) adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball), (2) momentum-based and stochastic methods (Nesterov acceleration, Adam, mini-batch SGD), (3) Newton's method with local second-order approximations, (4) derivative-free approaches (finite differences, Nesterov random search, Nelder--Mead, grid search), (5) constrained optimisation via projected gradient descent and penalty methods, and (6) the Frank--Wolfe conditional gradient algorithm.
+
+Key quantitative findings: Newton's method converges in a single step on the quadratic Benchmark A (vs.\ 80 GD iterations for comparable accuracy); Nesterov acceleration reduces the Rosenbrock objective from $3.39$ (GD) to $0.48$ in 150 iterations ($7\times$ improvement); the Polyak step size with misspecified $f^\star = 0$ diverges to $f \approx 4.77$ on Benchmark A while achieving the best convergence ($f = 0.024$) when $f^\star$ is exact on Benchmark C; finite-difference gradients with $\delta = 0.05$ closely track exact GD while $\delta = 0.8$ (beyond the optimal $\delta \approx \sqrt{\varepsilon_{\rm mach}} \approx 10^{-8}$) fails completely; and projected gradient descent enforces feasibility from the first iteration whereas penalty methods require large $\lambda$ (with consequent ill-conditioning) for comparable constraint satisfaction.
 \end{abstract}
 
 \tableofcontents
@@ -132,11 +134,17 @@ Throughout this report, $\nabla f(x)$ denotes the gradient and $\nabla^2 f(x)$ t
 
 \subsection{Algorithm Formulations}
 
-Four adaptive step-size methods are compared against a constant step-size gradient descent (GD) baseline across all three benchmarks for 120 iterations. Recall that for a $\mu$-strongly convex, $L$-smooth function, GD with optimal step $\alpha = 2/(\mu + L)$ converges at linear rate:
+Four adaptive step-size methods are compared against a constant step-size gradient descent (GD) baseline across all three benchmarks for 120 iterations.
+
+\begin{proposition}[GD convergence for strongly convex functions]
+Let $f$ be $\mu$-strongly convex and $L$-smooth ($\|\nabla^2 f(x)\| \leq L$ everywhere). Then GD with step size $\alpha \in (0, 2/(L+\mu))$ satisfies:
 \begin{equation}
-  \|x_k - x^\star\|^2 \leq \left(\frac{\kappa - 1}{\kappa + 1}\right)^{2k} \|x_0 - x^\star\|^2, \quad \kappa = L/\mu.
+  \|x_k - x^\star\|^2 \leq \left(\frac{\kappa - 1}{\kappa + 1}\right)^{2k} \|x_0 - x^\star\|^2, \quad \kappa = L/\mu,
 \end{equation}
-For Benchmark A ($\kappa \approx 1$) the rate is near-zero: GD converges very fast. For Benchmark C ($\kappa \approx 2504$) the rate approaches 1: GD barely moves per step. Adaptive step-size methods aim to overcome this bottleneck.
+achieved at the optimal step $\alpha^\star = 2/(\mu + L)$. The stability condition $\alpha < 2/L$ is necessary: larger steps cause divergence.
+\end{proposition}
+
+For Benchmark A ($\kappa \approx 1$), the rate $((\kappa-1)/(\kappa+1))^{2k} \approx 0$ for all $k \geq 1$: GD converges in very few iterations regardless of step size. For Benchmark C ($\kappa \approx 2504$), the rate is $\approx (1 - 8 \times 10^{-4})^k$: requiring $\approx 8650$ iterations to reduce error by $1/e$. This explains why all first-order methods struggle on Rosenbrock. Adaptive step-size methods aim to overcome this bottleneck by using curvature information to implicitly precompute an approximation to $H^{-1}$.
 
 \begin{algorithm}[H]
 \caption{Polyak Step Size}
@@ -669,9 +677,15 @@ The fundamental advantage of Newton's method is \emph{affine invariance}: the Ne
 \paragraph{Newton Decrement.}
 A principled stopping criterion for Newton's method is the \emph{Newton decrement}:
 \begin{equation}
-  \lambda(x) = \sqrt{\nabla f(x)^T H(x)^{-1} \nabla f(x)},
+  \lambda(x) = \sqrt{\nabla f(x)^T \bigl[\nabla^2 f(x)\bigr]^{-1} \nabla f(x)}.
 \end{equation}
-which satisfies $f(x) - f(x - H^{-1}\nabla f) \leq \lambda(x)^2/2$ and $f(x) - f^\star \leq \lambda(x)^2/2$ (for strongly convex $f$). When $\lambda(x)^2/2 < \varepsilon$, one can stop with an $\varepsilon$-optimal solution guarantee. This self-certifying property is a significant practical advantage over GD, which requires knowledge of $L$ and $\mu$ to estimate the convergence gap.
+The Newton decrement satisfies:
+\begin{itemize}[nosep]
+  \item $f(x) - f(x - [\nabla^2 f(x)]^{-1}\nabla f(x)) \approx \lambda(x)^2/2$ (expected decrease of full Newton step);
+  \item For self-concordant functions: $f(x) - f^\star \leq \lambda(x)^2/2 - \ln(1-\lambda(x)^2/2)$ (gap upper bound);
+  \item For $\mu$-strongly convex $f$: $f(x) - f^\star \leq \lambda(x)^2/(2\mu)$.
+\end{itemize}
+When $\lambda(x)^2 < 2\varepsilon$, one can stop with an $\varepsilon$-suboptimality guarantee. This \emph{self-certifying} property is a key advantage over GD, which requires knowledge of global $L$ and $\mu$ to estimate when to stop.
 
 \paragraph{Cost comparison.}
 Newton pays $O(d^2)$ for Hessian construction and $O(d^3)$ for the linear solve per iteration, making it impractical for large $d$ (e.g., deep neural networks with $d \sim 10^8$). Quasi-Newton methods such as L-BFGS maintain an approximate $H^{-1}$ via rank-2 BFGS updates, achieving super-linear convergence at $O(d)$ storage per step and $O(d^2)$ total, representing a practical middle ground between GD and full Newton.
@@ -742,7 +756,13 @@ Nesterov RS & 0.025 & 0.08 & 220 & 2 \\
 \end{algorithmic}
 \end{algorithm}
 
-The gradient estimator $\hat{g}_k$ is an unbiased estimate of $\nabla f_\delta(x_k)$ where $f_\delta(x) = \mathbb{E}_{u \sim \text{Unif}(\mathcal{S}^{d-1})}[f(x+\delta u)]$ is the randomised smoothing of $f$. Crucially, this estimator requires only \textbf{two} function evaluations per iteration regardless of the dimension $d$, in contrast to finite differences which require $d+1$ evaluations. This makes Nesterov random search \emph{dimension-free} in oracle complexity per step, at the cost of higher variance: each step only moves in a single random direction rather than along the full gradient.
+The gradient estimator $\hat{g}_k$ is an unbiased estimate of $\nabla f_\delta(x_k)$ where $f_\delta(x) = \mathbb{E}_{u \sim \text{Unif}(\mathcal{S}^{d-1})}[f(x+\delta u)]$ is the Gaussian-smoothed surrogate. Specifically:
+\begin{equation}
+  \mathbb{E}[\hat{g}_k] = \frac{d}{\delta}\,\mathbb{E}_u[f(x+\delta u) u]  = \nabla f_\delta(x_k).
+\end{equation}
+Crucially, this estimator requires only \textbf{two} function evaluations per iteration regardless of $d$, in contrast to forward FD which requires $d+1$. This makes Nesterov random search \emph{dimension-free} in per-step oracle cost.
+
+The price is \emph{high variance}: the estimator uses a single random direction, so $\mathrm{Var}[\hat{g}_k] \sim d \|\nabla f(x_k)\|^2 / \delta^2$ (grows with $d$). Consequently, for smooth convex $f$, the zeroth-order oracle complexity is $O(d/\varepsilon)$ function evaluations to achieve $\varepsilon$-accuracy, compared to $O(1/\varepsilon)$ for first-order methods (gradient descent). The factor of $d$ is the unavoidable \emph{dimension overhead} of not using gradient information.
 
 \subsubsection{Results}
 
@@ -856,7 +876,21 @@ Since $x_1^\star \approx 0.582 > 0.5$, complementary slackness forces $\mu^\star
 \end{algorithmic}
 \end{algorithm}
 
-The projection onto $\{x_1 \geq 0.5\}$ is the element-wise operation $\Pi_{\mathcal{F}}(z)_1 = \max(0.5, z_1)$, a $O(1)$ operation. For convex constraint sets, PGD has convergence guarantees analogous to GD: $O(1/k)$ for general convex $f$, and linear convergence for strongly convex $f$.
+The projection onto $\{x_1 \geq 0.5\}$ is the element-wise operation $\Pi_{\mathcal{F}}(z)_1 = \max(0.5, z_1)$, a $O(1)$ operation.
+
+\begin{theorem}[Projected Gradient Descent convergence]
+Let $f$ be $\mu$-strongly convex and $L$-smooth over a closed convex feasible set $\mathcal{F}$. PGD with step size $\alpha \in (0, 1/L]$ satisfies:
+\begin{equation}
+  \|x_k - x^\star\|^2 \leq (1 - \alpha\mu)^k \|x_0 - x^\star\|^2.
+\end{equation}
+For $L$-smooth convex $f$ (without strong convexity), PGD converges at rate $O(L\|x_0-x^\star\|^2/k)$.
+\end{theorem}
+
+The key insight is that the projection step does not increase the distance to any feasible point, including $x^\star$:
+\begin{equation}
+  \|\Pi_\mathcal{F}(z) - x^\star\|^2 \leq \|z - x^\star\|^2 \quad \forall x^\star \in \mathcal{F},
+\end{equation}
+a consequence of the Hilbert projection theorem (non-expansivity of orthogonal projection onto convex sets). This non-expansivity is what allows the standard GD convergence proof to carry through with projection.
 
 \begin{algorithm}[H]
 \caption{Penalty Method (Gradient Descent on Penalised Objective)}
@@ -930,7 +964,18 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Hard feasibility 
   \item Small $\lambda$: fast convergence but persistent violation --- the unconstrained optimum of $F_\lambda$ may be infeasible.
   \item Large $\lambda$: near-exact feasibility but severe ill-conditioning of $F_\lambda$ requires small step sizes (stability: $\alpha \propto 1/(\lambda + L)$).
 \end{itemize}
-An \emph{augmented Lagrangian} method (not implemented here) combines the benefits: a moderate $\lambda$ is combined with adaptive multiplier updates, achieving both feasibility and well-conditioning.
+An \emph{augmented Lagrangian} method (not implemented here) combines the benefits by augmenting the Lagrangian with a quadratic penalty:
+\begin{equation}
+  \mathcal{L}_\rho(x, \mu) = f(x) + \mu(x_1 - 0.5) + \frac{\rho}{2}\max(0, 0.5 - x_1)^2,
+\end{equation}
+and updating the multiplier $\mu \leftarrow \mu - \rho(x_1 - 0.5)$ after each step. This allows a moderate fixed $\rho$ (avoiding ill-conditioning) while the multiplier $\mu$ adjusts to enforce feasibility asymptotically, combining the simplicity of penalty methods with the theoretical guarantees of dual methods.
+
+\paragraph{Condition number analysis.}
+The condition number of the penalised Hessian $\nabla^2 F_\lambda$ relates to $\lambda$ as:
+\begin{equation}
+  \kappa(\nabla^2 F_\lambda) \approx \frac{L + \lambda}{\mu} \quad \text{(in the infeasible region)},
+\end{equation}
+where $L \approx 10$ and $\mu \approx 1.45$ for Benchmark B. At $\lambda = 4.5$: $\kappa \approx 14.5/1.45 \approx 10$; at $\lambda = 1.8$: $\kappa \approx 8.2$. Both are manageable, but for very large $\lambda$ (e.g., $\lambda = 100$), $\kappa \approx 76$, requiring $\alpha \approx 0.0015$ for stability, making convergence very slow. This quantifies the ill-conditioning trade-off of penalty methods.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
