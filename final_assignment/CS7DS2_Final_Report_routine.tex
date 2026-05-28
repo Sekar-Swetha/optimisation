@@ -877,6 +877,57 @@ to the irreducible Bayes risk.}
   updates) vanishes because both batch sizes are dominated by observation noise.
 \end{itemize}
 
+\subsection{Adam's Per-Coordinate Adaptive Scaling on Rosenbrock}
+
+Figure~\ref{fig:q2_adam_stepsize} examines how Adam's per-coordinate effective step
+$\tilde{\alpha}^{(i)}_t = \alpha / (\sqrt{\hat{v}^{(i)}_t} + \varepsilon)$
+evolves on Benchmark C (Rosenbrock) over 150 iterations, and contrasts it with
+Nesterov's fixed step $\alpha = 0.0007$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_adam_stepsize.pdf}
+\caption{Q2: Adam's per-coordinate effective step size on Benchmark C.
+Left: effective step $\tilde{\alpha}^{(i)}_t$ for coordinates $x_1$ (blue) and $x_2$
+(orange) on a log scale, compared to the fixed Nesterov step $\alpha = 0.0007$ (green).
+Right: ratio $\tilde{\alpha}^{(1)}_t / \tilde{\alpha}^{(2)}_t$ showing how the
+relative scaling between coordinates evolves over time.
+\textbf{Key observation:} At $t=1$, the $x_2$ gradient is nearly zero (since
+$\nabla_2 f(x_0) = 200(x_{0,2} - x_{0,1}^2) = 200(1-1) = 0$ at $x_0 = (-1,1)$),
+so $\hat{v}^{(2)}_1 \approx 0$ and $\tilde{\alpha}^{(2)}_1 \approx \alpha/\varepsilon$
+(extremely large).  The $x_1$ gradient is $-2(1-(-1)) = -4$, giving
+$\tilde{\alpha}^{(1)}_1 \approx \alpha/4 = 0.0015$.
+This initial asymmetry is rapidly corrected as $x_2$ moves away from the valley floor,
+accumulating gradient signal in $v^{(2)}$.
+After $\approx 30$ iterations, both coordinates settle to roughly the same effective
+step ($\approx\alpha/\sqrt{\bar{g}^2}$), with the ratio stabilising near 1.}
+\label{fig:q2_adam_stepsize}
+\end{figure}
+
+\textbf{Why diagonal adaptation fails on Rosenbrock.}
+The fundamental limitation of Adam (and all diagonal adaptive methods) on Rosenbrock
+is that the Hessian has a large off-diagonal entry $H_{12}(x) = -400 x_1$.
+Diagonal preconditioning replaces the Hessian by a diagonal matrix
+$\text{diag}(\hat{v}^{(1)}_t, \hat{v}^{(2)}_t)^{-1/2}$, ignoring the cross-term.
+The Newton update $\Delta x = -H^{-1}g$ at $x_1 \neq 0$ has a strong coupling between
+$x_1$ and $x_2$ directions: reducing $f$ requires a coordinated step in \emph{both}
+coordinates simultaneously.  Adam's step is:
+\begin{equation}
+  \Delta x^{\rm Adam} = -\frac{\alpha}{\sqrt{\hat{v}} + \varepsilon} \odot \hat{m},
+  \qquad
+  \Delta x^{\rm Newton} = -H^{-1} g,
+\end{equation}
+where $\odot$ is component-wise.  The Adam step is dominated by diagonal scaling,
+which decouples the coordinates, missing the coupled valley-floor direction.
+Nesterov's momentum, which is isotropic, builds a consistent velocity vector aligned
+with the valley, and is therefore more effective for this particular structure.
+
+The practical implication is: \emph{Adam excels when the dominant anisotropy is
+diagonal} (different learning rates per coordinate), which is typical in deep learning
+where parameters in different layers have very different gradient magnitudes.
+On problems with strong off-diagonal Hessian structure (like Rosenbrock), Nesterov or
+second-order methods are preferable.
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation}
 \label{sec:q3}
@@ -1153,6 +1204,23 @@ Newton & $O(d^3)$ & Quadratic ($O(\rho^{2^k})$) & $0.4826$ (1 it.) & $0.686$ (20
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}[Quasi-Newton Methods]
+The $O(d^3)$ Hessian cost limits Newton's method to small-$d$ problems.
+In high dimensions, \emph{quasi-Newton} methods like BFGS approximate the inverse
+Hessian $H_k^{-1}$ using rank-2 updates from successive gradient differences:
+\[
+  H_{k+1}^{-1} \;\leftarrow\; \text{BFGS}(H_k^{-1},\; s_k = x_{k+1} - x_k,\;
+    y_k = \nabla f(x_{k+1}) - \nabla f(x_k)).
+\]
+This achieves a superlinear convergence rate at only $O(d^2)$ cost per iteration.
+L-BFGS further reduces memory to $O(md)$ by storing only the $m$ most recent
+$(s_k, y_k)$ pairs.  Both BFGS and L-BFGS are dominant methods for medium- to
+large-scale smooth optimisation (neural networks with up to $10^7$ parameters).
+The key insight is that $y_k / \|s_k\|^2$ approximates the Hessian-vector product
+$H_k s_k / \|s_k\|^2$, allowing curvature to be estimated without explicit
+second derivatives -- effectively a derivative-free Hessian approximation.
+\end{remark}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation}
@@ -1791,6 +1859,80 @@ step size does not adapt, causing a persistent gap above $f^\star = 0.25$.
 In both cases, Frank--Wolfe's \emph{projection-free} property is its key practical
 advantage: no oracle for $\Pi_\mathcal{X}$ is needed, and each iterate is trivially
 feasible as a convex combination of feasible points.
+
+\subsection{Fixed Step vs.\ Decaying Step: Quantitative Comparison}
+
+The standard Frank--Wolfe analysis requires the step $\gamma_k = 2/(k+2)$
+(equivalently $\beta_k = 1 - 2/(k+2) = k/(k+2)$) to guarantee the $O(1/k)$
+convergence bound $f(x_k) - f^\star \leq 2LD^2/(k+2)$.
+The implementation in this assignment uses a \emph{fixed} $\beta \in \{0.90, 0.985, 0.93\}$,
+which may or may not satisfy the bound depending on the case.
+
+Figure~\ref{fig:q6_fw_decaying} compares the fixed-$\beta$ and decaying-step schedules
+on the boundary optimum case ($f(x) = x_1^2 + x_2^2$, $x^\star = (0.5, 0)$,
+$f^\star = 0.25$) from the same starting point $x_0 = (3, 3)$ for 140 iterations.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_decaying.pdf}
+\caption{Q6: Comparison of Frank--Wolfe convergence with fixed $\beta = 0.93$ versus
+the standard decaying step $\gamma_k = 2/(k+2)$ on the boundary-optimum case.
+Left: objective value on a log scale, with the theoretical $O(1/k)$ bound
+(grey dots) and $f^\star = 0.25$ (red dashes).
+Right: log-log plot of suboptimality $f(x_k) - f^\star$.
+\textbf{Key result:} the decaying step achieves $f(x_{140}) = 0.25$ (exact optimum,
+within machine precision) while the fixed step is stuck at $f(x_{140}) = 0.364$
+(suboptimality $0.114 > f^\star$).
+The decaying step also exhibits a clear $O(1/k)$ slope in the log-log plot, consistent
+with the theoretical rate.
+The fixed step, by contrast, converges geometrically at first (rate determined by
+$\beta = 0.93$) but saturates at a residual gap because the constant step fraction
+$(1-\beta) = 0.07$ cannot shrink to match the vanishing gradient near the optimum.}
+\label{fig:q6_fw_decaying}
+\end{figure}
+
+\textbf{Analysis.}
+To understand why the fixed step saturates, observe that near the boundary optimum
+$x^\star = (0.5, 0)$, the gradient $\nabla f(x^\star) = (1, 0)^T \neq 0$
+(the objective is not stationary at a constrained boundary minimum).
+At each step, $z_k = (0.5, -5)^T$ (the LMO minimises $x_1 + 0 \cdot x_2$ by
+choosing the smallest feasible $x_1$ and $x_2$).
+The update is $x_{k+1} = \beta x_k + (1-\beta)(0.5, -5)^T$, which
+converges geometrically to the \emph{fixed point}
+$x^\infty = (0.5, -5)^T$ rather than to the constrained optimum $(0.5, 0)$.
+The fixed point of the fixed-step map ($x = \beta x + (1-\beta)z$, $z = (0.5,-5)$)
+is $x^\infty = z = (0.5, -5)$, not $(0.5, 0)$.
+However, once $x_2$ becomes negative, the LMO selects $z_k = (0.5, 10)$
+(since $(\nabla f)_2 = 2x_2 < 0$ implies the LMO picks the \emph{upper} bound),
+causing oscillation between $(0.5, -5)$ and $(0.5, 10)$ as $x_2$ fluctuates
+around 0.  The fixed step does not have a mechanism to reduce this oscillation.
+
+The decaying step $\gamma_k = 2/(k+2) \to 0$ forces the algorithm to take
+progressively smaller steps, so these oscillations are damped out and the iterate
+converges to the true constrained optimum.
+This illustrates a fundamental principle: \emph{fixed-step Frank--Wolfe can converge
+to the correct solution in special cases (interior optimum, well-tuned $\beta$) but
+the decaying-step schedule is necessary for worst-case convergence guarantees at
+boundary optima.}
+
+\begin{table}[H]
+\centering
+\caption{Q6: Fixed vs.\ decaying step comparison at $k = 140$ on boundary optimum.}
+\label{tab:q6_step_comparison}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Step schedule} & \textbf{$\gamma_k$ at $k=140$} & \textbf{Final $f(x)$} & \textbf{$f - f^\star$} & \textbf{Bound $2LD^2/(k+2)$} \\
+\midrule
+Fixed $\beta = 0.93$ & $0.07$ (const.) & $0.3637$ & $0.1137$ & n/a (not convergent) \\
+Decaying $\gamma_k = 2/(k+2)$ & $0.0139$ & $0.2500$ & $<10^{-4}$ & $6.91$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Note that the theoretical bound ($6.91$) is extremely loose compared to the actual
+achieved suboptimality ($<10^{-4}$): the $O(1/k)$ bound uses the worst-case diameter
+$D \approx 15.67$ and $L=2$, while the actual iterates stay near the optimum.
+This reflects the well-known pessimism of worst-case convergence bounds in practice.
 
 % ============================================================
 \section{Overall Conclusions}
