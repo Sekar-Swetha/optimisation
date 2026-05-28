@@ -168,6 +168,10 @@ The Polyak step size is theoretically motivated: for a convex $L$-smooth functio
 
 Adagrad's effective step $\alpha_0/\sqrt{G_k^{(i)}}$ for coordinate $i$ is large initially (when $G_k^{(i)}$ is small) and decays monotonically. This is beneficial for sparse gradients but causes the rate to vanish for dense, non-stationary problems.
 
+\begin{remark}[Adagrad regret bound]
+Adagrad was originally derived in an \emph{online learning} framework (Duchi et al., 2011), where the goal is to minimise cumulative regret $R_T = \sum_{k=1}^T [f_k(x_k) - f_k(x^*)]$ over adversarially chosen loss functions $f_k$. The key result is that Adagrad's regret is bounded by $R_T \leq \alpha_0 \sum_{i=1}^d \|g_{1:T,i}\|_2$ (the $\ell_2$ norm of gradient history per coordinate), which adapts to the \emph{geometry} of each coordinate's gradient magnitude. On sparse problems (where many coordinates have near-zero gradients most of the time), this bound is much tighter than the $O(\sqrt{T})$ bound of vanilla GD, explaining Adagrad's empirical success in NLP tasks (e.g., word embeddings where only a few coordinates receive large gradients per step). For the dense gradients in our benchmarks, however, $\|g_{1:T,i}\|_2 = O(\sqrt{T})$ for all $i$, so the benefit over GD is modest.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{RMSprop}
 \label{alg:rmsprop}
@@ -197,7 +201,14 @@ RMSprop replaces Adagrad's cumulative sum with an exponential moving average (de
 \end{algorithmic}
 \end{algorithm}
 
-Heavy Ball adds a momentum term that accumulates gradient history, allowing it to build speed in consistent descent directions. For a quadratic $f$ with eigenvalues in $[\mu, L]$, the optimal momentum $\beta^* = \bigl((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)\bigr)^2$ and step $\alpha^* = 4/(\sqrt{L}+\sqrt{\mu})^2$ give a convergence rate of $\bigl((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)\bigr)^2$ per iteration — the same as the optimal first-order rate. This is a significant improvement over GD's rate $(\kappa-1)/(\kappa+1)$ for large $\kappa$: for $\kappa = 100$, GD's rate is $\approx 0.98$ while Heavy Ball achieves $\approx 0.82$ per step. However, Heavy Ball does \emph{not} provably achieve this rate on non-quadratic functions and can oscillate on general convex problems.
+Heavy Ball adds a momentum term that accumulates gradient history, allowing it to build speed in consistent descent directions. For a quadratic $f$ with eigenvalues in $[\mu, L]$, the optimal momentum $\beta^* = \bigl((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)\bigr)^2$ and step $\alpha^* = 4/(\sqrt{L}+\sqrt{\mu})^2$ give a convergence rate of $\rho^* = \bigl((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)\bigr)^2$ per iteration — the same as the optimal first-order rate. This is a significant improvement over GD's rate $(\kappa-1)/(\kappa+1)$ for large $\kappa$: for $\kappa = 100$, GD's rate is $\approx 0.98$ while Heavy Ball achieves $\approx 0.82$ per step. However, Heavy Ball does \emph{not} provably achieve this rate on non-quadratic functions and can oscillate on general convex problems.
+
+For our benchmarks, the theoretical Heavy Ball rates are:
+\begin{itemize}[nosep]
+  \item Benchmark A ($\kappa \approx 1.12$): $\rho^* = ((\sqrt{1.12}-1)/(\sqrt{1.12}+1))^2 \approx 0.003$ — essentially one-step convergence on the quadratic, matching Newton's behaviour for small $\kappa$.
+  \item Benchmark C ($\kappa \approx 2504$): $\rho^* = ((\sqrt{2504}-1)/(\sqrt{2504}+1))^2 \approx (49/51)^2 \approx 0.922$ — each step reduces error by $\approx 7.8\%$, compared to GD's $0.04\%$. Over 120 iterations, Heavy Ball achieves the error reduction factor $0.922^{120} \approx 10^{-4.5}$, while GD achieves $0.9996^{120} \approx 0.953$ — a factor of $10^{4.5}/0.953 \approx 33{,}000$ improvement in theory.
+\end{itemize}
+The observed improvement on Rosenbrock is more modest ($f_{\mathrm{HB}} = 1.40$ vs.\ $f_{\mathrm{GD}} = 3.51$) because the Rosenbrock Hessian is not constant, so the quadratic analysis is only locally valid.
 
 \subsection{Hyperparameter Settings}
 
@@ -357,6 +368,8 @@ which is \emph{optimal} in the sense that no first-order method can guarantee a 
 
 The key distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$. This allows Nesterov momentum to ``correct'' its trajectory before overshooting. The schedule $\beta_k = (k-1)/(k+2)$ (truncated at $\beta_{\max}$) increases momentum gradually from $0$ toward~$1$, which is precisely what is needed to achieve the $O(1/k^2)$ rate. Using a fixed momentum $\beta$ (as in Heavy Ball) breaks the theoretical guarantee, which is why Nesterov must use this specific increasing schedule.
 
+The schedule arises from a Lyapunov energy analysis. Define $E_k = k^2(f(x_k) - f^*) + 2\mu\|x_k - x^*\|^2$. For the accelerated method to guarantee $E_k \leq C$ (constant), one requires $E_k \leq E_{k-1}$, which reduces to a constraint on $\beta_k$ that is satisfied by $\beta_k = (k-1)/(k+2)$. Intuitively, the schedule trades off the ``speed'' of momentum accumulation against the ``correction'' needed to prevent divergence: early in the optimisation, momentum is kept small to avoid diverging from an inaccurate initial direction; as convergence proceeds and the gradient direction becomes more consistent, momentum is increased to build speed along the (now reliable) descent direction.
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
 \label{alg:adam}
@@ -476,7 +489,9 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 \end{algorithmic}
 \end{algorithm}
 
-The mini-batch gradient $g_{\mathcal{B}}$ is an \emph{unbiased} estimate of the full gradient $\nabla J(\theta) = \frac{1}{m}X^T(X\theta - y)$. Its variance is $\mathrm{Var}[g_{\mathcal{B}}] = \sigma_g^2/b$ where $\sigma_g^2$ is the per-sample gradient variance. For large batches, $g_{\mathcal{B}} \approx \nabla J$ and SGD approximates GD. For small batches, high gradient variance introduces noise that acts as implicit regularisation but prevents convergence below a noise floor. The optimal batch size trades off variance (favouring large $b$) against computation time per epoch (favouring small $b$): in theory, for a fixed number of gradient evaluations, both large and small batches give similar final accuracy, but the \emph{wall-clock} time varies by hardware parallelism.
+The mini-batch gradient $g_{\mathcal{B}}$ is an \emph{unbiased} estimate of the full gradient $\nabla J(\theta) = \frac{1}{m}X^T(X\theta - y)$. Its variance is $\mathrm{Var}[g_{\mathcal{B}}] = \sigma_g^2/b$ where $\sigma_g^2$ is the per-sample gradient variance. For large batches, $g_{\mathcal{B}} \approx \nabla J$ and SGD approximates GD. For small batches, high gradient variance introduces noise that acts as implicit regularisation but prevents convergence below a noise floor.
+
+The \emph{noise floor} for SGD is the point where the gradient noise is comparable to the true gradient signal. More precisely, for a quadratic loss with constant step $\alpha$, the expected sub-optimality converges to $J_{\mathrm{SGD}}^{\infty} - J^{\star} \approx \alpha L \sigma_g^2 / (2\mu b)$ (rather than zero), since each SGD step introduces noise $O(\alpha \sigma_g / \sqrt{b})$ that accumulates without decaying. To drive the noise floor to zero, one must either decrease the step size (to zero for exact convergence, or via a diminishing schedule $\alpha_k = \alpha_0/k$ which gives $O(1/k)$ convergence) or increase the batch size toward $m$ (full gradient). The optimal batch size trades off variance (favouring large $b$) against computation time per epoch (favouring small $b$): in theory, for a fixed number of gradient evaluations, both large and small batches give similar final accuracy, but the \emph{wall-clock} time varies by hardware parallelism.
 
 \begin{figure}[H]
 \centering
@@ -547,6 +562,8 @@ The Newton direction $p_k = H_k^{-1} g_k$ transforms the gradient into a curvatu
 \|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2,
 \end{equation}
 for some constant $C > 0$ depending on Lipschitz properties of the Hessian.
+
+A critical practical consequence is the \emph{Newton decrement} $\lambda(x) = \sqrt{\nabla f(x)^T H^{-1} \nabla f(x)}$, which approximates $\|x - x^*\|_H$ (the Hessian-norm distance to the optimum). The quantity $\lambda(x)^2/2$ upper-bounds the sub-optimality $f(x) - f^*$ (for strongly convex $f$) and serves as the standard stopping criterion for Newton's method: halt when $\lambda(x_k)^2/2 < \varepsilon_{\mathrm{tol}}$. For Benchmark~A (quadratic, constant Hessian), $\lambda(x_0)^2/2 = \nabla J_0^T H^{-1} \nabla J_0 / 2$, which equals the sub-optimality exactly, so the Newton decrement terminates immediately after one step. In contrast, for GD there is no equivalent computable certificate of sub-optimality without knowing $f^*$.
 
 Hyperparameter settings: GD runs for 80 iterations; Newton runs for 20 iterations with damping $\lambda = 10^{-8}$.
 
@@ -679,6 +696,10 @@ In double precision, $\delta = 0.05$ (good) incurs $O(0.05)$ truncation error; $
 \end{algorithm}
 
 In the implementation, $u_k$ is sampled from $\mathcal{N}(0,I)$ and then normalised to lie on $\mathbb{S}^{d-1}$. For Gaussian (unnormalised) $u_k$, $\mathbb{E}[(\nabla f(x_k) \cdot u_k) u_k] = \nabla f(x_k)$, so the estimator is approximately unbiased. The normalisation introduces a small bias but controls the estimator's scale. This zeroth-order method requires only \textbf{2 function evaluations per iteration} regardless of dimension $d$ — a major advantage when gradient computation is expensive or unavailable. The trade-off is higher estimator variance: $\mathrm{Var}[\hat{g}_k] \approx O(d) \|\nabla f\|^2$ (the directional projection discards $d-1$ gradient components), requiring more iterations by a factor of $O(d)$ compared to full-gradient descent. With $d=2$ in this experiment, the disadvantage is modest.
+
+\begin{remark}[Perturbation parameter $\delta$]
+The choice of $\delta$ in zeroth-order methods mirrors the $\delta^*$ analysis for finite differences. For the random search estimator, the bias from the finite-difference approximation of the directional derivative is $O(\delta)$, while the estimator variance (from the random direction) is independent of $\delta$ at leading order. Thus smaller $\delta$ reduces approximation bias but also reduces the signal-to-noise ratio near the minimum where $f(x + \delta u) - f(x) \approx \delta \nabla f(x)^T u \to 0$. In our experiment, $\delta = 0.05$ for finite differences and a comparable perturbation for random search balance approximation quality against numerical noise.
+\end{remark}
 
 \subsubsection{Results and Analysis}
 
@@ -845,7 +866,7 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & $<$5 & No \\
 
 \textbf{Projected GD} enforces feasibility at every iteration as a hard constraint. The cost is requiring a projection oracle ($\Pi_{\mathcal{X}}$), which is trivial for box/halfspace constraints but can be computationally expensive for general convex sets (e.g., nuclear norm balls require an SVD per step).
 
-\textbf{Penalty methods} convert the constrained problem to an unconstrained one, avoiding the need for a projection oracle. In this problem, all penalty methods converge to the same feasible optimum because the constraint $x_1 \geq 0.5$ is \emph{KKT-inactive}: the unconstrained minimum $x_1^* = 0.582 > 0.5$ already satisfies the constraint. For active constraints, the penalty method requires $\lambda \to \infty$ to converge exactly to the constrained optimum — in practice this creates an ill-conditioned penalised problem, requiring increasingly small step sizes. An \emph{augmented Lagrangian} approach avoids this: it introduces a dual variable $\mu$ updated by $\mu_{k+1} \leftarrow \mu_k + \rho \max(0, 0.5 - x_1^{(k)})$ and solves a moderately penalised subproblem at each outer iteration, achieving exact feasibility without $\lambda \to \infty$.
+\textbf{Penalty methods} convert the constrained problem to an unconstrained one, avoiding the need for a projection oracle. In this problem, all penalty methods converge to the same feasible optimum because the constraint $x_1 \geq 0.5$ is \emph{KKT-inactive}: the unconstrained minimum $x_1^* = 0.582 > 0.5$ already satisfies the constraint. For active constraints, the penalty method requires $\lambda \to \infty$ to converge exactly to the constrained optimum — in practice this creates an ill-conditioned penalised problem, requiring increasingly small step sizes. To see why: the penalised Hessian in the infeasible region is $H_\lambda = H_f + \lambda e_1 e_1^T$ (where $e_1$ is the first standard basis vector), so the condition number grows as $\kappa(H_\lambda) \approx \lambda / \mu$, requiring step sizes $\alpha \leq 1/\lambda$ for stability. An \emph{augmented Lagrangian} approach avoids this ill-conditioning: it introduces a dual variable $\mu$ updated by $\mu_{k+1} \leftarrow \mu_k + \rho \max(0, 0.5 - x_1^{(k)})$ and solves a moderately penalised subproblem at each outer iteration, achieving exact feasibility without $\lambda \to \infty$. The key insight is that the dual update compensates for the finite penalty: for fixed moderate $\rho$, the sequence $(\mu_k)$ converges to the true KKT multiplier, eliminating the need to drive $\lambda \to \infty$.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -895,7 +916,7 @@ f(x_k) - f^{\star} \leq G_k \leq \frac{2L \cdot \mathrm{diam}(\mathcal{X})^2}{k+
 \end{equation}
 i.e., an $O(1/k)$ convergence rate. For the box $\mathcal{X}$, $\mathrm{diam}(\mathcal{X})^2 = (5-0.5)^2 + (10-(-5))^2 = 20.25 + 225 = 245.25$, so the bound becomes $f(x_k) - f^{\star} \leq 490.5 L/(k+2)$. This is slower than projected gradient descent's linear convergence for strongly convex objectives, but Frank--Wolfe does not require a projection oracle — a critical advantage when $\mathcal{X}$ is a nuclear norm ball, a spectrahedron, or another set where LP oracles are cheaper than projections.
 
-The fixed $\beta$ schedule used here is equivalent to a fixed step size $\gamma = 1-\beta$ toward the LP vertex, which does not achieve the $O(1/k)$ rate. For the theoretical guarantee, the step schedule $\gamma_k = 2/(k+2) \to 0$ is required.
+The fixed $\beta$ schedule used here is equivalent to a fixed step size $\gamma = 1-\beta$ toward the LP vertex, which does not achieve the $O(1/k)$ rate. For the theoretical guarantee, the step schedule $\gamma_k = 2/(k+2) \to 0$ is required. With a fixed $\gamma$, the iterates are a convex combination $x_k = \gamma \sum_{j=0}^{k-1} \beta^{k-1-j} z_j + \beta^k x_0$ — an exponentially-weighted average of LP vertices. As $k \to \infty$, the weights become dominated by the most recent LP vertices, and the iterate converges to the \emph{ergodic mean} of the vertex sequence rather than to the optimum. For the interior case, if the gradient's sign alternates (causing $z_k$ to jump between two opposite vertices), the iterate stabilises at the midpoint of those vertices, which may not be the optimum — explaining the residual sub-optimality seen in practice.
 
 \subsection{Case II: Interior Optimum}
 
