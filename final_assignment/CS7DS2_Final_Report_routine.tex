@@ -685,6 +685,17 @@ the momentum term already contributes an effective amplification of the step.
 Adam's $\alpha$ values are somewhat larger; this is compensated by the adaptive
 $1/\sqrt{\hat{v}_t}$ scaling that automatically normalises each coordinate.
 
+The Nesterov momentum schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ is
+important for two reasons.  First, the fraction $(k-1)/(k+2) \to 1$ as $k \to \infty$,
+so without a cap the algorithm would eventually take steps with nearly pure momentum
+and zero gradient correction -- potentially diverging.  Second, for strongly convex
+functions, the optimal fixed momentum (rather than the increasing schedule) is
+$\beta^\star = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \in (0,1)$, and capping at
+$\beta_{\max} \approx 0.90$--$0.92$ empirically balances the $O(1/k^2)$ convergence
+benefit with stability.  In particular, the cap prevents the lookahead point
+$\tilde{x}_k = x_k + \beta_k z_k$ from overshooting past the optimum on problems
+where the gradient changes direction rapidly (e.g., near the Rosenbrock valley floor).
+
 \subsection{Convergence Comparison}
 
 \begin{figure}[H]
@@ -1425,6 +1436,36 @@ very high-dimensional problems where even forming the gradient is expensive.
 However, convergence is much slower per iteration ($O(d/k)$ rate vs.\ $O(1/k)$ for GD),
 so it is practical only when $d$ is truly large and $T_f$ is cheap.
 
+\textbf{Curse of dimensionality for grid search.}
+Grid search's $O(N^d)$ total cost becomes computationally catastrophic as $d$
+grows.  Fixing the grid spacing $\Delta x = 4/54 \approx 0.074$ (as used in the
+Rosenbrock experiment), the total number of evaluations to cover a unit hypercube
+$[-2,2]^d$ grows exponentially:
+
+\begin{table}[H]
+\centering
+\caption{Q4: Grid search total evaluations $N^d$ for fixed spacing $\Delta x = 0.074$,
+$N = 54$ per dimension.  A single evaluation takes $T_f \approx 10\,\mu$s.}
+\label{tab:grid_curse}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Dimension $d$} & \textbf{Grid points} & \textbf{Wall time ($T_f=10\mu$s)} & \textbf{Feasible?} \\
+\midrule
+$d = 2$  & $54^2   = 2{,}916$                   & $0.03$ s           & Yes \\
+$d = 3$  & $54^3   = 157{,}464$                  & $1.6$ s            & Yes \\
+$d = 5$  & $54^5   \approx 4.6 \times 10^8$     & $\approx 1.3$ hrs  & Barely \\
+$d = 10$ & $54^{10}\approx 2 \times 10^{17}$    & $\approx 6\times10^{4}$ yrs & No \\
+$d = 20$ & $54^{20}\approx 3.7 \times 10^{34}$  & $\gg$ age of universe & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In contrast, gradient-based methods (GD, Newton) require only $O(\kappa \log(1/\epsilon))$
+or $O(\log\log(1/\epsilon))$ iterations \emph{independent of grid spacing}, while
+Nesterov random search requires $O(dL\|x_0-x^\star\|^2/\epsilon)$ iterations -- linear
+in $d$, not exponential.
+This makes grid search strictly a low-dimensional method ($d \leq 3$ in practice).
+
 \subsection{Comparison Between Nelder--Mead and Nesterov Random Search}
 
 Both Nelder--Mead and Nesterov random search are gradient-free, but they differ in
@@ -1635,6 +1676,40 @@ the penalty:
 \end{equation}
 By updating $\hat\mu$ at each outer iteration, the augmented Lagrangian achieves
 primal and dual feasibility simultaneously without requiring $\lambda \to \infty$.
+Algorithm~\ref{alg:alm} formalises the standard outer-inner loop structure.
+
+\begin{algorithm}[H]
+\caption{Augmented Lagrangian Method (ALM / Method of Multipliers)}
+\label{alg:alm}
+\begin{algorithmic}[1]
+\Require Initial $x_0$, initial multiplier $\hat\mu_0 \geq 0$, penalty $\lambda > 0$,
+         step $\alpha$, outer iterations $T$, inner iterations $K$
+\For{$t = 0, 1, \ldots, T-1$}
+    \State \textbf{Inner loop:} minimise $L_\lambda(x, \hat\mu_t)$ over $x$ starting from $x_t$:
+    \For{$k = 0, 1, \ldots, K-1$}
+        \State $\nabla_x L_\lambda = \nabla f(x) - [\hat\mu_t + \lambda\max(0, 0.5-x_1)]\cdot\mathbf{1}[x_1 < 0.5]\,e_1$
+        \State $x \gets x - \alpha\,\nabla_x L_\lambda$
+    \EndFor
+    \State $x_{t+1} \gets x$
+    \State \textbf{Dual update:}
+      $\hat\mu_{t+1} \gets \max(0,\; \hat\mu_t + \lambda\max(0,\; 0.5 - x_{t+1,1}))$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The dual update step $\hat\mu_{t+1} = \max(0, \hat\mu_t + \lambda\,c(x_{t+1}))$
+(where $c(x) = \max(0, 0.5-x_1)$ is the constraint violation) implements gradient
+ascent on the Lagrangian with respect to $\hat\mu$.  The key difference from the
+pure penalty method is that, even with finite $\lambda$, the multiplier $\hat\mu$ can
+absorb the constraint force without requiring $\lambda \to \infty$.
+This keeps the inner-loop condition number bounded as $O(\lambda)$ rather than
+$O(\lambda^2)$, allowing much larger $\lambda$ to be used safely.
+
+In the specific Q5 problem, since the constraint is inactive at the optimum
+($x_1^\star = 0.582 > 0.5$, so $c(x^\star) = 0$), the ALM dual update
+$\hat\mu_{t+1} = \max(0, \hat\mu_t)$ converges to $\hat\mu^\star = 0$
+(consistent with $\mu^\star = 0$ from the KKT conditions), and the algorithm
+reduces to ordinary gradient descent in a single outer iteration.
 
 In this particular problem, since the unconstrained and constrained optima coincide
 (the constraint is inactive at $x^\star = (0.582, 2.0)$ since $0.582 > 0.5$), all
