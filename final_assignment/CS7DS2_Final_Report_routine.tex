@@ -709,6 +709,39 @@ so scaling $\sigma$ by 6 raises the irreducible floor by $6^2 = 36$: $J^{\star}(
 \label{fig:q2_sgd_noisy}
 \end{figure}
 
+\subsection{Comparative Analysis: Nesterov vs Adam vs SGD}
+
+\begin{table}[H]
+\centering
+\caption{Q2: Comparative properties of Nesterov, Adam, and Mini-Batch SGD.}
+\label{tab:q2_compare}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Method} & \textbf{Rate (convex)} & \textbf{Memory} & \textbf{Key advantage} & \textbf{Key limitation} \\
+\midrule
+GD (baseline) & $O(1/k)$ & $O(d)$ & Simplicity & Slow at high $\kappa$ \\
+Nesterov & $O(1/k^2)$ & $O(d)$ & Optimal conv.\ rate & Requires global $L$ \\
+Adam & Empirical & $O(d)$ & Adaptive + momentum & Non-convergence in theory\\
+Mini-batch SGD & $O(1/\sqrt{k})$ & $O(d)$ & Scalable to large $m$ & Noise floor \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The three methods play complementary roles in modern optimisation:
+
+\begin{itemize}[nosep]
+\item \textbf{Nesterov} is the theoretically optimal first-order method for smooth convex objectives, requiring only gradient evaluations at $O(d)$ memory cost. Its $O(1/k^2)$ rate is provably unimprovable by any deterministic first-order method (lower complexity bound from Nesterov~[5]). However, it requires knowledge of the global Lipschitz constant $L$ for the step size, and provides no convergence guarantee for non-convex objectives beyond convergence to a first-order critical point at rate $O(1/\sqrt{k})$.
+
+\item \textbf{Adam} combines Nesterov-style momentum ($\beta_1$) with per-coordinate scaling ($\beta_2$), adapting to curvature without knowing $L$. While Adam lacks convergence guarantees for non-convex objectives (AMSGrad, Reddi et al.~2018, fixes the non-convergence counterexample using a maximum second-moment), it is the dominant optimiser in deep learning due to its robustness and per-coordinate adaptivity. On the near-quadratic benchmarks in this study, Adam converges reliably but does not outperform Nesterov.
+
+\item \textbf{Mini-batch SGD} enables processing of $m \gg 1000$ data points by using only $b$ samples per step, reducing per-iteration cost from $O(md)$ to $O(bd)$. The inherent stochasticity acts as implicit regularisation and helps escape sharp minima in non-convex objectives. The fundamental limitation is the fixed-step noise floor (Theorem~\ref{thm:sgd}): convergence to $f^{\star}$ requires $\alpha_k \to 0$, but decaying steps slow later-stage convergence.
+\end{itemize}
+
+\begin{remark}[When to Prefer Adam over Nesterov in Practice]
+\label{rem:adam_vs_nesterov}
+Despite Nesterov's theoretical optimality, Adam is preferred in practice for several reasons: (1) Adam requires no knowledge of $L$ or $\mu$, eliminating the need for line search or hyperparameter grid search for the step size; (2) the per-coordinate scaling compensates for the large curvature variation typical in deep networks (where different layers may have curvatures differing by $10^6\times$); (3) with mini-batch gradients, the bias correction in Adam ensures stable effective step sizes despite varying gradient statistics across batches. Nesterov is preferred when the objective is known to be strongly convex (e.g., $\ell_2$-regularised linear models), when $L$ can be estimated cheaply, or when exact convergence to a global minimum is required.
+\end{remark}
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
 \label{sec:q3}
@@ -932,7 +965,16 @@ Figure~\ref{fig:fd_error} confirms this U-shaped error vs $\delta$ curve, showin
 \end{algorithmic}
 \end{algorithm}
 
-This zeroth-order method uses only 2 function evaluations per iteration, regardless of dimension $d$. The estimator $\hat{g}_k$ provides an unbiased estimate of a smoothed gradient: $\mathbb{E}_u[\hat{g}_k] = \mathbb{E}_u[\frac{f(x + \delta u) - f(x)}{\delta} u] \approx \nabla f_\delta(x)$ where $f_\delta$ is a Gaussian-smoothed version of $f$. The drawback is high variance: only one direction is sampled per step, requiring $O(d/\varepsilon)$ steps to achieve $\varepsilon$-accuracy, versus $O(1/\varepsilon)$ for exact gradient methods.
+This zeroth-order method uses only 2 function evaluations per iteration, regardless of dimension $d$. The estimator $\hat{g}_k$ provides an unbiased estimate of a smoothed gradient:
+\begin{equation}
+\mathbb{E}_u\!\left[\frac{f(x + \delta \hat{u}) - f(x)}{\delta}\, \hat{u}\right] = \frac{1}{\delta}\mathbb{E}_u[f(x + \delta \hat{u})\hat{u}] = \nabla f_\delta(x) + O(\delta^2),
+\end{equation}
+where $f_\delta(x) = \mathbb{E}_u[f(x + \delta u)]$ is a Gaussian-smoothed version of $f$ with $f_\delta \to f$ as $\delta \to 0$. The variance of $\hat{g}_k$ is $\operatorname{Var}(\hat{g}_k) \approx d\, \|\nabla f\|^2$ (for a single direction out of $d$), which is $d$ times larger than for a single FD evaluation with full gradient. This high variance is the fundamental cost of using only 2 evaluations per step: the gradient signal is compressed into a single direction, requiring $O(d)$ more steps to average out the noise.
+
+\begin{remark}[Dimensional Cost of Zeroth-Order Methods]
+\label{rem:zo_cost}
+For a $d$-dimensional problem, FD-GD uses $d+1$ function evaluations per step and constructs an $\varepsilon$-approximate gradient; convergence requires $O(1/\varepsilon)$ steps, giving total cost $O((d+1)/\varepsilon)$. Nesterov random search uses only 2 evaluations per step but has $O(d/\varepsilon)$ convergence (each direction samples only $1/d$ of the gradient), giving total cost $O(2d/\varepsilon) = O(d/\varepsilon)$ --- the same asymptotic dependence on $d$ as FD-GD. However, for $d=2$ (our case), both require only 3 evaluations per effective gradient step, so the practical difference is negligible. For $d = 10^6$ (neural networks), FD-GD requires $10^6 + 1$ evaluations per step while Nesterov random search still uses just 2 --- this is the key advantage in the high-dimensional regime.
+\end{remark}
 
 \subsubsection{Results: Benchmark B}
 
@@ -1142,6 +1184,28 @@ with dual variable update $\hat\mu_{t+1} = \max(0,\, \hat\mu_t - \lambda \cdot \
 \label{fig:q5_al}
 \end{figure}
 
+\begin{table}[H]
+\centering
+\caption{Q5: Comparison of constrained optimisation methods across key properties.}
+\label{tab:q5_compare}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Method} & \textbf{Feasibility} & \textbf{Gradient} & \textbf{Convergence} & \textbf{Limitation} \\
+\midrule
+Projected GD & Hard (every iter) & Requires projection & Linear ($\mu$-str.\ convex) & Projection cost \\
+Penalty ($L^1$) & Soft ($\lambda$-dep.) & Non-smooth at boundary & $\to$ opt.\ as $\lambda\to\infty$ & Small $\alpha$ at large $\lambda$ \\
+Penalty ($L^2$) & Soft ($\lambda$-dep.) & Smooth at boundary & $\to$ opt.\ as $\lambda\to\infty$ & Biased at finite $\lambda$ \\
+Aug.\ Lagrangian & Exact at solution & Smooth & Superlinear (inner loop) & Dual update needed \\
+\bottomrule
+\multicolumn{5}{l}{All methods converge to the same point here due to the inactive constraint (Remark~\ref{rem:inactive}).}
+\end{tabular}
+\end{table}
+
+\begin{remark}[Active vs Inactive Constraints in Practice]
+\label{rem:constraint_activity}
+The inactive constraint in Q5 ($x_1^{\star} \approx 0.582 > 0.5$) produces an ideal scenario where all methods converge to the same unconstrained minimum. In practice, determining whether a constraint is active \emph{before} solving the problem is non-trivial. The augmented Lagrangian method handles both cases correctly: if the constraint were active (e.g., if the unconstrained minimum were at $x_1^{\star} < 0.5$), the dual variable would converge to a positive value $\hat{\mu}^{\star} > 0$, reflecting the KKT condition $\mu^{\star}(-x_1^{\star} + 0.5) = 0$ with the constraint binding. The penalty method would also converge to the constrained minimum, but at larger $\lambda$ the step size requirements become increasingly restrictive. Projected GD is the most robust to constraint activity changes: the projection oracle $\Pi_\mathcal{X}$ behaves identically whether the constraint is active or not.
+\end{remark}
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -1159,7 +1223,12 @@ Since both components of $a$ are positive, the minimum is attained by taking eac
 \begin{equation}
 x^{\star} = (0.5,\, -5), \qquad f^{\star} = 0.5 + 2(-5) = -9.5.
 \end{equation}
-This is an instance of the \emph{fundamental theorem of linear programming}: the optimum of a linear objective over a bounded polytope is attained at a vertex (extreme point).
+This is an instance of the \emph{fundamental theorem of linear programming}: the optimum of a linear objective over a bounded polytope is always attained at a vertex (extreme point). The proof is straightforward: if $x^{\star}$ is in the interior of $\mathcal{X}$, moving in the direction of $-a$ improves the objective while remaining feasible, contradicting optimality. The Frank--Wolfe algorithm exploits this by reducing each iteration to finding the best vertex (the LP oracle), rather than minimising over all of $\mathcal{X}$.
+
+\begin{remark}[Why Box LP Oracles are $O(d)$]
+\label{rem:lp_oracle}
+For a box constraint $\mathcal{X} = \{x : l_i \leq x_i \leq u_i, i = 1,\ldots,d\}$, the LP oracle $\arg\min_{z \in \mathcal{X}} c^T z$ decomposes per coordinate: $(z^{\star})_i = l_i$ if $c_i > 0$, else $u_i$. This requires $O(d)$ comparisons --- the same cost as computing a gradient. By contrast, projecting onto a general convex set $\mathcal{X}$ requires solving $\min_{z \in \mathcal{X}} \|z - y\|^2$, which is $O(d \log d)$ for simplex constraints, $O(d\sqrt{d})$ for nuclear norm balls (via SVD), or intractable for combinatorial constraint sets. This cost difference is why Frank--Wolfe is preferred over projected gradient descent for structured constraints.
+\end{remark}
 
 \begin{figure}[H]
 \centering
