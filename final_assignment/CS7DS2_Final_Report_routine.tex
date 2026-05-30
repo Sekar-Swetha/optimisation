@@ -874,6 +874,29 @@ Grid search & None & $N^d$ total & Exponential & Grid-limited \\
 For dimension $d = 2$ all methods are comparable in cost. The key distinction appears as $d$ grows: exact GD scales as $O(d)$ (one gradient call), FD scales as $O(d^2)$ ($d+1$ evaluations each costing $O(d)$ to process), NRS remains $O(1)$ function evaluations regardless of $d$ at the cost of high variance, and grid search becomes exponentially infeasible. This hierarchy drives the practical choice of methods in high-dimensional machine learning.
 \end{remark}
 
+\subsection{Extended Analysis: Nesterov Random Search Convergence}
+
+The high variance of NRS has a precise characterisation. In $d$ dimensions, the expected update direction is $E[\hat{g}] = (1/d)\nabla f(x)$ (see Section~\ref{sec:q4} preamble), so NRS is equivalent to gradient descent with \emph{effective step size} $\alpha_{\text{eff}} = \alpha/d$ plus gradient noise. The variance of the estimator scales as $\text{Var}[\hat{g}] = O(\|\nabla f\|^2/d)$, meaning that in high dimensions the estimator has large relative noise (signal-to-noise ratio $\propto 1/\sqrt{d}$). For $d = 2$, NRS has a reasonable effective step ($\alpha_{\text{eff}} = \alpha/2$) but still requires roughly $2\times$ more iterations than exact GD at the same $\alpha$, consistent with the observed slower convergence in Figure~\ref{fig:q4_fval_B}.
+
+The key advantage of NRS is its \emph{dimension-free oracle complexity}: achieving $\varepsilon$-accuracy requires $O(1/\varepsilon^2)$ function evaluations regardless of $d$, whereas FD GD requires $O(d/\varepsilon^2)$ evaluations. In $d = 10^5$ (typical large-scale ML problem), NRS has a $10^5\times$ advantage over FD gradient estimation per $\varepsilon$-accuracy target.
+
+\subsection{Nelder--Mead: Convergence Properties and Limitations}
+
+The Nelder--Mead simplex method has several notable theoretical properties:
+\begin{itemize}[nosep]
+\item \textbf{No convergence guarantee in general}: Lagarias et al.\ showed that Nelder--Mead can cycle on certain non-smooth functions. However, on smooth functions in low dimensions ($d \leq 2$) it performs well empirically.
+\item \textbf{Simplex degeneracy}: The simplex can become degenerate (nearly flat), causing the algorithm to make only tiny steps. The shrink operation recovers from this, but may lose directional diversity.
+\item \textbf{Performance vs function evaluation count}: On Rosenbrock, Nelder--Mead with 160 iterations (at most 3 FE each $= \leq 480$ total FE) navigates the valley effectively. Exact GD in 80 iterations uses $80 + 1$ gradient evaluations. Thus Nelder--Mead achieves comparable progress with 6$\times$ more function evaluations but no derivative computation.
+\item \textbf{Scaling to higher dimensions}: For $d > 5$, the $n+1$ simplex becomes geometrically complex and the method degrades significantly. Methods like Bayesian optimisation or evolutionary strategies are preferred instead.
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/q4_nm_vs_gd_fevals.pdf}
+\caption{Q4: Suboptimality gap $f(x_k) - f^{\star}$ plotted against cumulative \emph{function evaluations} (FE) rather than iterations. Nelder--Mead uses up to 3 FE per simplex operation (reflection, expansion, or contraction), whereas exact GD uses 1 gradient call per iteration. On Rosenbrock (Benchmark~C), Nelder--Mead achieves comparable suboptimality to GD but requires $\approx 5$--$8\times$ more function evaluations. The advantage of Nelder--Mead is that those evaluations require no derivative information, making it suitable when gradients are unavailable (black-box, noisy, or non-differentiable objectives).}
+\label{fig:q4_nm_fe}
+\end{figure}
+
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
 \label{sec:q5}
@@ -971,6 +994,19 @@ Penalty $\lambda = 4.5$ & $(0.583,\ 2.000)$ & 0.7244 & \textbf{0.0000} & Feasibl
 \textbf{Projected GD} enforces feasibility as a hard constraint at every iteration: the projection operator guarantees $x_k \in \mathcal{X}$ for all $k \geq 1$. This is the fundamental advantage. The cost is requiring a projection oracle; for simple box or half-space constraints this is trivial ($O(d)$), but for constraints like the nuclear norm ball or the positive semidefinite cone, projection requires $O(d^3)$ SVD or eigendecomposition operations.
 
 \textbf{Penalty methods} trade exact feasibility for simplicity: no projection oracle is needed, only a modified gradient. The penalty weight $\lambda$ controls the accuracy--stability trade-off. For the $\ell_1$ penalty used here, large $\lambda$ enforces feasibility but the non-smooth gradient at $x_1 = 0.5$ can cause oscillation; this is why a smaller step ($\alpha = 0.03$) is needed for $\lambda = 4.5$. An \emph{augmented Lagrangian} method would improve on this by also updating the dual variable: $\mu^{k+1} = \max(0, \mu^k - \lambda \cdot \text{violation}_k)$, which avoids the need for $\lambda \to \infty$.
+
+\subsection{Penalty Sensitivity Analysis}
+
+The choice of $\lambda$ critically determines both the accuracy of the penalised solution and the convergence stability. Figure~\ref{fig:q5_penalty_sens} demonstrates this trade-off across $\lambda \in \{0.05, 0.15, 0.5, 1.8, 4.5, 10.0\}$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_sensitivity.pdf}
+\caption{Q5 penalty sensitivity analysis. \textbf{Left}: Final objective value $f(x_{100})$ vs penalty weight $\lambda$. For $\lambda < 0.5$ the solution is far from optimal (weak penalty fails to enforce $x_1 \geq 0.5$); for $\lambda \geq 1.8$ the solution converges to $f^{\star} = 0.7244$. Very large $\lambda$ ($> 5$) begins to worsen the result slightly due to gradient instability near $x_1 = 0.5$. \textbf{Right}: Final constraint violation $\max(0, 0.5 - x_1)$ vs $\lambda$ on a log scale. Violation decreases monotonically with $\lambda$, confirming the theoretical result that $x^{\star}_\lambda \to x^{\star}$ as $\lambda \to \infty$ for exact penalisation. The practical ``sweet spot'' is $\lambda \approx 1.8$--$4.5$, balancing feasibility enforcement against gradient stability.}
+\label{fig:q5_penalty_sens}
+\end{figure}
+
+This sensitivity analysis highlights a key limitation of pure penalty methods: the practitioner must tune $\lambda$ without knowing the optimal value \emph{a priori}. The \emph{augmented Lagrangian} (method of multipliers) addresses this by adapting the dual variable $\mu$: starting from a modest $\lambda$, successive outer iterations increase $\lambda$ by a factor and update $\mu^{k+1} = \max(0, \mu^k - \lambda \cdot v_k)$ where $v_k = \max(0, 0.5 - x_1^k)$ is the violation. This systematic adaptation eliminates the need to choose $\lambda$ large enough from the outset.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
