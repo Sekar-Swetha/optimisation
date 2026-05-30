@@ -204,6 +204,10 @@ Adagrad implements a diagonal preconditioner $P_k = \text{diag}(\sqrt{G_k})^{-1}
 
 RMSprop~\cite{hinton2012} remedies Adagrad's vanishing step problem by replacing the cumulative sum with an exponential moving average (EMA) with decay $\beta$. The effective memory horizon is $\approx 1/(1-\beta)$ iterations; here $\beta = 0.9$ gives a 10-step window. This allows RMSprop to re-scale its effective step size if the gradient magnitude changes over time, making it suitable for non-stationary optimisation landscapes.
 
+\begin{remark}[RMSprop Convergence Near Minimum]
+Near a minimum where $\|\nabla f(x)\| \to 0$, the EMA $v_{k+1} \to 0$, making the effective step $\alpha_0/(\sqrt{v_{k+1}} + \varepsilon) \to \alpha_0/\varepsilon$. For $\alpha_0 = 0.22$ and $\varepsilon = 10^{-5}$, this effective step approaches $22{,}000$, far exceeding the Lipschitz stability bound $2/L$. This explains why RMSprop on Benchmark~A converges to $f = 0.5027 > J^{\star} = 0.4826$: the large effective step near the minimum causes persistent oscillation around the optimum rather than convergence to it. A floor on $v$ (larger $\varepsilon$) or a learning rate schedule would resolve this, but at the cost of reduced adaptivity.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{Heavy Ball (Polyak Momentum)}
 \label{alg:heavyball}
@@ -218,6 +222,17 @@ RMSprop~\cite{hinton2012} remedies Adagrad's vanishing step problem by replacing
 \end{algorithm}
 
 The Heavy Ball method accumulates gradient history via an exponential moving average of gradients. For a quadratic $f$ with Hessian eigenvalues in $[\mu, L]$, the theoretically optimal parameters are $\alpha^{\star} = 4/(\sqrt{L}+\sqrt{\mu})^2$ and $\beta^{\star} = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$, yielding convergence rate $((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$ per iteration --- a factor of $O(\sqrt{\kappa})$ faster than GD's $(1-2/(\kappa+1))$ for large $\kappa$. In practice these optimal parameters are rarely known and must be tuned.
+
+\subsection{Theoretical Convergence Rate Comparison}
+
+Figure~\ref{fig:q1_q2_theory} illustrates the theoretical superiority of accelerated methods over plain GD as the condition number grows. For large $\kappa$, the per-iteration contraction factors satisfy $\rho_{\text{HB}} \approx 1 - 4/\sqrt{\kappa} \ll \rho_{\text{GD}} \approx 1 - 2/\kappa$, meaning Heavy Ball and Nesterov require $O(\sqrt{\kappa})$ fewer iterations than GD to achieve the same accuracy.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q1_q2_convergence_rates_theory.pdf}
+\caption{Q1/Q2: Theoretical convergence rates for quadratic functions. Left: per-iteration contraction factor $\rho$ as a function of condition number $\kappa$ for GD, optimal Heavy Ball, and Nesterov. All three converge to $\rho \to 1$ as $\kappa \to \infty$, but at different rates. Dashed vertical lines mark the condition numbers of our three benchmarks. Right: convergence profiles at $\kappa = 2500$ (Rosenbrock), showing that Heavy Ball and Nesterov achieve $<1\%$ of the initial gap in $\approx 200$ iterations while GD requires $\approx 11{,}500$ iterations.}
+\label{fig:q1_q2_theory}
+\end{figure}
 
 \subsection{Hyperparameter Settings}
 
@@ -396,7 +411,14 @@ Adam~\cite{kingma2015} combines Nesterov-style momentum with RMSprop-style per-c
 \end{algorithmic}
 \end{algorithm}
 
-The key distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$. This allows Nesterov to ``look ahead'' in the direction of momentum and correct its trajectory before overshooting, which is the mechanism behind the improved $O(1/k^2)$ rate. The adaptive schedule $\beta_k = (k-1)/(k+2) \to 1$ gradually builds momentum while initially being conservative ($\beta_1 = 0$, so the first step is pure gradient descent). Note: $x_{k+1} = \tilde{x}_k - \alpha \nabla f(\tilde{x}_k)$, i.e., a gradient step from the lookahead point.
+The key distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$. This allows Nesterov to ``look ahead'' in the direction of momentum and correct its trajectory before overshooting, which is the mechanism behind the improved $O(1/k^2)$ rate. The adaptive schedule $\beta_k = (k-1)/(k+2) \to 1$ gradually builds momentum while initially being conservative ($\beta_1 = 0$, so the first step is pure gradient descent). Note: $x_{k+1} = \tilde{x}_k - \alpha \nabla f(\tilde{x}_k)$, i.e., a gradient step from the lookahead point. Figure~\ref{fig:q2_nesterov_sched} shows the $\beta_k$ schedule used in the implementation.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q2_nesterov_schedule.pdf}
+\caption{Q2: Nesterov momentum schedule $\beta_k = \min((k-1)/(k+2),\ \beta_{\max})$ vs iteration ($\beta_{\max} = 0.90$). The schedule begins at $\beta_1 = 0$ (pure gradient descent) and increases monotonically, saturating at $\beta_{\max} \approx 30$ iterations. This gradual warm-up is critical: immediately applying high momentum ($\beta \approx 0.9$) would cause instability since the gradient direction has not yet established a consistent trend.}
+\label{fig:q2_nesterov_sched}
+\end{figure}
 
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
@@ -477,6 +499,10 @@ Adam & 0.4826 & 0.7244 & 1.5785 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}[Why Nesterov Outperforms Adam on Rosenbrock]
+Nesterov's advantage on the ill-conditioned Rosenbrock ($\kappa \approx 2500$) over Adam ($f = 0.479$ vs $f = 1.578$) is not immediately obvious since Adam also has momentum. The key difference is that Nesterov's momentum operates in the \emph{original parameter space}, building speed along the consistent valley direction. Adam's per-coordinate scaling, while beneficial for anisotropic separable problems (like Benchmark~B), normalises gradient components independently. On Rosenbrock's curved valley, the off-diagonal curvature ($h_{12} = -400 x_1$ at the starting point) couples the two coordinates, and Adam's diagonal scaling cannot capture this coupling. Furthermore, Adam's $\beta_2 = 0.999$ EMA gives large effective steps in the low-curvature direction, causing oscillation across the narrow valley. Nesterov's lookahead damping is more effective at tracking the curved valley floor.
+\end{remark}
 
 \subsection{Contour Trajectories}
 
@@ -737,13 +763,17 @@ L-BFGS & Superlinear & $O(md)$ & $O(md)$ & Medium $d$ ($\leq 10^5$) \\
 
 The forward finite-difference (FD) approximation replaces each partial derivative with:
 \begin{equation}
-\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x)}{\delta}.
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x)}{\delta}. \tag{FD1}
 \end{equation}
 The approximation error decomposes into two competing terms:
 \begin{equation}
-\underbrace{\frac{f(x+\delta e_i) - f(x)}{\delta} - \frac{\partial f}{\partial x_i}(x)}_{\text{total error}} = \underbrace{\frac{\delta}{2}\frac{\partial^2 f}{\partial x_i^2}(x) + O(\delta^2)}_{\text{truncation error}} + \underbrace{O\!\left(\frac{\varepsilon_{\text{mach}}}{\delta}\right)}_{\text{roundoff error}},
+\underbrace{\frac{f(x+\delta e_i) - f(x)}{\delta} - \frac{\partial f}{\partial x_i}(x)}_{\text{total error}} = \underbrace{\frac{\delta}{2}\frac{\partial^2 f}{\partial x_i^2}(x) + O(\delta^2)}_{\text{truncation: }O(\delta)} + \underbrace{O\!\left(\frac{\varepsilon_{\text{mach}}}{\delta}\right)}_{\text{roundoff}},
 \end{equation}
-where $\varepsilon_{\text{mach}} \approx 2.2 \times 10^{-16}$ is machine epsilon. The total error is minimised at $\delta^{\star} = O(\varepsilon_{\text{mach}}^{1/2}) \approx 1.5 \times 10^{-8}$, which marks the crossover between truncation-dominated ($\delta > \delta^{\star}$, error increases with $\delta$) and roundoff-dominated ($\delta < \delta^{\star}$, error increases as $\delta \to 0$) regimes. Figure~\ref{fig:q4_fd_error} visualises this U-shaped error curve.
+where $\varepsilon_{\text{mach}} \approx 2.2 \times 10^{-16}$ is machine epsilon. The total error is minimised at $\delta^{\star} = O(\varepsilon_{\text{mach}}^{1/2}) \approx 1.5 \times 10^{-8}$. The \emph{central difference} formula has a better truncation error of $O(\delta^2)$:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}, \quad \text{error} = O(\delta^2) + O(\varepsilon_{\text{mach}}/\delta), \tag{CD2}
+\end{equation}
+with optimal $\delta^{\star}_{\text{CD}} = O(\varepsilon_{\text{mach}}^{1/3}) \approx 6 \times 10^{-6}$ and minimum error $O(\varepsilon_{\text{mach}}^{2/3})$, substantially lower than forward differences' $O(\varepsilon_{\text{mach}}^{1/2})$. The cost is $2d$ function evaluations per gradient (vs $d+1$ for forward FD). Figure~\ref{fig:q4_fd_error} visualises this U-shaped error curve for the forward difference used in the assignment.
 
 \begin{figure}[H]
 \centering
