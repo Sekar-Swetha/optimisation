@@ -127,6 +127,15 @@ For a quadratic function $f(x) = \frac{1}{2}x^T H x - b^T x$ with $\mu I \preceq
 \end{equation}
 Here $\|v\|_H = \sqrt{v^T H v}$ is the energy norm. For $\kappa = 2500$ (Benchmark~C), this contraction factor is $(2499/2501)^2 \approx 0.99840$, requiring $\approx 4330$ iterations to reduce the error by $10\times$ --- consistent with the observed slow convergence in Figure~\ref{fig:q_condition_number}.
 
+The Rosenbrock Hessian is \emph{not} constant: $H(x) = \begin{pmatrix}2 + 1200x_1^2 - 400x_2 & -400x_1 \\ -400x_1 & 200\end{pmatrix}$. The maximum eigenvalue varies dramatically across the domain, reaching $\approx 1200$ along the valley ridges ($x_1 \approx 1$) and $\approx 2$ near the starting point $(-1,1)$. This means any fixed step $\alpha < 2/1200 \approx 0.0017$ must be used to ensure global stability, but the effective rate at the (well-conditioned) optimum is much better. Figure~\ref{fig:q_hessian_landscape} visualises this.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q_rosenbrock_hessian_landscape.pdf}
+\caption{Rosenbrock Hessian landscape. Left: log$_{10}(\kappa(H))$ showing that the condition number is worst ($> 10^4$) near the valley floor away from the optimum; at the optimum $(1,1)$ itself, $\kappa = 2508$. Centre: log$_{10}(\lambda_{\max})$ — the maximum eigenvalue is largest along the valley ridges, dominated by the $1200x_1^2$ term in $H_{11}$. Right: log$_{10}(2/\lambda_{\max})$ showing the maximum stable GD step: it ranges from $10^{-3}$ (inside the valley) to $10^{0}$ (flat regions), explaining why $\alpha = 0.001$ was chosen for Benchmark~C experiments. The Rosenbrock valley forces all gradient methods to use a step size determined by the \emph{worst-case} curvature, even when most of the domain has lower curvature.}
+\label{fig:q_hessian_landscape}
+\end{figure}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q_condition_number_effect.pdf}
@@ -228,6 +237,19 @@ Near a minimum where $\|\nabla f(x)\| \to 0$, the EMA $v_{k+1} \to 0$, making th
 \end{algorithm}
 
 The Heavy Ball method accumulates gradient history via an exponential moving average of gradients. For a quadratic $f$ with Hessian eigenvalues in $[\mu, L]$, the theoretically optimal parameters are $\alpha^{\star} = 4/(\sqrt{L}+\sqrt{\mu})^2$ and $\beta^{\star} = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$, yielding convergence rate $((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$ per iteration --- a factor of $O(\sqrt{\kappa})$ faster than GD's $(1-2/(\kappa+1))$ for large $\kappa$. In practice these optimal parameters are rarely known and must be tuned.
+
+\begin{remark}[Chebyshev Polynomial Connection]
+The Heavy Ball method's optimality for quadratics is intimately connected to Chebyshev polynomials. The $k$-step GD iterate can be written as $x_k - x^{\star} = p_k(I - \alpha H)(x_0 - x^{\star})$ where $p_k$ is the polynomial of degree $k$ applied to the eigenvalues of $I - \alpha H$. The optimal $p_k$ that minimises the residual over all eigenvalues in $[\mu, L]$ is the \emph{Chebyshev polynomial} $T_k$ (shifted/scaled), yielding the Heavy Ball convergence rate. This connection explains both the $O(\sqrt{\kappa})$ improvement and the oscillatory behaviour: Chebyshev polynomials oscillate maximally over $[-1, 1]$, and the corresponding iterates ``oscillate'' across the optimum before converging. Nesterov acceleration extends this to general convex functions by maintaining the $O(\sqrt{\kappa})$ benefit while the lookahead step dampens the oscillation.
+\end{remark}
+
+\subsection{Heavy Ball vs Nesterov: Oscillation and Acceleration}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q1_q2_heavy_ball_vs_nesterov.pdf}
+\caption{Left: convergence on a diagonal quadratic with $\kappa = 25$. Heavy Ball with optimal parameters $(\alpha^{\star}, \beta^{\star})$ converges faster than GD but exhibits characteristic oscillation (the ``ringing'' visible as small bumps in the semi-log plot). Nesterov achieves the same asymptotic rate but with a smoother profile due to the lookahead damping. Adam struggles on this separable quadratic because the diagonal scaling normalises the gradient too aggressively when eigenvalues are far apart. Right: first 60 iterations zoomed, with theoretical rates (dashed). Heavy Ball's empirical curve closely matches the theory $((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^{2k}$, while Nesterov's oscillation-free profile is slightly above its optimal bound at the start (due to the momentum warm-up schedule).}
+\label{fig:q1_q2_hb_nes}
+\end{figure}
 
 \subsection{Theoretical Convergence Rate Comparison}
 
@@ -1271,6 +1293,51 @@ Gradient expensive, low $d$ & Nelder--Mead & No gradients needed, adapts to land
 Gradient expensive, large $d$ & Nesterov random search & $O(1)$ function evals regardless of $d$ \\
 Simple constraints, small $d$ & Projected GD & Hard feasibility, $O(1)$ projection \\
 Complex constraints, large $d$ & Frank--Wolfe & Projection-free, LMO often cheaper \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-Iteration Complexity Across All Methods}
+
+\begin{table}[H]
+\centering
+\caption{Per-iteration computational complexity summary for all methods studied. $d$: dimension; $m$: Hessian memory parameter (L-BFGS); $b$: mini-batch size; $n$: dataset size; $v$: simplex vertices ($= d+1$). Gradient cost $O(d)$ assumed; Hessian cost $O(d^2)$; linear solve $O(d^3)$.}
+\label{tab:all_complexity}
+\begin{tabular}{llll}
+\toprule
+\textbf{Method} & \textbf{FE/iter} & \textbf{Compute/iter} & \textbf{Storage} \\
+\midrule
+\multicolumn{4}{l}{\textit{Q1: Adaptive step-size}} \\
+GD & 1 gradient & $O(d)$ & $O(d)$ \\
+Polyak & 1 gradient & $O(d)$ & $O(d)$ \\
+Adagrad & 1 gradient & $O(d)$ & $O(d)$ (accum.\ $G_k$) \\
+RMSprop & 1 gradient & $O(d)$ & $O(d)$ \\
+Heavy Ball & 1 gradient & $O(d)$ & $O(d)$ (momentum $z_k$) \\
+\midrule
+\multicolumn{4}{l}{\textit{Q2: Momentum \& stochastic}} \\
+Nesterov & 1 gradient & $O(d)$ & $O(d)$ \\
+Adam & 1 gradient & $O(d)$ & $O(d)$ ($m_t, v_t$) \\
+Mini-batch SGD & $b$ samples & $O(bd)$ & $O(d)$ \\
+\midrule
+\multicolumn{4}{l}{\textit{Q3: Second-order}} \\
+Newton (full) & 1 Hessian & $O(d^2) + O(d^3)$ solve & $O(d^2)$ \\
+Damped Newton & 1 Hessian & $O(d^2) + O(d^3)$ solve & $O(d^2)$ \\
+L-BFGS ($m$ pairs) & 1 gradient & $O(md)$ two-loop & $O(md)$ \\
+\midrule
+\multicolumn{4}{l}{\textit{Q4: Derivative-free}} \\
+FD GD & $d+1$ FE & $O(d^2)$ & $O(d)$ \\
+Nesterov Random Search & 2 FE & $O(d)$ & $O(d)$ \\
+Nelder--Mead & $\leq v$ FE & $O(vd)$ & $O(vd) = O(d^2)$ \\
+Grid search (total) & $N^d$ FE & $O(N^d)$ & $O(N^d)$ \\
+\midrule
+\multicolumn{4}{l}{\textit{Q5: Constrained}} \\
+Projected GD (box) & 1 gradient & $O(d)$ & $O(d)$ \\
+Penalty method & 1 gradient & $O(d)$ & $O(d)$ \\
+Aug.\ Lagrangian & 1 gradient & $O(d)$ & $O(d)$ ($\mu$ update) \\
+\midrule
+\multicolumn{4}{l}{\textit{Q6: Frank--Wolfe}} \\
+Frank--Wolfe (box LMO) & 1 gradient + LMO & $O(d)$ & $O(d)$ \\
+Frank--Wolfe (nuclear) & 1 gradient + SVD & $O(nd^2)$ & $O(nd)$ \\
 \bottomrule
 \end{tabular}
 \end{table}
