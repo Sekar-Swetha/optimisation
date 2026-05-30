@@ -121,6 +121,12 @@ C (Rosenbrock) & Nonlinear & 0 & $\approx 2500$ & 2.0 & $(-1, 1)$ & Extreme ill-
 
 The three benchmarks form a deliberately increasing hierarchy of difficulty: Benchmark~A has nearly circular level sets, Benchmark~B introduces moderate anisotropy and mild nonlinearity, and Benchmark~C tests methods against the pathological banana-shaped valley and near-singular Hessian. Figure~\ref{fig:q_condition_number} illustrates how the condition number directly determines the GD convergence rate.
 
+For a quadratic function $f(x) = \frac{1}{2}x^T H x - b^T x$ with $\mu I \preceq H \preceq LI$ and $\kappa = L/\mu$, the optimal constant GD step $\alpha = 2/(L+\mu)$ achieves the tight convergence bound:
+\begin{equation}
+\|x_k - x^{\star}\|_H^2 \leq \left(\frac{\kappa - 1}{\kappa + 1}\right)^{2k} \|x_0 - x^{\star}\|_H^2.
+\end{equation}
+Here $\|v\|_H = \sqrt{v^T H v}$ is the energy norm. For $\kappa = 2500$ (Benchmark~C), this contraction factor is $(2499/2501)^2 \approx 0.99840$, requiring $\approx 4330$ iterations to reduce the error by $10\times$ --- consistent with the observed slow convergence in Figure~\ref{fig:q_condition_number}.
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q_condition_number_effect.pdf}
@@ -500,6 +506,11 @@ Adam & 0.4826 & 0.7244 & 1.5785 \\
 \end{tabular}
 \end{table}
 
+\begin{remark}[Adam Convergence Caveat]
+\label{rem:adam_convergence}
+Despite its widespread use, Adam does \emph{not} have proven convergence for general smooth convex optimisation. Reddi et al.\ (2018) constructed explicit counterexamples showing Adam can fail to converge even on convex functions with bounded gradients, due to conflicting step-size signals across coordinates when $\beta_2 \to 1$. The fix, \emph{AMSGrad}, replaces $\hat{v}_t$ in the denominator with $\hat{v}_t^{\max} = \max_{s \leq t} \hat{v}_s$, ensuring the effective step is non-increasing and restoring convergence. In practice, Adam works well on deep learning problems (where the objective is highly non-convex anyway) but the theory gap is an important caveat for convex settings.
+\end{remark}
+
 \begin{remark}[Why Nesterov Outperforms Adam on Rosenbrock]
 Nesterov's advantage on the ill-conditioned Rosenbrock ($\kappa \approx 2500$) over Adam ($f = 0.479$ vs $f = 1.578$) is not immediately obvious since Adam also has momentum. The key difference is that Nesterov's momentum operates in the \emph{original parameter space}, building speed along the consistent valley direction. Adam's per-coordinate scaling, while beneficial for anisotropic separable problems (like Benchmark~B), normalises gradient components independently. On Rosenbrock's curved valley, the off-diagonal curvature ($h_{12} = -400 x_1$ at the starting point) couples the two coordinates, and Adam's diagonal scaling cannot capture this coupling. Furthermore, Adam's $\beta_2 = 0.999$ EMA gives large effective steps in the low-curvature direction, causing oscillation across the narrow valley. Nesterov's lookahead damping is more effective at tracking the curved valley floor.
 \end{remark}
@@ -564,6 +575,17 @@ The experiment is repeated with output noise scaled by a factor of 6: $y_{\text{
 \begin{remark}
 The noise floor phenomenon is fundamental in stochastic optimisation: SGD cannot converge below $J^{\star}_{\text{true}}$ regardless of batch size or step size, because the noise is irreducible (it comes from the true data-generating process, not the algorithm). This motivates methods with decaying learning rates to \emph{converge} to $J^{\star}$ rather than oscillate around it.
 \end{remark}
+
+The formal convergence result under decaying step sizes is:
+\begin{theorem}[SGD Convergence, \cite{nocedal2006}]
+\label{thm:sgd}
+For an $L$-smooth $\mu$-strongly convex $f$ with stochastic gradients satisfying $\mathbb{E}[\hat{g}_k] = \nabla f(x_k)$ and $\mathbb{E}[\|\hat{g}_k - \nabla f(x_k)\|^2] \leq \sigma^2$, mini-batch SGD with step size $\alpha_k = c / (k + 1)$ for $c > 1/(2\mu)$ satisfies:
+\begin{equation}
+\mathbb{E}[f(x_k)] - f^{\star} \leq \frac{C}{k+1}, \quad C = \max\!\left(\frac{L c^2 \sigma^2}{2\mu c - 1},\ \frac{c(f(x_0)-f^{\star})}{1}\right).
+\end{equation}
+With fixed step $\alpha_k = \alpha$, convergence stalls at a noise floor: $\liminf_{k\to\infty} \mathbb{E}[f(x_k)] - f^{\star} \leq \frac{\alpha L \sigma^2}{2\mu}$.
+\end{theorem}
+This confirms the empirical observation: fixed step size SGD converges to a neighbourhood of $f^{\star}$ of size $O(\alpha \sigma^2)$. Reducing batch size $b$ increases $\sigma^2 \propto 1/b$, enlarging the noise floor proportionally. Decaying steps are necessary for exact convergence.
 
 Figure~\ref{fig:q2_sgd_batch_sweep} extends the two-batch comparison by testing six batch sizes from $b=1$ (pure online SGD) to $b=1000$ (full-batch gradient descent), visualising the fundamental batch size--convergence trade-off.
 
@@ -727,6 +749,15 @@ C & 3.7319 & 0.6864 & $(0.183,\ 0.020)$ \\
 
 \subsection{Limitations and Extensions of Newton's Method}
 
+\begin{remark}[Two-Phase Newton Convergence]
+Newton's method on non-quadratic problems exhibits two distinct convergence phases:
+\begin{enumerate}[nosep]
+\item \textbf{Global phase} (damped Newton): far from $x^{\star}$, the local quadratic model is inaccurate. A damped step $\alpha < 1$ is required, and convergence is linear rather than quadratic. On Rosenbrock, $\alpha = 0.22$ keeps the method stable across the rapidly-changing Hessian landscape.
+\item \textbf{Local phase} (pure Newton): once $x_k$ is within the \emph{quadratic convergence basin} (radius $r < 2\mu^2/(L_H)$ from $x^{\star}$), the full step $\alpha = 1$ achieves quadratic convergence as stated in Theorem~\ref{thm:newton}. The transition from the damped to the pure Newton regime is recognised by the Newton decrement $\lambda(x_k) = \sqrt{g_k^T H_k^{-1} g_k}$ falling below $\approx 0.25$.
+\end{enumerate}
+For our Rosenbrock experiments, the 20 damped-Newton iterations operate primarily in the global phase (the starting point $(-1, 1)$ is far from $x^{\star} = (1,1)$), which is why convergence is superlinear but not yet quadratic.
+\end{remark}
+
 Despite its outstanding convergence properties, Newton's method has significant practical limitations:
 \begin{enumerate}[nosep]
 \item \textbf{Hessian computation cost:} Computing $\nabla^2 f(x) \in \mathbb{R}^{d \times d}$ requires $O(d^2)$ storage and $O(d^3)$ linear solve per iteration. For $d = 10^6$ (typical neural network), this is entirely infeasible.
@@ -884,7 +915,7 @@ The key advantage of NRS is its \emph{dimension-free oracle complexity}: achievi
 
 The Nelder--Mead simplex method has several notable theoretical properties:
 \begin{itemize}[nosep]
-\item \textbf{No convergence guarantee in general}: Lagarias et al.\ showed that Nelder--Mead can cycle on certain non-smooth functions. However, on smooth functions in low dimensions ($d \leq 2$) it performs well empirically.
+\item \textbf{No convergence guarantee in general}: Lagarias et al.~\cite{lagariasnm1998} proved that Nelder--Mead converges in 1D but showed it can cycle or fail to converge in 2D on certain smooth functions. McKinnon (1999) constructed an explicit 2D counterexample. However, on smooth functions with well-separated local minima it performs well empirically.
 \item \textbf{Simplex degeneracy}: The simplex can become degenerate (nearly flat), causing the algorithm to make only tiny steps. The shrink operation recovers from this, but may lose directional diversity.
 \item \textbf{Performance vs function evaluation count}: On Rosenbrock, Nelder--Mead with 160 iterations (at most 3 FE each $= \leq 480$ total FE) navigates the valley effectively. Exact GD in 80 iterations uses $80 + 1$ gradient evaluations. Thus Nelder--Mead achieves comparable progress with 6$\times$ more function evaluations but no derivative computation.
 \item \textbf{Scaling to higher dimensions}: For $d > 5$, the $n+1$ simplex becomes geometrically complex and the method degrades significantly. Methods like Bayesian optimisation or evolutionary strategies are preferred instead.
@@ -1064,6 +1095,10 @@ f(x_k) - f^{\star} \leq \frac{2L D^2}{k + 2} = O(1/k).
 \end{equation}
 \end{theorem}
 The $O(1/k)$ rate is inferior to projected gradient descent's $O(1/k^2)$ for smooth convex problems, but Frank--Wolfe's projection-free property makes it competitive when projections are expensive (e.g., nuclear norm, simplex constraints).
+
+\begin{remark}[Linear Convergence under Strong Convexity]
+When $f$ is additionally $\mu$-strongly convex and $\mathcal{X}$ is a polytope, Frank--Wolfe achieves \emph{linear} convergence $f(x_k) - f^{\star} \leq C \cdot \rho^k$ where $\rho < 1$ depends on $\mu$, $L$, and the \emph{pyramidal width} of $\mathcal{X}$. Intuitively, strong convexity ensures that the optimal face of $\mathcal{X}$ is identified in finitely many steps, after which convergence becomes linear. For the box constraint $\mathcal{X}$ in this assignment, the boundary optimum case illustrates this: once $z_k$ consistently selects the correct boundary vertex, the method converges geometrically towards the boundary minimum.
+\end{remark}
 
 The \emph{Frank--Wolfe gap} $g_k = \nabla f(x_k)^T(x_k - z_k)$ is an upper bound on $f(x_k) - f^{\star}$ and serves as a practical convergence certificate and stopping criterion.
 
@@ -1403,6 +1438,12 @@ Boyd, S., \& Vandenberghe, L. (2004). \textit{Convex Optimization}. Cambridge Un
 
 \bibitem{nesterov2011}
 Nesterov, Y. (2011). Random gradient-free minimization of convex functions. \textit{CORE Discussion Paper 2011/1}, Université catholique de Louvain.
+
+\bibitem{reddi2018}
+Reddi, S.J., Kale, S., \& Kumar, S. (2018). On the convergence of Adam and beyond. \textit{International Conference on Learning Representations (ICLR 2018)}.
+
+\bibitem{lagariasnm1998}
+Lagarias, J.C., Reeds, J.A., Wright, M.H., \& Wright, P.E. (1998). Convergence properties of the Nelder--Mead simplex method in low dimensions. \textit{SIAM Journal on Optimization}, 9(1), 112--147.
 \end{thebibliography}
 
 \end{document}
