@@ -239,7 +239,11 @@ The implication is that Benchmark A ($\kappa \approx 1$) converges almost immedi
 
 \textbf{Heavy Ball physical interpretation and optimal parameters.}  The Heavy Ball update $z_{k+1} = \beta z_k + \alpha \nabla f(x_k)$, $x_{k+1} = x_k - z_{k+1}$ is directly analogous to the equations of motion for a heavy ball rolling on the loss surface with friction coefficient $(1-\beta)$: the ball accumulates velocity $z_k$ in the direction of the gradient, and friction prevents it from accelerating forever.  For a $\mu$-strongly convex, $L$-smooth quadratic, Heavy Ball with optimal $\alpha^* = \bigl(\frac{2}{\sqrt{L}+\sqrt{\mu}}\bigr)^2$ and $\beta^* = \bigl(\frac{\sqrt{L}-\sqrt{\mu}}{\sqrt{L}+\sqrt{\mu}}\bigr)^2$ converges at rate $(1 - 2/(\sqrt{\kappa}+1))^k$, which is $O(\sqrt{\kappa})$ times faster than GD.  In our experiments, the parameters $\alpha = 0.035$, $\beta = 0.90$ for Benchmark B approach this optimal setting for $\kappa \approx 5$ ($\alpha^* \approx 0.033$, $\beta^* \approx 0.39$); larger $\beta = 0.90$ was used for smoother convergence at the cost of some oscillation.
 
-\textbf{Adagrad cumulative regret} \cite{duchi2011}.  Adagrad's diagonal scaling $\alpha_0 / \sqrt{G_k + \varepsilon}$ adapts to the geometry of the problem: coordinates with historically large gradients receive smaller effective steps.  This is beneficial for sparse problems but can cause premature slowdown on dense, smooth objectives.
+\textbf{Adagrad cumulative regret} \cite{duchi2011}.  Adagrad's diagonal scaling $\alpha_0 / \sqrt{G_k + \varepsilon}$ adapts to the geometry of the problem: coordinates with historically large gradients receive smaller effective steps.  Formally, Adagrad's online regret bound is:
+\begin{equation}
+\sum_{k=1}^T \bigl[f(x_k) - f(x^\star)\bigr] \leq \frac{\alpha_0\|x_0 - x^\star\|^2}{2} + \frac{1}{\alpha_0}\sum_{i=1}^d \left(\sum_{k=1}^T g_{k,i}^2\right)^{1/2},
+\end{equation}
+giving average regret $O(1/\sqrt{T})$ in the worst case.  The sum $(\sum_k g_{k,i}^2)^{1/2}$ adapts per coordinate: for coordinates $i$ with small historical gradients, the bound is tight; coordinates with large historical gradients accumulate a smaller effective step, preventing large moves in unstable directions.  This is why Adagrad never diverges on convex problems---the cumulative regret bound is finite regardless of the initial learning rate $\alpha_0$.  The principal limitation is that the effective step decays to zero even when the gradient remains large (``over-shrinkage''), which is why RMSprop's forgetting factor $\beta$ was introduced to maintain a more stable effective rate.
 
 \subsection{Hyperparameter Settings}
 
@@ -789,7 +793,18 @@ Note that for Benchmark C, Newton has not fully converged to $(1,1)$ in 20 itera
 \label{fig:q3_newton_convergence}
 \end{figure}
 
-The quadratic convergence of Newton's method is only guaranteed in a neighbourhood of the optimum (``basin of attraction''), defined by the condition $\|x_0 - x^{\star}\| \leq c / L$ for some problem-dependent constant $c$.  Outside this basin, Newton may not converge or may require line search.  The damped step $\alpha < 1$ used on Benchmarks B and C effectively enlarges the basin of attraction at the cost of a slower rate near the optimum.
+\begin{lemma}[Newton basin of attraction]
+\label{lem:newton_basin}
+Let $f$ be twice continuously differentiable with $L$-Lipschitz continuous Hessian (i.e.\ $\|\nabla^2 f(x) - \nabla^2 f(y)\| \leq L_H \|x - y\|$) and $\nabla^2 f(x^\star) \succeq \mu I$.  Then Newton's method with $\alpha = 1$ converges quadratically whenever:
+\begin{equation}
+\|x_0 - x^\star\| \leq \frac{2\mu}{L_H},
+\end{equation}
+with contraction constant $C = L_H/(2\mu)$ in Theorem~\ref{thm:nesterov}.
+\end{lemma}
+
+For Benchmark B with $\mu \approx 1.8$ and $L_H = \|\nabla^2 f\| \approx 1$ (the Hessian $H = \text{diag}(2-\sin x_1, 10)$ has Lipschitz-continuous entries), the basin radius is $\approx 2 \times 1.8 / 1 = 3.6$.  Starting from $x_0 = (-1, 4)$, $\|x_0 - x^\star\| = \|(-1-0.582, 4-2)\| \approx 2.57 < 3.6$, so $x_0$ lies inside the basin and Newton converges quadratically.  The damped step $\alpha = 0.85$ effectively enlarges the basin at the cost of a slower rate near the optimum.
+
+The quadratic convergence of Newton's method is only guaranteed in this neighbourhood of the optimum. Outside this basin, Newton may not converge or may require line search.  The damped step $\alpha < 1$ used on Benchmarks B and C effectively enlarges the basin of attraction at the cost of a slower rate near the optimum.
 
 \subsection{Computational Cost Comparison}
 
@@ -854,9 +869,18 @@ The experiment uses $\delta = 0.05$ (near the truncation-dominant regime, low er
 
 \textbf{Centred finite differences.}  A higher-order approximation is the centred difference:
 \begin{equation}
-\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta},
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}.
 \end{equation}
-which cancels the $O(\delta)$ truncation error (the odd-order Taylor terms), achieving $O(\delta^2)$ accuracy at the cost of $2d$ function evaluations per step (instead of $d+1$ for the forward difference).  The optimal $\delta$ for centred differences is $\delta^* \approx \varepsilon_{\text{mach}}^{1/3} \approx 10^{-5.3}$.  For our experiments, both $\delta = 0.05$ and $\delta = 0.8$ lie in the truncation-dominated regime where centred differences would yield significantly better gradient estimates.
+To see why this achieves $O(\delta^2)$, expand each term by Taylor's theorem:
+\begin{align}
+f(x + \delta e_i) &= f(x) + \delta \frac{\partial f}{\partial x_i} + \frac{\delta^2}{2}\frac{\partial^2 f}{\partial x_i^2} + \frac{\delta^3}{6}\frac{\partial^3 f}{\partial x_i^3} + O(\delta^4), \\
+f(x - \delta e_i) &= f(x) - \delta \frac{\partial f}{\partial x_i} + \frac{\delta^2}{2}\frac{\partial^2 f}{\partial x_i^2} - \frac{\delta^3}{6}\frac{\partial^3 f}{\partial x_i^3} + O(\delta^4).
+\end{align}
+Subtracting and dividing by $2\delta$:
+\begin{equation}
+\frac{f(x+\delta e_i) - f(x-\delta e_i)}{2\delta} = \frac{\partial f}{\partial x_i} + \frac{\delta^2}{6}\frac{\partial^3 f}{\partial x_i^3} + O(\delta^4),
+\end{equation}
+so the truncation error is $O(\delta^2)$ instead of the $O(\delta)$ error of the forward difference.  The odd-order terms cancel exactly (the $\delta$ term in the numerator, the $\delta^3$ term with alternating signs), while only the even-order terms contribute.  The cost is $2d$ function evaluations per step (versus $d+1$ for forward differences), and the optimal $\delta^* \approx \varepsilon_{\text{mach}}^{1/3} \approx 10^{-5.3}$ (balancing $\delta^2$ truncation against $\varepsilon_{\text{mach}}/\delta$ round-off).  For our experiments with $\delta \in \{0.05, 0.8\}$, both lie in the truncation-dominated regime where centred differences would yield $\sim 100\times$ better gradient estimates at $\delta = 0.05$ ($O(\delta^2) \approx 0.0025$ vs $O(\delta) \approx 0.025$).
 
 \begin{figure}[H]
 \centering
