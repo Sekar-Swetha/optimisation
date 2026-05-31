@@ -326,12 +326,30 @@ Heavy Ball & \textbf{0.4826} & \textbf{0.7244} & 1.4003 & Momentum helps on C \\
 \label{fig:q1_stepsize_C}
 \end{figure}
 
+\subsection{Per-Coordinate Adaptive Step-Size Behaviour}
+
+A key feature of Adagrad and RMSprop is their \emph{per-coordinate} adaptivity.  Figure~\ref{fig:q1_percoord} demonstrates how each method independently adapts the step size for the $x_1$ direction (Hessian eigenvalue $\approx 2$) and the $x_2$ direction (Hessian eigenvalue $= 10$).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q1_adaptive_percoord_B.pdf}
+\caption{Q1: Per-coordinate effective step sizes for Adagrad and RMSprop on Benchmark B (left) and their convergence (right). Adagrad assigns a larger effective step to coordinate $x_1$ (low curvature $\approx 2$) and a smaller step to coordinate $x_2$ (high curvature $= 10$). This automatic scaling prefers directions with historically small gradients, effectively acting as a diagonal preconditioner. RMSprop exhibits the same qualitative behaviour but with a smoother decay due to exponential forgetting ($\beta = 0.9$). The convergence plot confirms both methods reach $f^{\star} = 0.7244$ efficiently, with RMSprop maintaining a larger step near the minimum (avoiding the over-shrinkage that can stall Adagrad).}
+\label{fig:q1_percoord}
+\end{figure}
+
+The ratio of effective step sizes between the two coordinates reflects the ratio of their historical gradient magnitudes.  For Adagrad, after $k$ iterations:
+\begin{equation}
+\frac{\alpha_k^{(1)}}{\alpha_k^{(2)}} = \sqrt{\frac{G_k^{(2)}}{G_k^{(1)}}} \approx \sqrt{\frac{(g^{(2)})^2}{(g^{(1)})^2}} = \frac{|g^{(2)}|}{|g^{(1)}|} \approx \frac{10}{2} = 5,
+\end{equation}
+so Adagrad implicitly gives a 5:1 step-size ratio matching the inverse curvature ratio---a form of diagonal preconditioning.
+
 \subsection{Comparative Analysis}
 
 \begin{itemize}[nosep]
 \item \textbf{Convergence speed:} On well-conditioned problems (A, B), all correctly-specified methods reach machine precision quickly; the differences are negligible. On ill-conditioned Rosenbrock (C), Polyak (correct $f^{\star}$) $\gg$ Heavy Ball $>$ Adagrad $>$ RMSprop $\approx$ GD.
 \item \textbf{Robustness:} Adagrad and Heavy Ball are most robust---they never diverge and perform at or above GD on all benchmarks. Polyak is brittle: optimal when $f^{\star}$ is known, catastrophic otherwise.
 \item \textbf{Stability mechanism:} GD has the simplest stability analysis ($\alpha \leq 1/L$). Adagrad is unconditionally stable for convex problems regardless of $\alpha_0$ because the effective step $\alpha_0/\sqrt{G_k}$ decays to zero. RMSprop is conditionally stable, requiring tuning of $\alpha_0$ and $\beta$.
+\item \textbf{Diagonal preconditioning:} Both Adagrad and RMSprop can be interpreted as gradient descent with a diagonal preconditioner $D_k^{-1/2}$ where $D_k$ accumulates squared gradient information.  This is an approximation to Newton's method (which uses the full Hessian as preconditioner) restricted to diagonal matrices.  The approximation quality depends on how well the Hessian is diagonally dominant---on Benchmark B with diagonal Hessian, the approximation is exact.
 \item \textbf{Practical implication:} In practice, exact $f^{\star}$ is rarely known, limiting Polyak's applicability. RMSprop and Adagrad are widely used in deep learning where the loss landscape is non-convex and exact curvature information is unavailable.
 \end{itemize}
 
@@ -381,7 +399,8 @@ Adam combines the gradient momentum of Nesterov/Heavy Ball with the per-coordina
 \subsection{Theoretical Analysis}
 \label{sec:q2_theory}
 
-\begin{theorem}[Nesterov acceleration, \cite{nesterov1983}]
+\begin{theorem}[Nesterov acceleration \cite{nesterov1983}]
+\label{thm:nesterov}
 For an $L$-smooth convex function $f$, the Nesterov accelerated gradient with step $\alpha = 1/L$ satisfies:
 \begin{equation}
 f(x_k) - f^{\star} \leq \frac{2L\|x_0 - x^{\star}\|^2}{(k+1)^2} = O\!\left(\frac{1}{k^2}\right).
@@ -525,7 +544,26 @@ The experiment is repeated with output noise scaled by factor 6: $\varepsilon^{(
 
 \subsection{Comparative Analysis}
 
-Nesterov acceleration delivers the best first-order convergence in all three benchmarks.  Its advantage is theoretically grounded in the $O(1/k^2)$ rate and practically confirmed by Figure~\ref{fig:q2_convergence_rates}.  Adam's per-coordinate scaling complements momentum but does not match Nesterov on the smooth Rosenbrock landscape.  For the stochastic setting, mini-batch size should be chosen to balance the trade-off: large batches reduce gradient variance at the cost of fewer updates per epoch; small batches maximise update frequency but increase noise.
+\begin{table}[H]
+\centering
+\caption{Q2: Summary comparison of Nesterov and Adam on the three benchmarks.}
+\label{tab:q2_comparison}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Method} & \textbf{Convergence rate} & \textbf{Adaptivity} & \textbf{Bench.\ A/B} & \textbf{Bench.\ C} \\
+\midrule
+GD & $O(1/k)$ & None & Adequate & Poor \\
+Nesterov & $O(1/k^2)$ & Momentum schedule & Best & Best \\
+Adam & Complex & Per-coord + momentum & Equivalent & Moderate \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Nesterov acceleration delivers the best first-order convergence on all three benchmarks.  Its advantage is theoretically grounded in the $O(1/k^2)$ rate (Theorem~\ref{thm:nesterov}) and practically confirmed by Figure~\ref{fig:q2_convergence_rates}.
+
+Adam's per-coordinate scaling complements momentum but does not match Nesterov on smooth Rosenbrock: Adam scales each coordinate by $1/\sqrt{\hat{v}_t}$, which approximates the inverse diagonal Hessian.  However, on Rosenbrock the off-diagonal Hessian term $H_{12} = -400x_1$ is significant, so a diagonal preconditioner is insufficient.  Nesterov's accumulated momentum in the consistent valley direction provides a more effective preconditioner for this specific geometry.
+
+For the stochastic setting (Section~\ref{sec:q2_sgd}), mini-batch size should be chosen to balance: large batches ($b = 40$) reduce gradient variance $\sigma^2/b$ at the cost of fewer updates per epoch; small batches ($b = 5$) maximise update frequency and can converge faster in terms of epochs when the noise floor $J^{\star}$ dominates. In practice, batch sizes are chosen to saturate hardware parallelism (powers of 2 on GPU hardware), not for statistical optimality.
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -668,15 +706,43 @@ Note that for Benchmark C, Newton has not fully converged to $(1,1)$ in 20 itera
 \label{fig:q3_update}
 \end{figure}
 
+\subsection{Convergence to the Optimum}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_newton_convergence_B.pdf}
+\caption{Q3: Distance to optimum $\|x_k - x^{\star}\|$ for Newton's method vs.\ GD on Benchmark B. Left: semi-logarithmic plot showing Newton converges to machine precision in $\sim 7$ iterations while GD decreases linearly over 30 iterations. Right: log-log plot with a $O(1/k)$ reference line for GD; Newton's curve drops steeply, reflecting the quadratic-to-superlinear convergence once the iterate enters the region of attraction. The contrast in slope between the two methods visually confirms the difference between linear and quadratic convergence regimes.}
+\label{fig:q3_newton_convergence}
+\end{figure}
+
+The quadratic convergence of Newton's method is only guaranteed in a neighbourhood of the optimum (``basin of attraction''), defined by the condition $\|x_0 - x^{\star}\| \leq c / L$ for some problem-dependent constant $c$.  Outside this basin, Newton may not converge or may require line search.  The damped step $\alpha < 1$ used on Benchmarks B and C effectively enlarges the basin of attraction at the cost of a slower rate near the optimum.
+
 \subsection{Computational Cost Comparison}
 
 Newton's superior convergence comes at a significant per-iteration cost:
 \begin{itemize}[nosep]
 \item \textbf{Gradient:} $O(nd)$ for data-dependent problems (Benchmark A: $O(md)$).
-\item \textbf{Hessian:} $O(d^2)$ storage; $O(mnd^2)$ computation for dense data (Benchmark A: $O(md^2)$).
-\item \textbf{Linear solve} $H_k p_k = g_k$: $O(d^3)$ via Cholesky factorisation.
+\item \textbf{Hessian:} $O(d^2)$ storage; $O(md^2)$ computation (Benchmark A: Hessian is constant, computed once).
+\item \textbf{Linear solve} $H_k p_k = g_k$: $O(d^3)$ via Cholesky factorisation; $O(d^2)$ if $H_k$ is diagonal (Benchmark B).
 \end{itemize}
-For $d = 2$ as in our experiments, these costs are trivial. In high-dimensional problems (e.g.\ deep neural networks with millions of parameters), the $O(d^2)$ Hessian storage and $O(d^3)$ solve are prohibitive, motivating quasi-Newton methods (L-BFGS) that approximate $H^{-1}$ using a low-rank update without explicitly forming the Hessian.
+
+\begin{table}[H]
+\centering
+\caption{Q3: Per-iteration cost comparison. For $d = 2$, all costs are trivial; the table highlights the scaling bottleneck for large $d$.}
+\label{tab:q3_cost}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Gradient cost} & \textbf{Hessian cost} & \textbf{Solve cost} & \textbf{Total/iter} \\
+\midrule
+GD & $O(md)$ & --- & --- & $O(md)$ \\
+Newton (dense $H$) & $O(md)$ & $O(md^2)$ & $O(d^3)$ & $O(md^2 + d^3)$ \\
+Newton (diag $H$, Bench.\ B) & $O(d)$ & $O(d)$ & $O(d)$ & $O(d)$ \\
+L-BFGS (rank-$r$ approx) & $O(md)$ & --- & $O(rd)$ & $O(md + rd)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For $d = 2$ as in our experiments, all costs are trivial and Newton is unambiguously superior. In high-dimensional problems (e.g.\ deep neural networks with $d \sim 10^6$ to $10^9$ parameters), the $O(d^2)$ Hessian storage and $O(d^3)$ solve are entirely prohibitive, motivating quasi-Newton methods (L-BFGS) that approximate $H^{-1}$ using a rank-$r$ update from the last $r$ gradient differences.  L-BFGS achieves superlinear convergence at $O(md + rd)$ per iteration, making it the practical second-order method for large-scale problems.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -701,6 +767,12 @@ so the truncation error is $O(\delta)$.  Numerical precision introduces an error
 \text{Error}(\delta) = \underbrace{\frac{\delta}{2}|f''|}_{\text{truncation}} + \underbrace{\frac{\varepsilon_{\text{mach}}}{\delta}}_{\text{round-off}},\quad \text{optimal at } \delta^* = \sqrt{2\varepsilon_{\text{mach}}/|f''|} \approx \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-8}.
 \end{equation}
 The experiment uses $\delta = 0.05$ (near the truncation-dominant regime, low error) and $\delta = 0.8$ (high truncation error, poor approximation).
+
+\textbf{Centred finite differences.}  A higher-order approximation is the centred difference:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta},
+\end{equation}
+which cancels the $O(\delta)$ truncation error (the odd-order Taylor terms), achieving $O(\delta^2)$ accuracy at the cost of $2d$ function evaluations per step (instead of $d+1$ for the forward difference).  The optimal $\delta$ for centred differences is $\delta^* \approx \varepsilon_{\text{mach}}^{1/3} \approx 10^{-5.3}$.  For our experiments, both $\delta = 0.05$ and $\delta = 0.8$ lie in the truncation-dominated regime where centred differences would yield significantly better gradient estimates.
 
 \begin{figure}[H]
 \centering
@@ -882,6 +954,21 @@ Settings: Projected GD ($\alpha = 0.08$), Penalty with $\lambda \in \{0.15, 1.8,
 \label{fig:q5_contour}
 \end{figure}
 
+\subsection{Effect of Penalty Parameter $\lambda$}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_lambda_sweep.pdf}
+\caption{Q5: Effect of the penalty weight $\lambda$ on objective value (left) and constraint violation (right) for four values $\lambda \in \{0.15, 1.8, 4.5, 15.0\}$ with correspondingly smaller step sizes $\alpha \in \{0.05, 0.05, 0.03, 0.01\}$. Larger $\lambda$ enforces feasibility faster but requires smaller $\alpha$ to counteract the increased Lipschitz constant of $\nabla F_\lambda$: the effective smoothness constant of the penalised objective grows as $O(L_f + \lambda)$, requiring $\alpha \leq 1/(L_f + \lambda)$ for stability. The fundamental trade-off is thus: $\lambda \uparrow$ $\Rightarrow$ faster feasibility, smaller permissible step size, slower per-iteration progress. At $\lambda = 15$, feasibility is achieved in $\sim 3$ iterations, but the very small step $\alpha = 0.01$ limits optimality progress.}
+\label{fig:q5_lambda_sweep}
+\end{figure}
+
+This trade-off motivates the \emph{augmented Lagrangian} (multiplier method) approach, which replaces the pure penalty $F_\lambda(x) = f(x) + \lambda g^+(x)$ with:
+\begin{equation}
+\mathcal{L}_\rho(x,\mu) = f(x) + \mu^T g(x) + \frac{\rho}{2}\|g^+(x)\|^2,
+\end{equation}
+iterating over both $x$ and the dual multiplier $\mu$. This achieves exact feasibility at a \emph{finite} $\rho$ (since the dual variable $\mu$ captures the constraint), avoiding the ill-conditioning of the pure penalty approach.
+
 \subsection{Constraint Violation Analysis}
 
 \begin{figure}[H]
@@ -1036,6 +1123,40 @@ When the optimum is on the boundary, the LMO consistently selects the vertex on 
 \caption{Summary comparison of all methods on Benchmark C (Rosenbrock), the most discriminating test function. Methods are grouped by question: Q1 adaptive step-size methods (blue), Q2 momentum methods (coral), and Q3 Newton (green). Polyak with $f^{\star} = 0$ correctly specified achieves the lowest objective ($f = 0.0094$) among first-order methods. Newton's method with 20 iterations achieves $f = 0.686$, surpassing all first-order methods that use 120--150 iterations---demonstrating the power of curvature information even with strong damping. Nesterov ($f = 0.479$) is the best first-order method, confirming the theoretical $O(1/k^2)$ advantage.}
 \label{fig:summary}
 \end{figure}
+
+\subsection{All-Methods Summary Table}
+
+\begin{table}[H]
+\centering
+\caption{Complete summary of all methods across all benchmarks. Iterations shown in parentheses. $\dagger$: Polyak uses incorrectly specified $f^{\star} = 0$ on A and B (true minima $\approx 0.48$ and $0.72$ respectively).}
+\label{tab:full_summary}
+\small
+\begin{tabular}{llccccl}
+\toprule
+\textbf{Q} & \textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} & \textbf{Conv.\ rate} & \textbf{Key property} \\
+\midrule
+\multirow{5}{*}{Q1} & GD & 0.4826 (120) & 0.7244 (120) & 3.5142 (120) & $O(1/k)$ & Baseline \\
+ & Polyak$^\dagger$ & 2.719 & 24.07 & \textbf{0.0094} & $O(1/k)$ & Needs exact $f^{\star}$ \\
+ & Adagrad & 0.4826 & 0.7244 & 2.203 & $O(1/k)$ & Diagonal precond. \\
+ & RMSprop & 0.503 & 0.727 & 3.120 & $O(1/k)$ & EMA gradient \\
+ & Heavy Ball & 0.4826 & 0.7244 & 1.400 & $O(1/\sqrt{k})^*$ & Momentum \\
+\midrule
+\multirow{2}{*}{Q2} & Nesterov & 0.4826 (150) & 0.7244 (150) & 0.479 (150) & $O(1/k^2)$ & Optimal 1st-order \\
+ & Adam & 0.4826 (150) & 0.7244 (150) & 1.579 (150) & Complex & Adaptive + momentum \\
+\midrule
+Q3 & Newton & 0.4826 (20) & 0.7244 (20) & 0.686 (20) & Quadratic & Exact for quadratics \\
+\midrule
+\multirow{2}{*}{Q4} & FD GD ($\delta$=0.05) & --- & $\approx$0.72 & --- & $O(1/k)$ & 3 FE/iter ($d=2$) \\
+ & Nelder--Mead & --- & --- & $\approx$0.003 (160) & Unknown & No gradient needed \\
+\midrule
+Q5 & Projected GD & --- & 0.7244 (100) & --- & $O(1/k)$ & Exact feasibility \\
+\midrule
+Q6 & Frank--Wolfe & \multicolumn{3}{c}{$f = 0.0046$ (interior), $f = 0.364$ (boundary)} & $O(1/k)$ & Projection-free \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent$^*$Heavy Ball achieves $O(1/\sqrt{k})$ rate for strongly convex quadratics with optimal parameters; in practice the rate depends heavily on hyperparameter tuning.
 
 \subsection{Findings Per Benchmark}
 
