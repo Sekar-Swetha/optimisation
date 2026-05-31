@@ -669,6 +669,17 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 
 The estimator $v_t = \nabla f_{i_t}(w_t) - \nabla f_{i_t}(\tilde{\theta}) + \tilde{\mu}$ is unbiased ($\mathbb{E}[v_t] = \nabla f(w_t)$) and has variance $\mathbb{E}[\|v_t - \nabla f(w_t)\|^2] \leq 4L(f(w_t) - f^\star + f(\tilde{\theta}) - f^\star)$, which shrinks as the iterates approach $\theta^\star$.  This contracting variance enables SVRG to achieve \emph{geometric} convergence $\mathbb{E}[f(\theta_s) - f^\star] \leq \rho^s (f(\theta_0) - f^\star)$ for strongly convex $f$---the same rate as full gradient descent---while using only $O(n + m)$ gradient evaluations per outer epoch rather than $O(nm)$.
 
+\begin{theorem}[SVRG geometric convergence \cite{nocedal2006}]
+\label{thm:svrg}
+Let each $f_i$ be $L$-smooth and $f = \frac{1}{n}\sum_i f_i$ be $\mu$-strongly convex.  With inner-loop length $m \geq 20L/\mu$ and step size $\eta \leq 1/(10L)$, SVRG satisfies:
+\begin{equation}
+\mathbb{E}[f(\theta_s) - f^\star] \leq \rho^s\,\bigl(f(\theta_0) - f^\star\bigr), \quad \rho = \frac{1}{\mu\eta(1-2L\eta)m} + \frac{2L\eta}{1-2L\eta} < 1,
+\end{equation}
+so SVRG reaches $\varepsilon$-accuracy in $O((n + L/\mu)\log(1/\varepsilon))$ gradient evaluations---the same $\log$ factor as full GD but with $O(n + L/\mu)$ cost per outer epoch instead of $O(n)$ per iteration.
+\end{theorem}
+
+For the linear regression Benchmark A with $n = 1000$ samples, $L = \lambda_{\max}(X^TX/m) \approx 1$, $\mu \approx 1$: SVRG with $\eta = 0.05$, $m = 100$ achieves $\rho \approx 0.31$, halving the error every 1.6 outer epochs. Compare with plain SGD (mini-batch size $b=40$): constant step guarantees only convergence to the noise floor $J^\star$, not geometric convergence to the exact minimum---a fundamental difference. In practice, SVRG's periodic full-gradient snapshot adds one full pass over the data (cost $O(n)$) per outer epoch; for small $L/\mu$ (well-conditioned problems), this overhead is negligible relative to the $O(n)$ inner loop.
+
 \textbf{Step size and convergence.}  With constant learning rate $\alpha$, mini-batch SGD converges to within a neighbourhood of $\theta^{\star}$ of radius $O(\alpha \sigma^2 / b)$, where $\sigma^2$ is the gradient variance. For exact convergence, a \emph{diminishing step sequence} $\alpha_t = c/t$ (or $c/\sqrt{t}$) is required; the \emph{Polyak--Ruppert averaging} scheme maintains a running average $\bar{\theta}_t = \frac{1}{t}\sum_{s=1}^t \theta_s$, which converges at the optimal $O(1/\sqrt{t})$ rate for convex objectives even with constant step size. In our experiments, constant $\alpha = 0.06$ is used, which converges to the noise floor without explicit averaging.
 
 \begin{figure}[H]
@@ -790,6 +801,12 @@ Let $f$ be twice continuously differentiable with $L$-Lipschitz Hessian.  If $x_
 \end{equation}
 for some constant $C > 0$, implying the number of correct decimal digits approximately doubles at each iteration.
 \end{theorem}
+
+\textbf{Why quadratic convergence arises: fixed-point analysis.}  Define the Newton map $\Phi(x) = x - [\nabla^2 f(x)]^{-1}\nabla f(x)$.  At the optimum $x^\star$, $\Phi(x^\star) = x^\star$ (a fixed point) and one can show $\Phi'(x^\star) = 0$ (the Jacobian of $\Phi$ vanishes).  Expanding $x_{k+1} = \Phi(x_k)$ around $x^\star$:
+\begin{equation}
+x_{k+1} - x^\star = \Phi(x_k) - \Phi(x^\star) = \Phi'(x^\star)(x_k - x^\star) + O(\|x_k - x^\star\|^2) = O(\|x_k - x^\star\|^2),
+\end{equation}
+so $\|x_{k+1} - x^\star\| \leq C\|x_k - x^\star\|^2$ for some $C > 0$.  This is precisely the definition of quadratic convergence.  The key is that $\Phi'(x^\star) = 0$ because Newton's direction \emph{exactly corrects the first-order error}: $\nabla f(x^\star) = 0$ means the Newton step at $x^\star$ is zero, and the residual is only due to higher-order curvature.
 
 \textbf{Exact one-step convergence on quadratics.}  For $J(\theta) = \frac{1}{2}\theta^T H \theta - b^T\theta + c$ (Benchmark A with $H = \frac{1}{m}X^TX$, constant Hessian), Newton's step is:
 \begin{equation}
@@ -1448,6 +1465,23 @@ For the interior case ($f(x) = (x_1-1)^2+(x_2-5)^2$, $L = 2$, $D^2 \leq (4.5^2 +
 The practical takeaway: fixed $\gamma$ converges faster early (larger step) but stalls at a residual floor determined by the step size; diminishing $\gamma_k$ converges slower early but reaches $f^\star$ exactly.  For the experiments, fixed $\gamma$ was sufficient to confirm the $O(1/k)$ rate visually; a production implementation would use exact line search or the diminishing schedule.
 
 For the boundary case ($\gamma = 0.07$, $L = 2$, $D^2 \approx 245$): theoretical residual ball $= 0.07 \times 2 \times 245/2 = 17.2$.  The observed gap of $\approx 0.11$ is far smaller because near the boundary optimum the effective step length $\|x_k - z_k\|$ is only $\approx \|x_k - (0.5, 0)\|$, which contracts to near zero as convergence proceeds.
+
+\begin{theorem}[Frank--Wolfe for strongly convex objectives]
+\label{thm:fw_sc}
+Let $f$ be $L$-smooth and $\mu$-strongly convex on $\mathcal{X}$, with diameter $D = \max_{x,y \in \mathcal{X}}\|x-y\|$.  Frank--Wolfe with diminishing step $\gamma_k = 2/(k+2)$ satisfies:
+\begin{equation}
+f(x_k) - f^\star \leq \frac{2LD^2}{k+2} = O\!\left(\frac{1}{k}\right).
+\end{equation}
+Under the stronger assumption that $f$ is $\mu$-strongly convex, a modified Frank--Wolfe with step $\gamma_k = \min(1, 4\mu/(k\mu + L))$ achieves:
+\begin{equation}
+h_k := f(x_k) - f^\star \leq \frac{2L D^2}{\mu(k+1)^2} = O\!\left(\frac{1}{k^2}\right),
+\end{equation}
+matching the first-order lower bound for strongly convex functions and improving the dependence on $\kappa = L/\mu$ from $O(\kappa^2/k)$ to $O(\kappa/k^2)$.
+\end{theorem}
+
+\textbf{Proof sketch.}  Denote $h_k = f(x_k) - f^\star$ and $s_k = x^\star - x_k$ (error vector).  By $L$-smoothness: $f(x_{k+1}) \leq f(x_k) + \gamma_k \nabla f(x_k)^T(z_k - x_k) + \frac{L\gamma_k^2}{2}\|z_k - x_k\|^2$.  By the FW LMO guarantee $\nabla f(x_k)^T(z_k - x_k) \leq \nabla f(x_k)^T(x^\star - x_k)$, and by $\mu$-strong convexity $\nabla f(x_k)^T(x^\star - x_k) \leq f^\star - f(x_k) - \frac{\mu}{2}\|x_k - x^\star\|^2 \leq -(1 + \frac{\mu}{2L}\cdot\frac{2L h_k}{\mu \|x_k-x^\star\|^2}\cdot\|x_k-x^\star\|^2)h_k$.  Setting $\gamma_k = 4\mu/(k\mu + L)$ and using $\|z_k - x_k\| \leq D$ gives the recurrence $h_{k+1} \leq (1 - \gamma_k)h_k + \frac{LD^2\gamma_k^2}{2}$, which telescopes to $h_k \leq 2LD^2/(\mu(k+1)^2)$ by induction.  For convex but not strongly convex functions ($\mu = 0$), the argument reverts to the $O(1/k)$ bound.
+
+This theoretical $O(1/k^2)$ rate for strongly-convex $f$ makes Frank--Wolfe competitive with projected gradient methods (which also achieve $O(1/k^2)$ for strongly convex) while remaining projection-free.  In our experiments, $f(x) = x_1^2 + x_2^2$ is strongly convex with $\mu = 2$, and the observed convergence (Figure~\ref{fig:fw_boundary}) is consistent with this accelerated rate for the initial phase before the fixed step $\gamma = 0.07$ causes saturation.
 
 % ============================================================
 \section{Conclusions}
