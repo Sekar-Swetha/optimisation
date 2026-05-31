@@ -561,6 +561,29 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 \end{algorithmic}
 \end{algorithm}
 
+\textbf{Variance reduction: SVRG.}  A key limitation of mini-batch SGD is the \emph{variance floor}: even with constant step size, gradient noise prevents convergence below $O(\alpha \sigma^2 / b)$.  SVRG (Stochastic Variance Reduced Gradient) \cite{nocedal2006} eliminates this by periodically computing a full gradient snapshot $\tilde{\mu}$ and using it to de-bias each stochastic gradient:
+
+\begin{algorithm}[H]
+\caption{SVRG (Stochastic Variance Reduced Gradient)}
+\label{alg:svrg}
+\begin{algorithmic}[1]
+\Require Data $(X,y)$, initial $\theta_0$, step size $\eta$, inner-loop length $m$, outer epochs $S$
+\For{$s = 0,1,\ldots,S-1$}
+    \State $\tilde{\theta} \gets \theta_s$ \Comment{Snapshot of current iterate}
+    \State $\tilde{\mu} \gets \frac{1}{n}\sum_{i=1}^{n}\nabla f_i(\tilde{\theta})$ \Comment{Full gradient at snapshot: one pass, $O(nd)$}
+    \State $w_0 \gets \theta_s$
+    \For{$t = 0,1,\ldots,m-1$}
+        \State Sample $i_t$ uniformly from $\{1,\ldots,n\}$
+        \State $v_t \gets \nabla f_{i_t}(w_t) - \nabla f_{i_t}(\tilde{\theta}) + \tilde{\mu}$ \Comment{Variance-reduced estimator}
+        \State $w_{t+1} \gets w_t - \eta\,v_t$
+    \EndFor
+    \State $\theta_{s+1} \gets \frac{1}{m}\sum_{t=0}^{m-1} w_t$ \Comment{Option A: average; Option B: $w_m$}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The estimator $v_t = \nabla f_{i_t}(w_t) - \nabla f_{i_t}(\tilde{\theta}) + \tilde{\mu}$ is unbiased ($\mathbb{E}[v_t] = \nabla f(w_t)$) and has variance $\mathbb{E}[\|v_t - \nabla f(w_t)\|^2] \leq 4L(f(w_t) - f^\star + f(\tilde{\theta}) - f^\star)$, which shrinks as the iterates approach $\theta^\star$.  This contracting variance enables SVRG to achieve \emph{geometric} convergence $\mathbb{E}[f(\theta_s) - f^\star] \leq \rho^s (f(\theta_0) - f^\star)$ for strongly convex $f$---the same rate as full gradient descent---while using only $O(n + m)$ gradient evaluations per outer epoch rather than $O(nm)$.
+
 \textbf{Step size and convergence.}  With constant learning rate $\alpha$, mini-batch SGD converges to within a neighbourhood of $\theta^{\star}$ of radius $O(\alpha \sigma^2 / b)$, where $\sigma^2$ is the gradient variance. For exact convergence, a \emph{diminishing step sequence} $\alpha_t = c/t$ (or $c/\sqrt{t}$) is required; the \emph{Polyak--Ruppert averaging} scheme maintains a running average $\bar{\theta}_t = \frac{1}{t}\sum_{s=1}^t \theta_s$, which converges at the optimal $O(1/\sqrt{t})$ rate for convex objectives even with constant step size. In our experiments, constant $\alpha = 0.06$ is used, which converges to the noise floor without explicit averaging.
 
 \begin{figure}[H]
@@ -781,7 +804,17 @@ L-BFGS (rank-$r$ approx) & $O(md)$ & --- & $O(rd)$ & $O(md + rd)$ \\
 \end{tabular}
 \end{table}
 
-For $d = 2$ as in our experiments, all costs are trivial and Newton is unambiguously superior. In high-dimensional problems (e.g.\ deep neural networks with $d \sim 10^6$ to $10^9$ parameters), the $O(d^2)$ Hessian storage and $O(d^3)$ solve are entirely prohibitive, motivating quasi-Newton methods (L-BFGS) that approximate $H^{-1}$ using a rank-$r$ update from the last $r$ gradient differences.  L-BFGS achieves superlinear convergence at $O(md + rd)$ per iteration, making it the practical second-order method for large-scale problems.
+For $d = 2$ as in our experiments, all costs are trivial and Newton is unambiguously superior. In high-dimensional problems (e.g.\ deep neural networks with $d \sim 10^6$ to $10^9$ parameters), the $O(d^2)$ Hessian storage and $O(d^3)$ solve are entirely prohibitive, motivating \emph{quasi-Newton methods}.
+
+\textbf{L-BFGS two-loop recursion.}  L-BFGS approximates the inverse Hessian $H_k^{-1}$ implicitly using the last $r$ \emph{curvature pairs} $\{(s_j, y_j)\}_{j=k-r}^{k-1}$, where $s_j = x_{j+1} - x_j$ (step) and $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$ (gradient change).  The BFGS secant condition $H_k s_{k-1} = y_{k-1}$ ensures the model exactly captures the most recent curvature.  The search direction $p_k = -H_k^{-1}\nabla f(x_k)$ is computed without ever forming $H_k^{-1}$ via the following recursion:
+\begin{enumerate}[nosep,label=\arabic*.]
+  \item Initialise $q \gets \nabla f(x_k)$.
+  \item \textbf{Back-sweep} (for $j = k-1, k-2, \ldots, k-r$): set $\rho_j = 1/(y_j^T s_j)$; $\alpha_j = \rho_j\,s_j^T q$; $q \gets q - \alpha_j\,y_j$.
+  \item \textbf{Scale}: $q \gets \bigl(s_{k-1}^T y_{k-1}/\|y_{k-1}\|^2\bigr)\,q$ \quad (Hessian initialisation: $H_0 \approx \gamma I$, $\gamma = s^Ty/\|y\|^2$).
+  \item \textbf{Forward-sweep} (for $j = k-r, k-r+1, \ldots, k-1$): $\beta = \rho_j\,y_j^T q$; $q \gets q + (\alpha_j - \beta)\,s_j$.
+  \item Return $p_k = -q$.
+\end{enumerate}
+The cost is $O(rd)$ per direction computation---versus $O(d^3)$ for exact Newton---with no $d \times d$ matrix stored.  L-BFGS with $r \approx 5$--$20$ achieves superlinear convergence (faster than linear, sub-quadratic) and is the standard method for large-scale unconstrained smooth optimisation \cite{nocedal2006}.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -926,6 +959,27 @@ Grid search & None & $N^d$ total & Very poor & Yes (to $\Delta x$) & Grid-limite
 \item Grid search is the only method with a global optimality guarantee (to within grid resolution), at the cost of exponentially many function evaluations.
 \end{itemize}
 
+\textbf{Function-evaluation budget comparison on Rosenbrock.}  To contextualise the trade-off, Table~\ref{tab:q4_fe_budget} compares the total function evaluations spent by each method on Benchmark C with the achieved final objective:
+
+\begin{table}[H]
+\centering
+\caption{Q4: Total function evaluations (FE) and final objective on Benchmark C. Exact GD counts gradient evaluations (each $\equiv$ 1 analytical gradient, not $d+1$ FE). $\dagger$ Grid search evaluates the full grid at the start.}
+\label{tab:q4_fe_budget}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Iterations} & \textbf{Total FE} & \textbf{Final $f$ (Bench.\ C)} \\
+\midrule
+Exact GD & 120 & 120 (gradient) & 3.514 \\
+FD GD ($\delta = 0.05$) & 120 & $120 \times 3 = 360$ & $\approx 3.7$ \\
+Nesterov random search & 220 & $220 \times 2 = 440$ & $\approx 2.1$ \\
+Nelder--Mead & 160 & $\leq 160 \times 3 = 480$ & $\approx 0.003$ \\
+Grid search$^\dagger$ & --- & $55^2 = 3025$ & $\approx 0.002$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Nelder--Mead achieves the best objective ($f \approx 0.003$) among derivative-free methods with only $\leq 480$ function evaluations, demonstrating that its simplex geometry is well-suited to the Rosenbrock valley.  Grid search achieves comparable accuracy ($f \approx 0.002$) but at $6\times$ the evaluation cost.  Both substantially outperform Nesterov random search on Rosenbrock at comparable FE budgets, because random search provides only $(1/d)$ of the gradient information per evaluation, requiring many more iterations to traverse the narrow valley.
+
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
 \label{sec:q5}
@@ -1014,9 +1068,24 @@ Settings: Projected GD ($\alpha = 0.08$), Penalty with $\lambda \in \{0.15, 1.8,
 
 This trade-off motivates the \emph{augmented Lagrangian} (multiplier method) approach, which replaces the pure penalty $F_\lambda(x) = f(x) + \lambda g^+(x)$ with:
 \begin{equation}
-\mathcal{L}_\rho(x,\mu) = f(x) + \mu^T g(x) + \frac{\rho}{2}\|g^+(x)\|^2,
+\mathcal{L}_\rho(x,\mu) = f(x) + \mu\,g(x) + \frac{\rho}{2}\max(0,\,g(x))^2,
 \end{equation}
-iterating over both $x$ and the dual multiplier $\mu$. This achieves exact feasibility at a \emph{finite} $\rho$ (since the dual variable $\mu$ captures the constraint), avoiding the ill-conditioning of the pure penalty approach.
+where $g(x) = 0.5 - x_1 \leq 0$ is our constraint. The full multiplier method alternates between minimising $\mathcal{L}_\rho$ over $x$ and updating the dual variable $\mu$:
+
+\begin{algorithm}[H]
+\caption{Augmented Lagrangian Method (Multiplier Method)}
+\label{alg:alm}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, initial multiplier $\mu_0 \geq 0$, penalty parameter $\rho > 0$, outer iterations $K$
+\For{$k = 0,1,\ldots,K-1$}
+    \State $x_{k+1} \gets \arg\min_{x}\;\mathcal{L}_\rho(x,\,\mu_k)$ \Comment{Inner minimisation (e.g.\ gradient descent on $\mathcal{L}_\rho$)}
+    \State $\mu_{k+1} \gets \max\!\bigl(0,\;\mu_k + \rho\,g(x_{k+1})\bigr)$ \Comment{Dual ascent: increase multiplier if constraint violated}
+    \State Optionally increase $\rho$ (e.g.\ $\rho \gets \min(10\rho,\,\rho_{\max})$) \Comment{Penalty escalation for faster feasibility}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The dual update $\mu_{k+1} = \max(0,\,\mu_k + \rho g(x_{k+1}))$ is a \emph{projected gradient ascent} step on the dual problem $\max_{\mu \geq 0} d(\mu)$.  Crucially, the dual variable $\mu_k$ captures the correct Lagrange multiplier: when $\mu_k \to \lambda^\star = 0$ (inactive constraint), the augmented Lagrangian reduces to $f(x)$ itself, and the inner minimisation recovers the exact unconstrained minimum without needing $\rho \to \infty$.  This is why the augmented Lagrangian avoids the severe ill-conditioning of the pure penalty approach while still enforcing exact feasibility.
 
 \subsection{Constraint Violation Analysis}
 
@@ -1046,11 +1115,18 @@ Unconstrained GD & $(0.582, 2.000)$ & 0.7244 & $> 0$ at some $k$ & No \\
 \end{tabular}
 \end{table}
 
-\textbf{Projected GD convergence.}  For a convex $L$-smooth objective over a convex feasible set $\mathcal{X}$, projected gradient descent with step $\alpha = 1/L$ satisfies:
+\begin{theorem}[Projected GD convergence \cite{nocedal2006}]
+\label{thm:pgd}
+Let $f$ be $L$-smooth and convex, and $\mathcal{X}$ a non-empty closed convex set.  Projected gradient descent with step $\alpha = 1/L$ satisfies, for all $k \geq 1$:
 \begin{equation}
-\|x_{k+1} - x^{\star}\|^2 \leq \|x_k - x^{\star}\|^2 - \frac{1}{L}\|\nabla f(x_k)\|^2,
+f(x_k) - f^\star \leq \frac{L\|x_0 - x^\star\|^2}{2k} = O\!\left(\frac{1}{k}\right).
 \end{equation}
-which implies the standard $O(1/k)$ convergence in objective value.  The projection step $\Pi_\mathcal{X}(x_k - \alpha \nabla f(x_k))$ is guaranteed to reduce both the distance to the optimum and the constraint violation simultaneously, since $\Pi_\mathcal{X}$ is a non-expansive operator.
+Moreover, the distance-to-feasibility satisfies $\Pi_\mathcal{X}(x_{k+1}) = x_{k+1}$ for all $k$ (exact feasibility from iteration 1).
+\end{theorem}
+
+\textbf{Proof sketch.}  The projection $\Pi_\mathcal{X}$ is non-expansive: $\|\Pi_\mathcal{X}(z) - x^\star\| \leq \|z - x^\star\|$ for all $z$.  Applying this to $z = x_k - \alpha\nabla f(x_k)$ and using $L$-smoothness yields $\|x_{k+1} - x^\star\|^2 \leq \|x_k - x^\star\|^2 - \frac{2\alpha}{L}(f(x_k) - f^\star)$ (for $\alpha = 1/L$, the squared-distance decreases at each step).  Telescoping over $k$ gives the $O(1/k)$ rate.
+
+The projection step $\Pi_\mathcal{X}(x_k - \alpha \nabla f(x_k))$ is guaranteed to reduce both the distance to the optimum and the constraint violation simultaneously, since $\Pi_\mathcal{X}$ is a non-expansive operator.
 
 \textbf{Projected GD} enforces feasibility \emph{exactly and instantaneously}. The projection $\Pi_\mathcal{X}$ is both cheap ($O(d)$) and precise for box constraints, making this the method of choice when a projection oracle is available.
 
@@ -1195,7 +1271,16 @@ where $D = \|x_k - z_k\|$ is the step length.  The method makes positive progres
 
 When the optimum is on the boundary, the LMO consistently selects the vertex on the constrained side, providing more useful gradient information.  The algorithm converges towards the boundary naturally, without requiring a projection.  This is the key structural advantage of Frank--Wolfe over projected gradient methods for sparsity-inducing constraints (e.g., $\ell_1$ ball), where the LMO selects a sparse extreme point.
 
-\textbf{Limitation of fixed $\beta$.}  The standard Frank--Wolfe uses $\gamma_k = 2/(k+2)$, which achieves the $O(1/k)$ rate \emph{with no residual}.  With fixed $\gamma = 1-\beta$, the method converges to within $O(\gamma)$ of $f^{\star}$, not to $f^{\star}$ itself.  For the boundary case with $\gamma = 0.07$, the residual is $O(0.07 \cdot L \cdot D^2)$; with $L = 2$ (Lipschitz constant of $\nabla(x_1^2 + x_2^2)$) and $D^2 \approx 245$, the theoretical residual is $O(34)$, consistent with the observed gap of $\approx 0.11$ (which is smaller because the effective diameter near the optimum is much less than $D$).
+\textbf{Diminishing vs.\ fixed step size: quantitative comparison.}  The standard Frank--Wolfe uses $\gamma_k = 2/(k+2)$, which achieves the $O(1/k)$ rate \emph{with no asymptotic residual}: $f(x_k) - f^\star \leq 2LD^2/(k+2) \to 0$.  With fixed $\gamma = 1-\beta$, the method converges to within $O(\gamma L D^2/2)$ of $f^\star$ but not to $f^\star$ itself.
+
+For the interior case ($f(x) = (x_1-1)^2+(x_2-5)^2$, $L = 2$, $D^2 \leq (4.5^2 + 15^2) \approx 245$):
+\begin{itemize}[nosep]
+  \item Fixed $\gamma = 0.015$ ($\beta = 0.985$): residual ball $\approx 0.015 \times 2 \times 245 / 2 = 3.7$.  Observed gap $= 0.0046$ (much smaller because the effective local diameter $\|x_k - z_k\|$ contracts with the iterate).
+  \item Diminishing $\gamma_k = 2/(k+2)$ at $k = 180$: bound $= 2 \times 2 \times 245/182 \approx 5.4$.  Asymptotically, however, the diminishing schedule guarantees exact convergence to $f^\star$ with no residual.
+\end{itemize}
+The practical takeaway: fixed $\gamma$ converges faster early (larger step) but stalls at a residual floor determined by the step size; diminishing $\gamma_k$ converges slower early but reaches $f^\star$ exactly.  For the experiments, fixed $\gamma$ was sufficient to confirm the $O(1/k)$ rate visually; a production implementation would use exact line search or the diminishing schedule.
+
+For the boundary case ($\gamma = 0.07$, $L = 2$, $D^2 \approx 245$): theoretical residual ball $= 0.07 \times 2 \times 245/2 = 17.2$.  The observed gap of $\approx 0.11$ is far smaller because near the boundary optimum the effective step length $\|x_k - z_k\|$ is only $\approx \|x_k - (0.5, 0)\|$, which contracts to near zero as convergence proceeds.
 
 % ============================================================
 \section{Conclusions}
