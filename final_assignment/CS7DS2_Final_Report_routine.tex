@@ -1103,6 +1103,23 @@ The Tikhonov regularisation $H_k + \lambda I$ with $\lambda = 10^{-8}$ serves th
 The choice $\lambda = 10^{-8}$ is negligible for Benchmarks A and B (whose Hessian eigenvalues
 are $O(1)$--$O(10)$), and only slightly distorts the Newton direction for Benchmark C.
 
+\paragraph{Choice of damping $\alpha$ for Rosenbrock.}
+The full Newton step ($\alpha = 1.0$) works on Benchmarks A and B because the functions
+are close to quadratic --- the quadratic model is accurate over a large neighbourhood.
+For Rosenbrock, the full Newton step overshoots badly at the starting point $x_0 = (-1, 1)$:
+the Newton direction points correctly towards $(1,1)$, but the step length under $\alpha = 1$
+is $\|\alpha p_0\| = \|H_0^{-1} g_0\| \approx 2.3$, which would carry the iterate past the
+minimum and onto the opposite side of the valley.
+
+The damping $\alpha = 0.22$ is chosen to ensure that the initial step remains within the
+region where the Hessian $H$ is a reasonable approximation of the true curvature.  This
+corresponds to the ``cautious'' Newton step in globalisation strategies.  A Backtracking line
+search (Armijo with $c = 0.3$, $\rho = 0.5$) would automatically select an appropriate
+$\alpha_k$ at each step, but for simplicity a fixed $\alpha = 0.22$ is used in the
+implementation.  The cost is that early iterations are more conservative than necessary (the
+optimal $\alpha$ increases as the iterate approaches $x^{\star}$), but 20 iterations with
+$\alpha = 0.22$ still dramatically outperforms 80 GD iterations.
+
 \begin{table}[H]
 \centering
 \caption{Q3: Hyperparameters for GD (80 iterations) and Newton (20 iterations, damping
@@ -1295,7 +1312,21 @@ giving a minimum total error $\approx \sqrt{\varepsilon_{\mathrm{machine}}} \app
 In practice, the choice $\delta \approx 0.01$--$0.1$ (truncation-error dominated) is common.
 
 A centred difference $[f(x + \delta e_i) - f(x - \delta e_i)]/(2\delta)$ achieves $O(\delta^2)$
-truncation error at the cost of $2d$ function evaluations instead of $d+1$.
+truncation error at the cost of $2d$ function evaluations instead of $d+1$.  The optimal
+$\delta$ for centred differences is $\delta^{\star} \sim \varepsilon_{\mathrm{machine}}^{1/3}
+\approx 10^{-5.3}$, roughly $10^{-5}$, giving accuracy $\approx 10^{-10}$ --- far better than
+forward differences.  In practice, $\delta \in [10^{-5}, 10^{-4}]$ is a good default for
+centred differences.  When noise is present in $f$ (as in stochastic settings), the
+round-off floor is replaced by a noise floor $\sigma_f$, and the optimal $\delta$ is
+$\delta^{\star} \sim \sigma_f^{1/2}$ (forward) or $\sigma_f^{1/3}$ (centred) --- larger
+$\delta$ reduces sensitivity to noise.
+
+\textbf{Why the implementation uses $\delta = 0.05$:}  Benchmark B's $\sin(x_1)$ component
+makes the function slightly nonlinear, so very small $\delta$ picks up the quadratic term
+rather than the linear term.  At $x_0 = (-1, 4)$, the second derivative $|f''| \leq 3$,
+so forward difference error $\approx \delta/2 \cdot |f''| \approx 0.075$ at $\delta = 0.05$.
+This is acceptable for the step sizes used.  By contrast, $\delta = 0.8$ gives truncation
+error $\approx 0.8/2 \cdot 3 = 1.2$, dwarfing the true gradient value.
 
 Figure~\ref{fig:q4_fd_error} quantifies the gradient approximation error as a function of
 $\delta$ at the starting point $x_0 = (-1, 4)$ for Benchmark~B.
@@ -2148,6 +2179,39 @@ The overarching lesson is that \emph{structural knowledge improves convergence}:
 each provide an algorithmic lever that translates theoretical advantage into empirical gain ---
 particularly on the ill-conditioned Rosenbrock benchmark where $\kappa \approx 2508$ amplifies
 every algorithmic difference.
+
+\subsection{Key Lessons Learned}
+
+Three meta-level insights emerge from the six experiments:
+
+\begin{enumerate}
+\item \textbf{Condition number is the dominant performance driver for first-order methods.}
+  On Benchmark A ($\kappa \approx 1.12$), all methods converge in fewer than 10 effective
+  iterations; the choice of method is nearly irrelevant.  On Rosenbrock ($\kappa \approx 2508$),
+  the best first-order method (Nesterov, $f = 0.479$) is $7\times$ better than the worst (GD,
+  $f = 3.388$) in 150 iterations, and Newton's 20-iteration result ($f = 0.686$) requires
+  understanding that even second-order methods need damping on highly non-convex functions.
+  The theoretical prediction that acceleration reduces effective iterations by $\sqrt{\kappa}$
+  is confirmed by the data.
+
+\item \textbf{Robustness and optimality are in tension.}
+  The Polyak step is theoretically optimal (achieves $(1-\mu/L)^k$ without tuning $L$) but
+  catastrophically fragile: a $0.48$-unit misspecification of $f^{\star}$ on Benchmarks A/B
+  causes divergence to $f \approx 24$, while a correct specification on Rosenbrock gives the
+  best result ($f = 0.0094$).  Newton is the most powerful method in terms of convergence
+  rate but requires Hessian computation and careful damping.  The most practically robust
+  methods are those that require minimal structural knowledge: Adam and Nesterov perform well
+  across all three benchmarks with minimal tuning.
+
+\item \textbf{The ``derivative ladder'' provides increasing accuracy at increasing cost.}
+  The experiments reveal a clear hierarchy: exact gradients $\to$ FD gradients $\to$ random
+  directional derivatives $\to$ simplex/grid search.  Each step down the ladder loses gradient
+  fidelity (increasing error from $O(\delta)$ to $O(d/\sqrt{k})$ to no guarantees), but
+  broadens applicability (from smooth differentiable to black-box to non-smooth functions).
+  Similarly, the second-order information in Newton's Hessian costs $O(d^3)$ per step but
+  eliminates the $\kappa$ dependence.  Choosing the right level of information to exploit is
+  the core practical decision in algorithm selection.
+\end{enumerate}
 
 \subsection{Practical Recommendations}
 
