@@ -947,6 +947,32 @@ Nesterov's momentum, by contrast, accumulates velocity along the valley floor di
 (which is consistent across many iterations), effectively exploiting the local curvature
 without needing to approximate the full Hessian.
 
+\paragraph{Adam convergence theory: strongly convex case.}
+For $\mu$-strongly convex objectives, the best known convergence guarantee for Adam (or its
+corrected variant \emph{AMSGrad}) is:
+\[
+\frac{1}{T}\sum_{t=1}^{T}\mathbb{E}[f(x_t) - f^{\star}] = O\!\left(\frac{d \log T}{\mu T}\right),
+\]
+which matches GD up to the $\log T$ factor and the problem dimension $d$.  For the Benchmark~A
+regression loss (strongly convex with $\mu \approx 0.925$, $d = 2$), this gives a per-iteration
+progress of $O(\log T / T)$, consistent with Adam reaching $f = 0.4826$ in 150 iterations.
+
+For \emph{general convex} problems, AMSGrad achieves $O(1/\sqrt{T})$ regret, matching the
+optimal rate for stochastic first-order methods.  However, Benchmark~C is non-convex, and
+no general convergence rate for Adam on non-convex functions is known without additional
+assumptions (such as $f$ being Lipschitz-smooth with bounded stochastic gradient variance).
+The empirical stagnation of Adam on Rosenbrock ($f = 1.578$) is therefore consistent with
+theory: on a non-convex, off-axis problem, Adam's per-coordinate scaling may not align with
+the local geometry, and no convergence theorem applies.
+
+An instructive comparison: on Benchmark~B (near-quadratic, $d=2$, $\kappa \leq 10$), Adam
+and Nesterov perform similarly, both converging to $f^{\star} = 0.7244$ within 150 iterations.
+The reason is that Benchmark~B's Hessian is \emph{diagonal} ($H = \mathrm{diag}(2-\sin(x_1), 10)$),
+so the ill-conditioning \emph{is} axis-aligned.  Adam's $1/\sqrt{\hat{v}_{t,i}}$ scaling
+effectively preconditions the $x_2$ coordinate (larger curvature) relative to $x_1$, giving
+Adam a practical advantage that matches Nesterov's momentum-based acceleration on this problem.
+This benchmarks' geometry thus highlights exactly the regime where Adam excels.
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -2395,6 +2421,45 @@ optimum.  Lower bound results (Jaggi, 2013) confirm that $O(1/k)$ is tight for v
 Frank--Wolfe.  Projected gradient descent and quasi-Newton methods achieve linear rates
 $O(e^{-\mu k / L})$ for strongly convex problems.  This makes Frank--Wolfe primarily
 attractive when projection is expensive, not when fast convergence to high accuracy is required.
+
+\paragraph{Away-step Frank--Wolfe: achieving linear rates on polytopes.}
+Away-step FW (Guelat \& Marcotte, 1986; Lacoste-Julien \& Jaggi, 2015) augments each
+iteration with an \emph{away step}: given the current iterate $x_k = \sum_{i} \lambda_i^k v_i$
+expressed as a convex combination of active vertices, the away step moves \emph{away} from
+the vertex $d_k = \arg\max_{v \in \mathcal{S}_k} \nabla f(x_k)^T v$ (the active vertex whose
+gradient contribution is largest).  The update is:
+\[
+x_{k+1} = x_k + \eta_k(s_k - x_k) + \gamma_k(x_k - d_k),
+\]
+where $s_k$ is the standard FW linear minimiser and $\gamma_k \leq \lambda_{d_k}^k/(1-\lambda_{d_k}^k)$
+ensures the iterate stays convex.  The combined step can \emph{drop} $d_k$ from the active set
+when $\gamma_k = \lambda_{d_k}^k/(1-\lambda_{d_k}^k)$, which is precisely what eliminates the
+zig-zag: once a ``bad'' vertex is removed from the active set, it no longer interferes.
+
+The convergence rate of away-step FW on a $\mu$-strongly convex, $L$-smooth $f$ over a
+polytope $\mathcal{P}$ with \emph{pyramidal width} $w > 0$ is:
+\[
+f(x_k) - f^{\star} \leq \left(1 - \frac{\mu w^2}{2LD^2}\right)^k (f(x_0) - f^{\star}),
+\]
+where $D$ is the diameter and $w = \min_{\mathcal{S} \subseteq \mathcal{V}}
+\min_{v \in \mathcal{V} \setminus \mathcal{S}} d(v,\, \mathrm{conv}(\mathcal{S})) > 0$
+is the minimum distance from any vertex to any face of the polytope.  For the Q6 box
+$\mathcal{X} = [0.5,5]\times[-5,10]$, the four vertices are
+$\{(0.5,-5),(5,-5),(0.5,10),(5,10)\}$.  The minimum vertex-to-opposite-face distance is
+$\min(4.5, 15) = 4.5$ (the width in $x_1$), giving $w = 4.5$.  With $D = \sqrt{4.5^2+15^2}
+\approx 15.66$ and $L = 2$ (boundary objective), the linear rate is
+$1 - \mu \cdot 4.5^2/(2 \cdot 2 \cdot 15.66^2) \approx 1 - \mu \cdot 0.041$.
+For $\mu = 2$ (boundary objective): rate $\approx 1-0.082$, i.e.\ $\approx 92\%$ per step ---
+still slower than projected GD ($\approx 1-\mu/L = 0$, converges in 1 step), but geometrically
+convergent rather than $O(1/k)$.
+
+\paragraph{Pairwise FW.}
+\emph{Pairwise Frank--Wolfe} (Lacoste-Julien \& Jaggi, 2015) combines a forward step toward
+$s_k$ and an away step from $d_k$ in a single update with step $\gamma_k(s_k - d_k)$.
+This maintains the total weight on the active set (no atom is added without removing weight
+from another), giving sparser iterates and the same linear convergence rate as away-step FW.
+Both variants are drop-in replacements for the LP oracle call; the only additional overhead
+is tracking the active set $\mathcal{S}_k$, which is $O(|\mathcal{S}_k|)$ per step.
 
 % ============================================================
 \section{Summary and Conclusions}
