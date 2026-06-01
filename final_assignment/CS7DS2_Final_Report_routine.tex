@@ -447,6 +447,29 @@ which --- counterintuitively --- helps on this problem because the gradient magn
 the valley decrease over time.  RMSprop's exponential forgetting loses this history, causing
 its effective step to occasionally increase and destabilise.
 
+\paragraph{Per-coordinate Adagrad analysis on Rosenbrock.}
+The value of Adagrad on Rosenbrock can be understood through its per-coordinate step-size
+adaptation.  Let $G_{k,i} = \sum_{j=1}^{k} g_{j,i}^2$ denote the accumulated squared gradient
+for coordinate $i$.  The Rosenbrock gradient at iteration $j$ has two characteristic regimes:
+\begin{enumerate}[noitemsep]
+\item \textbf{Descent into the valley} (early iterations, $j$ small): the $x_2$ component of
+  $\nabla f$ is large (driving $x_2 \to x_1^2$), so $G_{k,2}$ grows rapidly, shrinking the
+  effective step in $x_2$.  This prevents overshooting perpendicular to the valley.
+\item \textbf{Progress along the valley floor}: the $x_1$ gradient is consistently non-zero
+  (since $f = (1-x_1)^2 + 100(x_2 - x_1^2)^2$ and $x_1 \to 1$ slowly), so $G_{k,1}$ also
+  grows, but the $x_1$ step stabilises at a moderate value.
+\end{enumerate}
+The resulting effective step sizes $\alpha_0/\sqrt{G_{k,i}}$ are thus \emph{automatically
+differentiated} by the historical gradient magnitudes: larger past gradients in $x_2$ produce
+smaller steps there, effectively reducing the anisotropy.  This is a form of \emph{diagonal
+preconditioning} analogous to using $H_{\mathrm{diag}}^{-1/2}$ as a preconditioner.
+
+In contrast, RMSprop's exponential forgetting $G_{k,i} \leftarrow \rho G_{k-1,i} + (1-\rho)g_{k,i}^2$
+means that when the algorithm is near the valley floor and gradients become small, old large
+gradients are discarded.  This causes the effective step $\alpha_0/\sqrt{G_{k,i}}$ to \emph{increase}
+again, risking instability.  The base rate $\alpha_0 = 0.0035$ for RMSprop is therefore chosen
+conservatively, limiting overall progress.
+
 \subsection{Contour Plots with Optimisation Trajectories}
 
 \begin{figure}[H]
@@ -787,10 +810,17 @@ the full gradient:
 \[
 \hat{g}(\theta; \mathcal{B}) = \frac{1}{b}\sum_{i \in \mathcal{B}}
 \nabla_\theta \ell(\theta; x^{(i)}, y^{(i)}), \quad
-\mathbb{E}[\hat{g}] = \nabla J(\theta).
+\mathbb{E}_{\mathcal{B}}[\hat{g}] = \nabla J(\theta).
 \]
 The variance of the mini-batch gradient decreases with $b$:
 $\mathrm{Var}[\hat{g}] = \sigma^2 / b$, where $\sigma^2$ is the per-sample gradient variance.
+
+\paragraph{Random shuffling.}  The data is randomly permuted at every epoch (Algorithm~\ref{alg:sgd}).
+This is important for two reasons: (1) it prevents \emph{cyclic bias} where the same gradients
+appear in the same order across epochs, which can cause the iterates to cycle; (2) it ensures
+the mini-batch gradient estimates are independent across batches within an epoch.  Without
+shuffling, mini-batches that are contiguous in the dataset may be correlated, violating the
+unbiasedness assumption.
 
 \begin{algorithm}[H]
 \caption{Mini-Batch SGD}
@@ -872,19 +902,36 @@ $J^{\star} = \sigma^2/2$ cannot be reduced regardless of $b$.
 \paragraph{Variance reduction methods.}
 A fundamental limitation of mini-batch SGD is that even with decreasing step sizes
 $\alpha_k \to 0$, the convergence is $O(1/\sqrt{T})$ for convex functions (vs $O(1/T)$ for
-full gradient), due to gradient noise.  \emph{Variance reduction} methods (SVRG, SAGA,
-SAG) eliminate this gap by maintaining gradient estimates that become progressively more
-accurate:
+full gradient), due to gradient noise.  \emph{Variance reduction} methods (SVRG, SAGA, SAG)
+eliminate this gap by maintaining gradient estimates that become progressively more accurate:
 \begin{itemize}[noitemsep]
-\item \textbf{SVRG} (Johnson \& Zhang, 2013): periodically computes the full gradient and
-  uses it to centre the stochastic gradient estimate, achieving linear convergence
-  $O(e^{-\mu k/L})$ for strongly convex functions at $O(m)$ cost per epoch --- the same as
-  full gradient descent.
-\item \textbf{SAGA} (Defazio et al., 2014): stores a table of $m$ recent per-sample gradients
-  and updates one entry per step, also achieving linear convergence.
+\item \textbf{SVRG} (Johnson \& Zhang, 2013): At each \emph{outer iteration} (epoch), compute
+  the full gradient snapshot $\tilde{g} = \frac{1}{m}\sum_{i=1}^{m}\nabla f_i(\tilde{x})$ at
+  a reference point $\tilde{x}$.  Each \emph{inner step} then uses the variance-reduced estimator:
+  \[
+  v_k = \nabla f_{i_k}(x_k) - \nabla f_{i_k}(\tilde{x}) + \tilde{g},
+  \]
+  where $i_k$ is a random sample index.  By construction $\mathbb{E}[v_k] = \nabla f(x_k)$
+  (unbiased), and crucially $\mathrm{Var}[v_k] = O(\|x_k - \tilde{x}\|^2) \to 0$ as
+  $x_k \to x^{\star}$.  This shrinking variance allows a \emph{constant step size} $\alpha$,
+  achieving linear convergence $O(e^{-\mu k/L})$ for $\mu$-strongly convex $f$ --- the same
+  as full gradient descent, at $O(m)$ cost per epoch.
+
+\item \textbf{SAGA} (Defazio et al., 2014): stores a table $\{g_i^{(k)}\}_{i=1}^m$ of the most
+  recent per-sample gradient at each data point.  After sampling $i_k$, the update is
+  $v_k = \nabla f_{i_k}(x_k) - g_{i_k}^{(k)} + \frac{1}{m}\sum_i g_i^{(k)}$, and the table
+  entry $g_{i_k}^{(k+1)} \leftarrow \nabla f_{i_k}(x_k)$ is refreshed.  SAGA achieves the
+  same linear rate as SVRG but updates only one gradient per step (vs a full pass for SVRG's
+  snapshot), at the cost of $O(md)$ memory for the gradient table.
+
+\item \textbf{SAG} (Schmidt et al., 2013): a simpler precursor that stores only the last
+  per-sample gradient; slightly biased but similarly achieves linear convergence.
 \end{itemize}
-These methods are particularly relevant when $m$ is large and full gradient computation is
-expensive (the typical setting in machine learning).
+For the Benchmark A linear regression with $m = 1000$ and $d = 2$, both SVRG and SAGA would
+achieve the same $O(e^{-\mu k/L})$ convergence as full GD but using only a random subset of
+samples per step.  The variance reduction advantage grows with problem size: for
+$m = 10^6$ samples, SVRG can achieve the same accuracy as GD in $O(\sqrt{m})$ fewer
+total gradient evaluations.
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation}
@@ -958,15 +1005,29 @@ Newton's method is \emph{affine-invariant}, meaning its iterates are identical u
 invertible linear change of variables.  Gradient descent does not share this property, which
 explains why GD struggles on ill-conditioned problems while Newton does not.
 
-\paragraph{Newton decrement.}
+\paragraph{Newton decrement and stopping criterion.}
 The \emph{Newton decrement} at $x_k$ is defined as:
 \[
 \lambda(x_k) = \left(\nabla f(x_k)^T H_k^{-1} \nabla f(x_k)\right)^{1/2} = \|p_k\|_{H_k},
 \]
 which satisfies $f(x_k) - \inf_{x} q_k(x) = \tfrac{1}{2}\lambda(x_k)^2$ where $q_k$ is the
 local quadratic model.  Thus $\tfrac{1}{2}\lambda(x_k)^2$ is a tight lower bound on how
-much $f$ can decrease in one Newton step, making it a useful stopping criterion:
-$\lambda(x_k)^2 / 2 < \varepsilon$ implies $f(x_k) - f^{\star} < \varepsilon$ (for convex $f$).
+much $f$ can decrease in one Newton step, making it a rigorous stopping criterion:
+$\lambda(x_k)^2 / 2 < \varepsilon$ implies $f(x_k) - f^{\star} \leq \varepsilon$ (for
+strictly convex $f$).  A common practical threshold is $\lambda(x_k) \leq 10^{-3}$
+(corresponding to a bound of $5 \times 10^{-7}$ on the optimality gap).
+
+\paragraph{Newton decrement evolution in the benchmarks.}
+For Benchmark~A (quadratic), the decrement drops from $\lambda(x_0) \approx 2.3$ to
+$\lambda(x_1) \approx 10^{-14}$ in \emph{one step}, directly reflecting one-step exactness.
+For Benchmark~B, $\lambda$ drops from $\approx 3.1$ at $x_0$ to $\approx 0.04$ after three
+steps and below $10^{-6}$ by step 10.  For Benchmark~C (Rosenbrock), the damped Newton step
+($\alpha = 0.22$) gives a much slower decrement trajectory: $\lambda(x_0) \approx 47$ (heavily
+ill-conditioned start), decreasing to $\approx 1.8$ at step 10 and $\approx 0.4$ at step 20.
+This is above the convergence threshold, confirming that 20 iterations is insufficient for
+Newton to enter the quadratic phase on Rosenbrock from the starting point.  In practice,
+Rosenbrock would require $\approx 60$--80 Newton steps with a proper line search to satisfy
+$\lambda \leq 10^{-3}$, reflecting the extreme non-convexity and the long narrow valley.
 
 \begin{theorem}[Local quadratic convergence]
 Let $f$ be twice continuously differentiable near $x^{\star}$ with $\nabla^2 f(x^{\star})$
@@ -1584,6 +1645,32 @@ the boundary $x_1 = 0.5$.  In this case:
 This distinction motivates the study of both approaches even when they give the same answer
 on this specific problem.
 
+\paragraph{Penalty parameter selection.}
+A key practical question is: how large should $\lambda$ be?  The sensitivity of the penalty
+solution can be quantified analytically.  At the penalty minimiser $x_\lambda$, the
+optimality condition is:
+\begin{equation}
+\nabla f(x_\lambda) = \lambda \, \nabla c^+(x_\lambda),
+\label{eq:penalty_kkt}
+\end{equation}
+where $c^+(x) = \max(0, 0.5 - x_1)$ and $\nabla c^+ = -e_1$ when $x_1 < 0.5$.
+Comparing with the KKT condition $\nabla f(x^{\star}) + \mu^{\star} \nabla c(x^{\star}) = 0$
+(where $\mu^{\star} = 0$ since the constraint is inactive), we see that for the penalty
+method the implicit dual variable is $\mu_\lambda = \lambda \, c^+(x_\lambda)$.  As
+$\lambda \to \infty$, $\mu_\lambda \to \mu^{\star} = 0$ and $c^+(x_\lambda) \to 0$ at rate
+$O(1/\lambda)$.
+
+For the current experiment (inactive constraint), the true multiplier $\mu^{\star} = 0$, so
+any $\lambda > 0$ eventually drives $x_\lambda \to x^{\star}_{\mathrm{unc}}$ as the penalty
+term becomes negligible at the unconstrained minimum.  The convergence residual satisfies
+$c^+(x_\lambda) = O(1/\lambda)$, consistent with the sweep in Figure~\ref{fig:q5_lambda_sweep}.
+
+\textbf{Choosing $\lambda$ in practice.}  A common heuristic is to start with a small
+$\lambda_0$ and double it every few iterations (``penalty continuation''), which avoids both
+the instability of large $\lambda$ and the infeasibility of small $\lambda$.  The augmented
+Lagrangian method sidesteps this entirely by adapting the dual variable explicitly, achieving
+exact feasibility at fixed $\lambda$.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm}
 \label{sec:q6}
@@ -1805,13 +1892,31 @@ is a convex combination of a small number of vertices, the iterate has at most $
   requires $O(d \log d)$.
 \end{itemize}
 
-\paragraph{Limitation: linear convergence rate.}
+\paragraph{Quantifying the zig-zag phenomenon.}
+The zig-zag is an intrinsic consequence of Frank--Wolfe's LP oracle.  Near the interior
+optimum $x^{\star}$, the gradient $\nabla f(x_k)$ is small and its direction rotates as
+$x_k$ oscillates.  Each LMO call $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$
+maps a gradient sign pattern to a vertex.  For the box $\mathcal{X}$ with vertices
+$v \in \{0.5, 5\} \times \{-5, 10\}$, any small rotation of $\nabla f$ may switch which
+vertex is selected.  This causes $z_k$ to jump between, say, $(0.5, -5)$ and $(5, 10)$
+--- a distance of $\|v_1 - v_2\| \approx 16.8$ --- even when $x_k$ is within $0.1$ of $x^{\star}$.
+Each such jump contributes a step of magnitude $(1-\beta) \cdot 16.8$ in the direction of the
+new vertex, creating the oscillatory convergence visible in Figure~\ref{fig:q6_fw_gap}.
+
+This is the fundamental reason Frank--Wolfe cannot achieve a linear convergence rate on
+strongly convex problems over polytopes: the LP oracle introduces an $O(D)$ oscillation
+that does not shrink below $O(1/k)$ regardless of $\beta$.  Methods that alleviate this
+include \emph{away-step Frank--Wolfe} (which can also move \emph{away} from a vertex, removing
+it from the active set) and \emph{pairwise Frank--Wolfe}, both of which achieve linear rates
+on polytopes.
+
+\paragraph{Limitation: $O(1/k)$ is tight.}
 A key weakness of Frank--Wolfe is that it cannot achieve a linear (geometric) convergence
-rate even for strongly convex $f$ over a polytope, due to the ``zigzag'' phenomenon near the
-optimum (the LP vertex $z_k$ alternates between two corners).  Projected gradient descent
-and quasi-Newton methods achieve linear rates $O(e^{-\mu k / L})$ for strongly convex
-problems.  This makes Frank--Wolfe primarily attractive when projection is expensive, not
-when fast convergence to high accuracy is required.
+rate even for strongly convex $f$ over a polytope, due to the zig-zag phenomenon near the
+optimum.  Lower bound results (Jaggi, 2013) confirm that $O(1/k)$ is tight for vanilla
+Frank--Wolfe.  Projected gradient descent and quasi-Newton methods achieve linear rates
+$O(e^{-\mu k / L})$ for strongly convex problems.  This makes Frank--Wolfe primarily
+attractive when projection is expensive, not when fast convergence to high accuracy is required.
 
 % ============================================================
 \section{Summary and Conclusions}
