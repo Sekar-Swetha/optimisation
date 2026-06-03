@@ -576,6 +576,8 @@ This unbounded step causes the oscillation visible in Figure~\ref{fig:q1_fval_A}
 \item \textbf{RMSprop:} The exponential moving average addresses Adagrad's step
   stagnation. However, tuning $\alpha_0$ on Rosenbrock is difficult because the
   required rate is very small; with $\alpha_0 = 0.0035$ it matches GD performance.
+  On Benchmark~A, RMSprop converges to $\approx 0.503 > J^\star \approx 0.483$,
+  explained in detail by Remark~\ref{rem:rmsprop_floor} below.
 
 \item \textbf{Heavy Ball:} Momentum accumulation along the valley floor yields
   significant improvement on Rosenbrock ($f = 1.40$ vs.\ GD $f = 3.51$), at the
@@ -585,6 +587,26 @@ This unbounded step causes the oscillation visible in Figure~\ref{fig:q1_fval_A}
   Adagrad are safer adaptive choices. When momentum is desired without curvature
   information, Heavy Ball provides meaningful acceleration at near-zero additional cost.
 \end{itemize}
+
+\begin{remark}[RMSprop convergence floor above $f^\star$]
+\label{rem:rmsprop_floor}
+The gap $f_\infty \approx 0.503$ vs.\ $J^\star \approx 0.483$ on Benchmark~A arises
+from the interaction between the exponential moving average and the stability boundary.
+Near the minimiser $\hat\theta$, gradient norms $\|g_k\| \to 0$ and the second-moment
+estimate $v_t = \beta v_{t-1} + (1-\beta)\|g_t\|^2$ decays exponentially (with time
+constant $1/(1-\beta) = 10$ steps at $\beta = 0.9$). As $v_t$ shrinks, the effective
+step $\alpha_{\rm eff} = \alpha_0 / (\sqrt{v_t} + \varepsilon)$ grows. The stability
+condition $\alpha_{\rm eff} \cdot L < 2$ for a quadratic with largest eigenvalue $L$
+requires
+\[
+  v_t > \left(\frac{\alpha_0 L}{2}\right)^2 \approx \left(\frac{0.22 \times 1.033}{2}\right)^2 \approx 0.013.
+\]
+Once $v_t$ drops below this threshold---which occurs $\approx \log(v_0 / 0.013) / \log(1/\beta)
+\approx 42$ iterations after gradients become small---RMSprop begins to overshoot,
+creating bounded oscillation whose amplitude determines the residual gap above $J^\star$.
+Reducing $\alpha_0$ or increasing $\varepsilon$ raises the stability threshold $v_t^{\min}$
+and allows tighter convergence to $J^\star$, at the cost of slower initial progress.
+\end{remark}
 
 \subsubsection*{Practical Tuning Guidance}
 
@@ -1272,9 +1294,18 @@ difference pairs $\{s_k, y_k\}$ where $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(
   B_{k+1} = B_k + \frac{s_k s_k^T}{y_k^T s_k} - \frac{B_k y_k y_k^T B_k}{y_k^T B_k y_k}.
   \label{eq:bfgs_update}
 \end{equation}
-This rank-2 update satisfies the secant condition $B_{k+1} y_k = s_k$ and requires only
-$O(md)$ storage and $O(md)$ computation per iteration rather than $O(d^2)$ and $O(d^3)$
-for exact Newton, making quasi-Newton methods the practical choice for problems with
+This rank-2 update satisfies the \emph{secant condition} $B_{k+1} y_k = s_k$:
+the approximation maps the observed gradient difference $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$
+to the step $s_k = x_{k+1} - x_k$. This is precisely the relation the true inverse Hessian
+$H^{-1}$ satisfies on a quadratic ($H\, s_k = y_k \Rightarrow H^{-1} y_k = s_k$),
+so the secant condition forces $B_{k+1}$ to agree with $H^{-1}$ on the most recently
+observed direction---the direction with the freshest curvature information.
+L-BFGS maintains the $m$ most recent pairs $\{(s_j,y_j)\}_{j=k-m+1}^{k}$, discarding
+older curvature data. The implicit rank-$2m$ approximation requires only $O(md)$ storage
+and $O(md)$ computation per iteration, compared to $O(d^2)$ storage and $O(d^3)$
+for exact Newton. For $m = 20$ and $d = 10^6$ (e.g.\ a neural network with one million
+parameters), this reduces memory from $10^{12}$ to $4 \times 10^7$ elements---a reduction
+of $25{,}000\times$---making quasi-Newton methods the practical choice for
 $d = 10^3$--$10^6$.
 
 \textbf{Connection to lecture material.}
@@ -2208,6 +2239,13 @@ The key selection criteria are:
   complex set but cheap LP oracle $\to$ Frank--Wolfe; simple constraint $\to$ penalty.
 \item \textbf{Stochastic setting:} Noisy gradients $\to$ Adam or SGD with learning
   rate schedule; deterministic $\to$ Nesterov or Newton.
+\item \textbf{Problem dimension $d$:} The per-iteration cost of Newton ($O(d^3)$) renders
+  it impractical for $d \gtrsim 10^3$. L-BFGS with memory $m = 10$--$20$ extends
+  quasi-Newton methods to $d \lesssim 10^6$ using $O(md)$ storage and achieves
+  superlinear convergence. For $d \gg 10^6$ (deep learning), only first-order or
+  adaptive methods (Adam, Nesterov) are computationally feasible; the $O(d)$ per-step
+  cost dominates and Hessian information must be fully discarded or approximated via
+  diagonal scaling (as in Adagrad and RMSprop).
 \end{enumerate}
 
 The experiments demonstrate these trade-offs concretely: Benchmark~A (isotropic,
