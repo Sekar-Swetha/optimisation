@@ -473,6 +473,23 @@ when $f^\star = 0$ is correctly specified.
   information, Heavy Ball provides meaningful acceleration at near-zero additional cost.
 \end{itemize}
 
+\subsubsection*{Practical Tuning Guidance}
+
+The hyperparameters in Table~\ref{tab:q1_params} were selected to ensure stable
+convergence on each benchmark. The following principles guided the choices:
+\begin{itemize}[nosep]
+\item \textbf{GD step size:} Must satisfy $\alpha < 2/L$ for convergence.
+  Benchmark A: $L \approx 1.03$, so $\alpha = 0.08 \ll 2/1.03 \approx 1.94$ (conservative).
+  Benchmark C: $L(x_0) \approx 1002$ at start, requiring $\alpha < 2/1002 \approx 0.002$,
+  hence $\alpha = 0.0012$.
+\item \textbf{Adagrad $\alpha_0$:} A larger base rate works because the effective step
+  $\alpha_0/\sqrt{G_k}$ shrinks automatically; $\alpha_0 = 1.8$ for Benchmark A
+  accounts for the large initial gradient norms.
+\item \textbf{RMSprop:} The base rate $\alpha_0 = 0.0035$ for Benchmark C reflects
+  the need for stability on the highly curved Rosenbrock surface, where even the
+  RMSprop denominator cannot fully compensate for the extreme condition number.
+\end{itemize}
+
 \begin{proposition}[Heavy Ball on Quadratics]
 For a quadratic $f(x) = \frac{1}{2}x^T H x - b^T x$ with eigenvalues
 $\mu \leq \lambda_i \leq L$, the optimal Heavy Ball parameters are
@@ -870,12 +887,12 @@ $\lambda = 10^{-8}$.
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q3_fval_A.pdf}
 \caption{Q3: Newton vs GD on Benchmark A (log scale). Newton converges to
-$J^\star = 0.4826$ in a \textbf{single iteration}. This is the expected result:
-for the quadratic loss $J(\theta) = \frac{1}{2m}\|X\theta - y\|^2$ with constant
-Hessian $H = \frac{1}{m}X^TX$, the Newton step
-$\theta_1 = \theta_0 - H^{-1}\nabla J(\theta_0)$ yields the OLS estimator
-$\hat\theta = (X^TX)^{-1}X^Ty$ exactly. GD requires 80 iterations to reach
-comparable accuracy.}
+$J^\star \approx 0.4826$ in a \textbf{single iteration}. This is exact for quadratics:
+the full Newton step ($\alpha = 1$) gives
+$\theta_1 = \theta_0 - H^{-1}\nabla J(\theta_0) = \theta_0 - H^{-1}H(\theta_0 - \hat\theta) = \hat\theta$,
+jumping directly to the OLS estimator $\hat\theta = (X^TX)^{-1}X^Ty$, regardless of
+starting point or condition number. GD with $\alpha = 0.08 \ll 2/L \approx 1.94$ requires
+approximately 80 iterations to converge, despite the near-isotropic Hessian ($\kappa \approx 1.12$).}
 \label{fig:q3_fval_A}
 \end{figure}
 
@@ -1069,12 +1086,17 @@ which for Benchmark B is $O(4)$, completely dominating the gradient signal).
 
 The estimator $\hat{g}_k$ is a scaled directional derivative:
 $\hat{g}_k \approx (u_k^T \nabla f(x_k))\, u_k = \Pi_{u_k}\nabla f(x_k)$,
-the projection of the gradient onto the random direction. This is an \emph{unbiased}
-estimate of a smoothed gradient \cite{nesterov2017random}, but it uses only a single
-random direction per step, losing $d-1$ dimensions of gradient information. The
-method requires only 2 function evaluations per step regardless of dimension $d$,
-making it dimension-independent in cost per step---a key advantage when $d$ is large
-but function evaluations are expensive.
+the projection of the gradient onto the random direction $u_k$.
+Its expected value (over random $u_k$) is a smoothed gradient \cite{nesterov2017random}:
+\[
+  \mathbb{E}[\hat{g}_k] = \frac{1}{d}\nabla f_\delta(x_k) \approx \frac{1}{d}\nabla f(x_k),
+\]
+so the method converges in the direction of the true gradient on average, but with
+variance scaling as $d$: on a 2D problem the variance is $2\times$ that of the full
+gradient, but in high dimensions ($d = 1000$) the variance is $1000\times$ higher.
+The method requires only 2 function evaluations per step regardless of $d$,
+making it attractive when $d$ is large but gradient computation is unavailable
+(e.g.\ black-box simulation models).
 
 \subsubsection{Part A Results on Benchmark B}
 
@@ -1119,7 +1141,9 @@ requiring no gradient evaluations:
   the best.
 \end{enumerate}
 
-Settings: initial simplex step $= 0.35$, $N = 160$ iterations.
+Settings: initial simplex step $= 0.35$, $N = 160$ iterations, with default
+Nelder--Mead parameters: reflection $\alpha_r = 1.0$, expansion $\gamma = 2.0$,
+contraction $\rho = 0.5$, shrink $\sigma = 0.5$ \cite{nelder1965simplex}.
 
 \begin{figure}[H]
 \centering
@@ -1264,6 +1288,31 @@ constraint violation. As $\lambda \to \infty$, the constrained problem
 \eqref{eq:q5_problem} is recovered asymptotically, but finite $\lambda$ admits
 residual violations and may require smaller step sizes for stability.
 
+\begin{remark}[Why large $\lambda$ requires smaller step size]
+The penalised objective $F_\lambda$ has Lipschitz constant of its gradient:
+\[
+  L_\lambda = L_f + \lambda \cdot L_c,
+\]
+where $L_f$ is the smoothness constant of $f$ and $L_c$ is the Lipschitz constant
+of $\nabla c(x) = \nabla\max(0, 0.5 - x_1)$. Since $\nabla c$ is discontinuous at
+$x_1 = 0.5$, the penalty function is not smooth --- the gradient of $F_\lambda$ has
+a jump of magnitude $\lambda$ at the constraint boundary. For stability, gradient
+descent requires step size $\alpha \leq 1/(L_f + \lambda)$, explaining why
+$\lambda = 4.5$ uses $\alpha = 0.03$ while $\lambda = 1.8$ uses $\alpha = 0.05$.
+\end{remark}
+
+\textbf{KKT conditions.} At the constrained optimum $x^\star$, the
+Karush--Kuhn--Tucker (KKT) conditions for \eqref{eq:q5_problem} are:
+\[
+  \nabla f(x^\star) + \mu^\star (-e_1) = 0, \quad
+  \mu^\star (x_1^\star - 0.5) = 0, \quad
+  \mu^\star \geq 0, \quad x_1^\star \geq 0.5.
+\]
+Since the unconstrained minimum $x_1^\star = 0.582 > 0.5$ lies in the interior,
+the constraint is inactive ($x_1^\star - 0.5 > 0$), the complementary slackness
+condition forces $\mu^\star = 0$, and the KKT conditions reduce to $\nabla f(x^\star) = 0$.
+This is why the constrained and unconstrained minima coincide in this experiment.
+
 Settings: Projected GD ($\alpha = 0.08$); Penalty with $\lambda \in \{0.15, 1.8, 4.5\}$
 ($\alpha = 0.05$ for $\lambda \leq 1.8$; $\alpha = 0.03$ for $\lambda = 4.5$ to
 maintain stability on the more steeply penalised objective); unconstrained GD ($\alpha = 0.07$);
@@ -1334,12 +1383,16 @@ Penalty $\lambda = 0.15$ & $(<0.5,\;\cdot)$ & $> 0.7244$ & $> 0$ & No \\
 
 \textbf{Projected Gradient Descent} maintains strict feasibility $x_k \in \mathcal{X}$
 at every iteration by construction. The projection onto $\{x : x_1 \geq 0.5\}$ is a
-simple $\max$ operation. When the constraint is active (the unconstrained optimum lies
-outside $\mathcal{X}$), PGD slides along the boundary; when the constraint is inactive
-(unconstrained optimum is interior, as here), PGD converges to the unconstrained minimum
-at the standard projected gradient rate. The disadvantage is that the projection oracle
-must be computationally tractable; for general convex sets this may require solving a
-quadratic programme.
+simple $\max$ operation. When the constraint is \emph{inactive} (unconstrained optimum
+interior, as here), PGD converges to the unconstrained minimum with the standard GD rate,
+since the projection is applied but leaves the iterate unchanged once $x_1 \geq 0.5$.
+When the constraint is \emph{active} (unconstrained optimum outside $\mathcal{X}$),
+PGD slides along the constraint boundary, converging to the constrained KKT point where
+$\nabla f(x^\star)^T (x - x^\star) \geq 0$ for all $x \in \mathcal{X}$
+(the optimality condition for a constrained minimum). The disadvantage is that the
+projection oracle must be computationally tractable; for general convex sets
+(e.g.\ nuclear norm balls, positive semidefinite cones, intersection of halfspaces),
+projection may require solving a convex programme at each step.
 
 \textbf{Penalty methods} replace the constrained problem with an unconstrained
 penalised surrogate $F_\lambda = f + \lambda\, c(x)$. The weight $\lambda$ controls
