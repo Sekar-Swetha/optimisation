@@ -1013,11 +1013,20 @@ The approximation error has two competing components:
 \end{equation}
 The truncation error grows with $\delta$ (coarser approximation), while the
 floating-point error grows as $\delta \to 0$ (catastrophic cancellation in
-$f(x+\delta) - f(x)$). Minimising the total error with respect to $\delta$ gives
-an optimal step size $\delta^{\star} \approx \sqrt{2\varepsilon_{\text{mach}}} \approx 1.5 \times 10^{-8}$.
-The assignment tests $\delta = 0.05$ (close to optimal for this problem) and
-$\delta = 0.8$ (dominated by truncation error). The gradient descent step
-uses $\alpha = 0.08$ for both FD settings, with 120 iterations.
+$f(x+\delta) - f(x)$). The total error is minimised at
+$\delta^{\star} = \sqrt{2\varepsilon_{\text{mach}}|f|/|f''|}$.
+For Benchmark~B near $x_0 = (-1, 4)$ (where $|f| \approx 9$ and $|f''| \approx 10$),
+this gives $\delta^{\star} \approx \sqrt{2 \times 10^{-16} \times 9/10} \approx 4 \times 10^{-9}$.
+
+In practice, $\delta = 10^{-5}$--$10^{-3}$ is commonly used for smooth functions,
+balancing approximation quality against sensitivity to function evaluation noise.
+The assignment setting $\delta = 0.05$ is in the \emph{truncation-dominated} regime
+but with manageable error: the gradient magnitude at the starting point is
+$\|\nabla f(-1,4)\| = \|(2(-1-1)+\cos(-1),\,10(4-2))\| = \|(-3.46,\,20)\| \approx 20.3$,
+much larger than the truncation error $0.05/2 \cdot \max |f''| \approx 0.5 \cdot 10 = 0.25$.
+By contrast, $\delta = 0.8$ produces a truncation error $\approx 4.0$, which can
+mis-align the gradient direction significantly, explaining the poor convergence.
+The gradient descent step uses $\alpha = 0.08$ for both FD settings, with 120 iterations.
 
 \subsubsection{Nesterov Random Search}
 
@@ -1035,11 +1044,20 @@ uses $\alpha = 0.08$ for both FD settings, with 120 iterations.
 \end{algorithm}
 
 Nesterov random search uses a random unit vector $u_k$ to form a directional
-derivative estimate. The expected gradient estimate satisfies
-$E[\hat{g}_k] = \nabla f(x_k)$ (to leading order in $\delta$), making the update
-an unbiased gradient estimator on average. However, in $d$ dimensions, only
-$1/d$ of the gradient information is captured per step (projection onto one
-random direction), so convergence is $d$ times slower than exact gradient descent.
+derivative estimate. The key statistical property is:
+\begin{equation}
+E_{u_k}[\hat{g}_k] = E_{u_k}\!\left[\frac{f(x_k + \delta u_k) - f(x_k)}{\delta}\, u_k\right]
+= \nabla f(x_k) + O(\delta^2),
+\end{equation}
+making the update an asymptotically unbiased gradient estimator. Geometrically,
+the outer product $u_k u_k^T$ has expectation $\frac{1}{d} I$ (for a uniformly
+random unit vector on the sphere), so averaging $d$ random-direction estimates
+recovers the full gradient. In $d$ dimensions, a single random search step
+captures only $1/d$ of the gradient information per step, so convergence
+requires approximately $d$ times more steps than exact gradient descent.
+This explains why, for $d = 2$, the random search takes $\approx 2 \times$
+more iterations but still converges --- the constant factor is small.
+For $d \gg 1$, the method's advantage is its $O(1)$ FE cost per step.
 This method requires only \emph{two} function evaluations per iteration (at $x_k$
 and $x_k + \delta u_k$) regardless of dimension, making it attractive when
 $d$ is very large or when the cost of a single function evaluation dominates.
@@ -1562,7 +1580,11 @@ the starting point is not too far from the optimum.
 % ============================================================
 
 This report has systematically evaluated six families of optimisation algorithms
-across benchmark problems of increasing difficulty. The key findings are:
+across benchmark problems of increasing difficulty. The overarching theme is that
+\emph{no single algorithm dominates all settings}: the best choice depends critically
+on problem structure (curvature, conditioning, noise), available oracle information
+(gradients, Hessians, or only function values), and computational constraints.
+The key findings are:
 
 \paragraph{Adaptive step-size methods (Question~\ref{sec:q1}):}
 The Polyak step is theoretically optimal when $f^{\star}$ is known exactly
@@ -1619,13 +1641,40 @@ caused by LMO vertex oscillations; a decaying step schedule would cure this.
 On boundary optima, Frank--Wolfe is more naturally suited, as the LMO
 consistently selects vertices near the optimal boundary point.
 
+\paragraph{Rosenbrock benchmark ranking:}
+For the hardest benchmark (Rosenbrock), the final objective values rank as:
+Newton ($0.686$, 20~iter) $\gg$ Polyak ($0.009$, 120~iter, requires $f^{\star}$)
+$>$ Nesterov ($0.479$, 150~iter) $>$ Adam ($1.579$, 150~iter)
+$>$ Heavy Ball ($1.400$, 120~iter) $>$ Adagrad ($2.203$, 120~iter)
+$>$ RMSprop ($3.120$, 120~iter) $\approx$ GD ($3.388$--$3.514$, 120--150~iter).
+This ranking reflects the fundamental hierarchy: exact second-order information
+(Newton) $\gg$ oracle knowledge of optimum (Polyak) $>$ accumulated momentum
+in consistent direction (Nesterov) $>$ adaptive step with momentum (Adam,
+Heavy Ball) $>$ adaptive step without momentum (Adagrad, RMSprop) $>$ fixed step
+(GD).
+
+\paragraph{Limitations:}
+The benchmarks are two-dimensional, making Newton's method computationally
+trivial and derivative-free methods (which scale poorly with $d$) appear
+competitive. In realistic high-dimensional settings ($d \geq 100$), Newton
+becomes infeasible, Nelder--Mead and grid search collapse, and the advantages
+of Nesterov/Adam versus GD become more pronounced. The Rosenbrock function,
+while highly ill-conditioned, is also smooth and deterministic; stochastic
+settings (mini-batch gradients) would alter the method rankings significantly,
+favouring Adam over Nesterov due to Adam's variance-reduction through second-moment
+accumulation. These considerations motivate the separate stochastic gradient
+analysis in Question~2.
+
 \paragraph{Overall recommendation:}
-For convex problems where gradients are available and dimension is manageable
-($d < 10^4$): \textbf{Nesterov acceleration or L-BFGS} are preferred.
-For large-scale and non-convex machine learning: \textbf{Adam} with its
-bias-corrected adaptive scaling. For derivative-free black-box optimisation
-in low dimensions: \textbf{Nelder--Mead}. For constrained problems with
-simple constraint sets: \textbf{projected gradient descent}.
+For smooth convex problems with known gradient oracle and manageable dimension
+($d < 10^4$): \textbf{Nesterov acceleration} offers optimal first-order
+convergence rates. For large-scale and non-convex machine learning with
+stochastic gradients: \textbf{Adam} with bias-corrected adaptive scaling.
+For problems with low-dimensional structure or known optimal value:
+\textbf{Newton with backtracking} or \textbf{Polyak step} respectively.
+For derivative-free black-box optimisation in low dimensions: \textbf{Nelder--Mead}.
+For constrained problems with simple constraint sets: \textbf{projected gradient
+descent}, or Frank--Wolfe when linear minimisation is cheaper than projection.
 
 % ============================================================
 \newpage
