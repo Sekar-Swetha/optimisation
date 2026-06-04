@@ -619,10 +619,13 @@ so the advantage is modest here.}
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_fval_B.pdf}
 \caption{Q2: Convergence on Benchmark~B. Both Nesterov and Adam converge to
-$f^{\star} \approx 0.7244$. Adam's per-coordinate adaptive scaling handles the
-anisotropic curvature (5:1 eigenvalue ratio) effectively by effectively
-normalising each coordinate. Nesterov's lookahead prevents overshoot across
-the narrow $x_2$ direction.}
+$f^{\star} \approx 0.7244$. Adam's per-coordinate adaptive scaling normalises
+each coordinate independently: the $x_2$ direction receives a smaller effective
+step (accumulated squared gradient $\hat{v}_{t,2}$ is large due to
+$|\partial f/\partial x_2| = 10|x_2-2|$) while $x_1$ gets a larger effective
+step, effectively preconditionig the problem to near-unit aspect ratio.
+Nesterov's lookahead prevents overshoot across the narrow $x_2$ direction.
+Both methods converge similarly because the 5:1 anisotropy is moderate.}
 \label{fig:q2_fval_B}
 \end{figure}
 
@@ -656,6 +659,21 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 \\
 \end{tabular}
 \end{table}
 
+\textbf{Why Nesterov outperforms Adam on Rosenbrock:}
+The Rosenbrock function exhibits a \emph{globally consistent descent direction}
+along the valley floor: the long axis of the valley curves from
+$(-1, 1)$ towards $(1,1)$, and gradients within this region all point approximately
+in the same direction. Nesterov momentum accumulates velocity along this
+consistent direction, effectively lengthening its steps along the valley.
+Adam, by contrast, scales each coordinate by the root mean square of \emph{all
+past gradients}, including those from the steep transverse direction
+(perpendicular to the valley). As the Rosenbrock valley becomes progressively
+more curved, Adam's accumulated second-moment estimate increasingly over-penalises
+the $x_1$ coordinate (due to large transverse gradients early in the run),
+under-scaling the valley-traversal steps. This is an instance where
+adaptive preconditioning \emph{harms} performance relative to pure momentum,
+because the historical gradient statistics misrepresent the current landscape.
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -674,11 +692,15 @@ separate 1D problem.}
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{figures/q2_contour_C.pdf}
-\caption{Q2: Trajectories on Benchmark~C. All methods descend quickly to the
-valley floor but differ in progress \emph{along} the valley. Nesterov builds
-momentum in the consistent valley-floor direction (the eigenvector corresponding
-to the small eigenvalue $\approx 0.5$ of the Hessian), while GD's constant
-step size limits valley traversal speed due to the extreme condition number.}
+\caption{Q2: Trajectories on Benchmark~C. All methods rapidly descend to the
+valley floor ($x_2 \approx x_1^2$) but differ greatly in progress \emph{along}
+the valley towards $(1,1)$. Nesterov builds momentum along the consistent
+valley-floor direction: the gradient within the valley points roughly along
+$-\partial f/\partial x_1 \approx 2(1-x_1)$, in the same direction across
+successive steps, allowing momentum to accumulate. Adam's second-moment
+adaptation is less effective here because the valley curvature changes
+along the path (the Hessian varies strongly with $x_1$), so historical
+second moments become stale and misestimate the current curvature.}
 \label{fig:q2_contour_C}
 \end{figure}
 
@@ -794,20 +816,34 @@ p_k = \arg\min_{p}\ f(x_k) + \nabla f(x_k)^T p + \tfrac{1}{2} p^T \nabla^2 f(x_k
 \end{equation}
 The update $x_{k+1} = x_k - \alpha\, p_k$ with $\alpha < 1$ is a \emph{damped}
 Newton step, necessary when the Hessian is not positive definite far from the
-optimum or when the quadratic approximation is inaccurate. Hessian regularisation
-$\nabla^2 f(x_k) + \lambda I$ (with $\lambda = 10^{-8}$) ensures the system is
-always positive definite and well-conditioned.
+optimum or the quadratic approximation is inaccurate. The step size choices
+reflect the varying quality of the quadratic approximation:
+\begin{itemize}[nosep]
+\item Benchmark~A ($\alpha = 1.0$): The loss is exactly quadratic, so
+  the Newton quadratic model is perfect and a full step gives the exact minimiser.
+\item Benchmark~B ($\alpha = 0.85$): The sinusoidal term introduces small
+  non-quadratic corrections; a near-full step works because $|\sin(x_1)| \leq 1$
+  is bounded, keeping the non-quadratic residual small.
+\item Benchmark~C ($\alpha = 0.22$): The Rosenbrock Hessian changes rapidly
+  (e.g., $h_{11} = 2 + 1200x_1^2 - 400x_2$ ranges from $\approx 2$ at
+  $(-1,1)$ to $\approx 802$ at $(1,1)$), so the quadratic approximation is
+  reliable only locally and a heavily damped step is required to avoid
+  overshooting the valid region of the approximation.
+\end{itemize}
+Hessian regularisation $\nabla^2 f(x_k) + \lambda I$ (with $\lambda = 10^{-8}$)
+ensures the system is always positive definite, providing a numerically robust
+fallback to gradient descent ($p_k \approx g_k$ when $\lambda$ dominates).
 
 Near a non-degenerate local minimum $x^{\star}$ (where $\nabla^2 f(x^{\star}) \succ 0$),
-the Newton method achieves \textbf{quadratic convergence}:
+Newton's method achieves \textbf{quadratic convergence}:
 \begin{equation}
 \|x_{k+1} - x^{\star}\| \leq C \|x_k - x^{\star}\|^2,
 \label{eq:quadratic_conv}
 \end{equation}
 for some constant $C > 0$ depending on the Hessian's Lipschitz constant.
-This means the number of correct decimal digits \emph{doubles} at each step,
-compared to gradient descent's linear convergence which adds a fixed number
-of digits per step.
+The number of correct decimal digits \emph{doubles} at each step (e.g., from
+2 significant digits to 4, then to 8), compared to gradient descent's linear
+convergence which adds a fixed number of digits per step.
 
 \begin{algorithm}[H]
 \caption{Newton's Method with Damping}
@@ -1185,10 +1221,20 @@ in the feasible set.
 \end{algorithm}
 
 The penalty gradient is $\nabla F_{\lambda}(x) = \nabla f(x) + \lambda (-e_1)\, \mathbf{1}[x_1 < 0.5]$.
-The penalty method converts a constrained problem into an unconstrained one by
-adding a cost for constraint violation. As $\lambda \to \infty$, the penalised
-solution converges to the constrained solution, but large $\lambda$ makes
-$F_{\lambda}$ poorly conditioned, requiring smaller step sizes.
+The penalty method converts the constrained problem into an unconstrained one
+by adding a cost for constraint violation. The minimiser of $F_{\lambda}$ satisfies:
+\begin{equation}
+\nabla f(x^{\lambda}) - \lambda\, e_1\, \mathbf{1}[x_1^{\lambda} < 0.5] = 0.
+\end{equation}
+As $\lambda \to \infty$, the penalty drives $x_1^{\lambda} \to 0.5^+$ from above,
+and the limiting solution satisfies the KKT conditions of the original problem
+with dual variable $\mu^{\star} = \lim_{\lambda\to\infty} \lambda \cdot \mathbf{1}[x_1 < 0.5] = 0$
+(since the constraint is inactive at $x_1^{\star} = 0.582$). In this case,
+the unconstrained minimum is also the constrained minimum, so any $\lambda > 0$
+eventually finds the correct solution; the question is only convergence speed.
+Large $\lambda$ creates a gradient discontinuity at $x_1 = 0.5$ and stiffens
+the effective Hessian of $F_{\lambda}$ near the boundary, requiring the reduced
+step size $\alpha = 0.03$ for $\lambda = 4.5$.
 
 Settings: Projected GD ($\alpha = 0.08$), Penalty with $\lambda \in \{0.15, 1.8, 4.5\}$
 ($\alpha = 0.05$ for $\lambda \leq 1.8$; $\alpha = 0.03$ for $\lambda = 4.5$),
