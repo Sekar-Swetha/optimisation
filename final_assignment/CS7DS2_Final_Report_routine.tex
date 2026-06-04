@@ -340,10 +340,11 @@ The divergence of Polyak on Benchmarks A and B is a \emph{structural} failure, n
 \subsection{Comparative Analysis}
 
 \begin{itemize}[nosep]
-\item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest (Rosenbrock: $f = 0.009$). Otherwise, Adagrad and Heavy Ball match or exceed the GD baseline. Heavy Ball's advantage on Rosenbrock ($f = 1.40$ vs $3.51$ for GD) comes from momentum accumulating along the consistent valley-floor direction.
-\item \textbf{Smoothness:} RMSprop produces the smoothest convergence curves due to exponential averaging of squared gradients, preventing large step oscillations.  Heavy Ball shows characteristic overshoot followed by damped oscillations, reflecting the second-order dynamics of the momentum system.
-\item \textbf{Stability:} GD baseline is most stable but slowest.  Polyak is \emph{unstable} when $f^{\star}$ is misspecified --- the divergence is guaranteed by the formula's structure, not a numerical artefact.  Adagrad is uniformly stable due to its monotonically decreasing step, though this may cause premature convergence in non-stationary or later stages.
-\item \textbf{Practical implication:} In practice, exact $f^{\star}$ is rarely known, limiting Polyak's applicability to problems such as Rosenbrock where the global minimum value is analytically known. RMSprop and Adagrad are more robust choices for general problems.  For highly ill-conditioned problems, Heavy Ball's momentum accumulation provides a meaningful advantage over fixed-step GD.
+\item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest (Rosenbrock: $f = 0.009$ in 120 iterations). Otherwise, Adagrad and Heavy Ball match or exceed the GD baseline. Heavy Ball's advantage on Rosenbrock ($f = 1.40$ vs $3.51$ for GD, a $2.5\times$ improvement) comes from momentum accumulating along the consistent valley-floor direction, effectively building a ``memory'' of the downhill direction.
+\item \textbf{Smoothness:} RMSprop produces the smoothest convergence curves due to exponential averaging of squared gradients ($\beta=0.9$ window $\approx 10$ steps), preventing the large step oscillations that Adagrad can produce near the minimum.  Heavy Ball shows characteristic overshoot-then-damp oscillations, reflecting the second-order dynamics $z_{k+1} = \beta z_k + \alpha g_k$ (discrete damped harmonic oscillator).
+\item \textbf{Stability:} GD baseline is most stable but slowest.  Polyak is \emph{structurally} unstable when $f^{\star}$ is misspecified --- this cannot be fixed by tuning $\varepsilon$.  Adagrad is uniformly stable due to its monotonically decreasing step, though accumulated history can cause premature stagnation on problems with varying curvature.  RMSprop's decaying window prevents stagnation, at the cost of a weaker stability guarantee.
+\item \textbf{Condition number sensitivity:} All methods except Polyak and Heavy Ball struggle on Rosenbrock ($\kappa \approx 2504$) because their step sizes do not adapt to the vastly different curvatures along vs across the valley. For GD, the stability constraint $\alpha \leq 2/(L+\mu) \approx 2/1001.6 = 0.002$ limits the step to a tiny fraction of what would be effective along the valley direction.
+\item \textbf{Practical implication:} In practice, exact $f^{\star}$ is rarely known. RMSprop and Adagrad are more robust choices. For ill-conditioned problems, Heavy Ball provides meaningful speed-up over fixed-step GD without requiring curvature information.
 \end{itemize}
 
 % ============================================================
@@ -729,7 +730,7 @@ The ``Ratio'' column shows how much better Newton's final value is relative to G
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q3_update_magnitude.pdf}
-\caption{Q3: Update magnitude $\|x_{k+1} - x_k\|$ vs iteration. Newton's update magnitude decreases super-linearly, consistent with the quadratic convergence property $\|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2$: once errors are small, they reduce at a doubly-exponential rate. On Benchmark A, Newton's update drops to machine precision after a single step (the quadratic is solved exactly). GD's magnitude decreases only linearly, reflecting its $O(\rho^k)$ convergence. On Rosenbrock, Newton maintains larger updates than GD throughout, reflecting more aggressive (and productive) search steps.}
+\caption{Q3: Update magnitude $\|x_{k+1} - x_k\| = \alpha\|p_k\|$ vs iteration. Newton's magnitude decreases super-linearly: under quadratic convergence $\|x_k - x^{\star}\| \leq C^{2^k-1}\|x_0 - x^{\star}\|^{2^k}$, the update magnitude satisfies $\|x_{k+1} - x_k\| \leq C\|x_k - x^{\star}\|^2 + O(\|x_k - x^{\star}\|)$, so after a few iterates the magnitudes drop at a doubly-exponential rate (sequence $r, r^2, r^4, r^8, \ldots$ for $r < 1$). On Benchmark A, the update drops to machine precision after iteration 1 (the quadratic is solved exactly). GD's magnitude decreases linearly at rate $\rho = 1 - \mu/L$. On Rosenbrock, Newton maintains larger updates than GD, indicating more productive steps despite the damped Newton step ($\alpha=0.22$).}
 \label{fig:q3_update}
 \end{figure}
 
@@ -772,7 +773,12 @@ With $\delta = 0.05$, the relative error is only $1.6\%$; with $\delta = 0.8$, i
 \end{algorithmic}
 \end{algorithm}
 
-This zeroth-order method estimates a directional derivative along a single random direction per iteration.  The key properties are: (1) only \emph{two} function evaluations per iteration regardless of dimension $d$; (2) $\mathbb{E}[d\,\hat{g}_k] \approx \nabla f(x_k)$ (after adjusting for the spherical distribution, the expectation of the estimator equals the true gradient up to a factor), making it an unbiased direction estimator in expectation; (3) the variance is $O(1)$ per step but the signal is spread across $d$ dimensions, so convergence is $\sqrt{d}$ times slower than full-gradient GD asymptotically.
+This zeroth-order method estimates a directional derivative along a single random direction per iteration.  The key properties are:
+\begin{enumerate}[nosep]
+  \item Only \emph{two} function evaluations per iteration regardless of dimension $d$ --- the dominant advantage over FD gradient descent which requires $d+1$ evaluations.
+  \item The gradient estimate $\hat{g}_k = \tfrac{f(x_k+\delta u_k)-f(x_k)}{\delta}u_k$ satisfies $\mathbb{E}[n \hat{g}_k] = \nabla f(x_k)$ (up to $O(\delta)$ error) for $n=2$ dimensions, making it an approximately unbiased gradient direction.
+  \item Convergence rate: since only one random direction is probed per step, the effective gradient noise is $O(d)$ times larger than full gradient descent, leading to $O(d/k)$ convergence for smooth convex functions --- a $\sqrt{d}$ slowdown per iteration relative to full GD.
+\end{enumerate}
 
 \subsubsection{Results}
 
