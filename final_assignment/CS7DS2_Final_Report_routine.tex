@@ -748,6 +748,25 @@ $O(\sigma^2/b)$, where $\sigma^2$ is the single-sample gradient variance.}
 \label{fig:q2_sgd_batch}
 \end{figure}
 
+\paragraph{Convergence of Mini-Batch SGD.}
+For strongly convex $f$ with strong-convexity constant $\mu > 0$ and Lipschitz
+gradient constant $L$, mini-batch SGD with step size $\alpha_k = \alpha_0/(k+1)$
+achieves the following bound on the expected suboptimality of the iterate average
+$\bar{x}_T = \frac{1}{T}\sum_{k=0}^{T-1} x_k$:
+\begin{equation}
+\mathbb{E}[f(\bar{x}_T)] - f^{\star} \leq \frac{\sigma^2 \alpha_0}{b\, (2\mu\alpha_0 - 1)\, T},
+\label{eq:sgd_rate}
+\end{equation}
+where $b$ is the batch size and $\sigma^2 = \mathbb{E}[\|g_k - \nabla f(x_k)\|^2]$
+is the per-sample gradient variance. This $O(1/T)$ rate is optimal for stochastic
+first-order methods on strongly convex problems. The key insight from~\eqref{eq:sgd_rate}
+is that doubling the batch size halves the variance $\sigma^2/b$, which is equivalent
+to running for twice as many iterations --- the \emph{linear scaling rule}. For a
+constant step size $\alpha$, SGD converges not to $f^{\star}$ but to a neighbourhood
+of radius $O(\alpha \sigma^2 / (b\mu))$, explaining the oscillation floor observed
+in Figures~\ref{fig:q2_sgd_batch} and~\ref{fig:q2_sgd_noisy}: larger $\sigma$ (high noise)
+raises this floor proportionally to $\sigma^2$.
+
 \subsection{SGD with Increased Noise}
 
 The experiment is repeated with output noise scaled by a factor of 6
@@ -991,6 +1010,42 @@ than GD, indicating more aggressive and productive steps along the valley.}
 \label{fig:q3_update}
 \end{figure}
 
+\subsection{Quasi-Newton Approximations: BFGS and L-BFGS}
+
+For problems where the Hessian is too expensive to compute, quasi-Newton methods
+build an approximation $B_k \approx \nabla^2 f(x_k)$ from gradient differences alone.
+The \textbf{BFGS update}~\cite{nocedal} (Broyden--Fletcher--Goldfarb--Shanno) uses
+a rank-2 correction:
+\begin{equation}
+B_{k+1} = B_k - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k} + \frac{y_k y_k^T}{y_k^T s_k},
+\label{eq:bfgs}
+\end{equation}
+where $s_k = x_{k+1} - x_k$ (step vector) and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$
+(gradient difference). The update satisfies the \emph{secant condition}
+$B_{k+1} s_k = y_k$, enforcing that the Hessian approximation is consistent with
+the observed gradient change along the last step. This is analogous to fitting a
+quadratic through two consecutive gradient observations.
+
+Inverting $B_{k+1}$ via the Sherman--Morrison--Woodbury identity gives a direct
+update for the inverse Hessian $H_k = B_k^{-1}$:
+\begin{equation}
+H_{k+1} = \left(I - \rho_k s_k y_k^T\right) H_k \left(I - \rho_k y_k s_k^T\right)
+          + \rho_k s_k s_k^T, \qquad \rho_k = \frac{1}{y_k^T s_k},
+\label{eq:bfgs_inv}
+\end{equation}
+requiring only $O(d^2)$ work (two rank-1 updates). BFGS achieves \emph{superlinear}
+convergence near the optimum: $\|x_{k+1} - x^{\star}\| = o(\|x_k - x^{\star}\|)$,
+faster than gradient descent's linear rate but slower than Newton's quadratic rate.
+The superlinear rate arises because the BFGS approximation $H_k \to (\nabla^2 f(x^{\star}))^{-1}$
+as $x_k \to x^{\star}$, so BFGS asymptotically mimics Newton.
+
+\textbf{L-BFGS} (Limited-memory BFGS) further reduces storage to $O(md)$ by retaining
+only the $m$ most recent curvature pairs $(s_j, y_j)_{j=k-m}^{k-1}$ instead of
+the full $d \times d$ matrix $H_k$. The Newton direction $H_k \nabla f(x_k)$ is then
+computed in $O(md)$ via a two-loop recursion. For $m = 5$--20 and $d = 10^6$, L-BFGS
+uses megabytes of memory instead of terabytes, making it the standard method for
+large-scale smooth unconstrained optimisation.
+
 \subsection{Summary: Newton vs Gradient Descent}
 
 Newton's method offers quadratic convergence near the optimum at the cost of
@@ -1000,7 +1055,7 @@ Cholesky decomposition), versus $O(d)$ for gradient descent. In the
 2-dimensional setting here, this cost is negligible.
 However, for the large-scale problems in modern machine learning ($d \sim 10^6$--$10^{12}$
 parameters), exact Hessian methods are infeasible, motivating quasi-Newton methods
-(e.g., L-BFGS~\cite{nocedal}) that approximate the inverse Hessian from
+(L-BFGS~\eqref{eq:bfgs_inv}) that approximate the inverse Hessian from
 $m$ most recent gradient differences, requiring only $O(md)$ storage and work.
 
 % ============================================================
@@ -1040,6 +1095,24 @@ much larger than the truncation error $0.05/2 \cdot \max |f''| \approx 0.5 \cdot
 By contrast, $\delta = 0.8$ produces a truncation error $\approx 4.0$, which can
 mis-align the gradient direction significantly, explaining the poor convergence.
 The gradient descent step uses $\alpha = 0.08$ for both FD settings, with 120 iterations.
+
+A more accurate alternative is the \textbf{central difference} approximation:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta},
+\label{eq:cd}
+\end{equation}
+with truncation error $O(\delta^2)$ (the odd-order Taylor terms cancel), compared to
+$O(\delta)$ for the forward difference~\eqref{eq:fd}. This squared improvement means
+central differences are accurate for $\delta$ 100$\times$ larger than the forward-difference
+optimum. The cost is $2d$ evaluations per gradient (versus $d+1$ for forward differences).
+The optimal step for central differences minimising total error~\eqref{eq:fd_error} is:
+\begin{equation}
+\delta^{\star}_{\text{CD}} = \left(\frac{3\varepsilon_{\text{mach}}\,|f|}{|f'''|}\right)^{1/3}
+\approx (3 \times 10^{-16})^{1/3} \approx 7 \times 10^{-6}
+\end{equation}
+for typical function values. For this assignment's $\delta = 0.05$, the central difference
+would produce truncation error $\approx (0.05)^2/6 \cdot |f'''| \approx 0.004$, compared to
+forward difference error $\approx 0.25$ --- a 60$\times$ improvement at twice the cost.
 
 \subsubsection{Nesterov Random Search}
 
@@ -1351,6 +1424,29 @@ vs.\ $\alpha = 0.05$ for $\lambda \leq 1.8$). An improved approach is the
 the Lagrange multiplier iteratively, achieving exact feasibility without the
 ill-conditioning of pure penalty methods at finite $\lambda$.
 
+The \textbf{augmented Lagrangian} (Method of Multipliers) for $\min f(x)$ s.t.\ $c(x) \leq 0$
+augments the Lagrangian with a quadratic penalty:
+\begin{equation}
+\mathcal{L}_{\rho}(x, \mu) = f(x) + \mu\, c(x) + \frac{\rho}{2}\max(0,\, c(x))^2,
+\label{eq:auglag}
+\end{equation}
+then alternates between minimising over $x$ and updating the multiplier:
+\begin{equation}
+x_{k+1} = \arg\min_x \mathcal{L}_{\rho}(x, \mu_k), \qquad
+\mu_{k+1} = \max\!\bigl(0,\; \mu_k + \rho\, c(x_{k+1})\bigr).
+\label{eq:auglag_update}
+\end{equation}
+Unlike the pure penalty method, the multiplier update means $\mathcal{L}_{\rho}$
+converges to the true Lagrangian at finite $\rho$, avoiding the ill-conditioning
+that arises as $\lambda \to \infty$ in~\eqref{alg:penalty}. For the half-space
+constraint $c(x) = 0.5 - x_1 \leq 0$ with inactive optimum $x_1^{\star} = 0.582$,
+the dual variable is $\mu^{\star} = 0$; the multiplier update quickly drives
+$\mu_k \to 0$, recovering the unconstrained solution without any penalty effect,
+while maintaining the quadratic convergence speed of the inner minimisation.
+The augmented Lagrangian therefore achieves the \emph{exact solution} (zero constraint
+violation) with a finite, fixed penalty weight $\rho$, making it the preferred method
+for problems where feasibility is required but projection is expensive.
+
 % ============================================================
 \section[Question 6: Linear Programmes and Frank--Wolfe Algorithm]{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -1610,6 +1706,32 @@ Nesterov random & -- & $> 0.8$ & -- & 2 & Directional & 220 \\
 \bottomrule
 \multicolumn{7}{l}{\small $\dagger$ Diverges on A and B due to $f^{\star}=0$ misspecification (true min $\neq 0$).}
 \end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Computational cost per iteration as a function of problem dimension $d$.
+All methods here use $d = 2$, masking the scaling differences that dominate in practice.}
+\label{tab:flops}
+\renewcommand{\arraystretch}{1.1}
+\footnotesize
+\begin{tabular}{lp{2.0cm}p{5.5cm}l}
+\toprule
+\textbf{Method} & \textbf{Grad.\ evals} & \textbf{Extra work} & \textbf{FLOPs} \\
+\midrule
+GD, Heavy Ball, Nesterov & $1$ & $O(d)$ state ops & $O(d)$ \\
+Polyak, Adagrad, RMSprop, Adam & $1$ & $O(d)$ per-coord.\ ops & $O(d)$ \\
+Newton (exact) & $1$ & Hessian $O(d^2)$ + linear solve $O(d^3)$ & $O(d^3)$ \\
+L-BFGS ($m$ pairs) & $1$ & Two-loop recursion $O(md)$ & $O(md)$ \\
+FD GD (fwd.\ diff.) & $0$ & $d+1$ function evals + $O(d)$ & $O(d\cdot\text{FE})$ \\
+FD GD (central diff.) & $0$ & $2d$ function evals + $O(d)$ & $O(d\cdot\text{FE})$ \\
+Nesterov random search & $0$ & 2 function evals + $O(d)$ & $O(\text{FE})$ \\
+Mini-batch SGD (batch $b$) & $0$ & $b$ sample gradients, cost $O(bd)$ & $O(bd)$ \\
+Frank--Wolfe & $1$ & LMO: $O(d)$ for box constraints & $O(d)$ \\
+\bottomrule
+\multicolumn{4}{l}{\small FE = cost of one function evaluation.} \\
+\end{tabular}
+\normalsize
 \end{table}
 
 \noindent\textbf{Key observations:}
