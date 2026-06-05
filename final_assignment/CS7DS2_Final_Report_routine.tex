@@ -824,6 +824,21 @@ By the mean-value theorem, $\nabla f(x_k) = H(x^\star)(x_k - x^\star) + \int_0^1
 
 \textbf{Trust-region vs line-search Newton.} The damped Newton method implemented here uses a fixed step size $\alpha = 0.22$. An alternative is the \emph{trust-region Newton method}, which constrains the step to a ball $\|p_k\| \leq \Delta_k$ and adjusts the radius $\Delta_k$ based on the quality of the quadratic model. Trust-region methods are globally convergent (not just locally) and avoid the need to tune $\alpha$, at the cost of solving a constrained quadratic subproblem per iteration. For the Rosenbrock function, a trust-region method would adaptively increase $\Delta_k$ once the method reaches the local convergence regime, achieving faster final convergence than the fixed-$\alpha$ approach used here.
 
+\textbf{Levenberg--Marquardt: trust-region Newton for nonlinear least squares.} The Rosenbrock function can be written as a nonlinear least-squares problem: $f(x) = r_1(x)^2 + r_2(x)^2$ with $r_1(x) = 1 - x_1$ and $r_2(x) = 10(x_2 - x_1^2)$. The Jacobian is:
+\begin{equation}
+  J(x) = \nabla r(x) = \begin{pmatrix} -1 & 0 \\ -20x_1 & 10 \end{pmatrix}.
+\end{equation}
+The Gauss--Newton Hessian approximation $J^TJ$ (dropping the $\sum_i r_i \nabla^2 r_i$ term) is:
+\begin{equation}
+  J^TJ = \begin{pmatrix} 1 + 400x_1^2 & -200x_1 \\ -200x_1 & 100 \end{pmatrix},
+\end{equation}
+which is \emph{always positive semi-definite} (as a Gram matrix), unlike the full Hessian $H(x)$ which is indefinite far from the optimum. The Levenberg--Marquardt (LM) update regularises this:
+\begin{equation}
+  p_{\rm LM} = -(J^TJ + \lambda I)^{-1} J^T r(x), \quad
+  \lambda > 0.
+\end{equation}
+At $x_0 = (-1,1)$: $J^TJ \approx \text{diag}(401, 100)$, so $p_{\rm LM} \approx -(J^TJ + \lambda I)^{-1}[2, 0]^T$ with $\lambda = 0$. The LM step reduces to the Gauss--Newton direction, giving a step $(-0.005, 0)$ --- directly towards $x_1 = 1$ along the constraint valley. This is far more efficient than the gradient step $(-0.0001 \times 404, 0) \approx (-0.04, 0)$ which has a similar direction but requires much finer step-size tuning. LM is implemented in \texttt{scipy.optimize.least\_squares} and is the workhorse for fitting neural network models with smooth losses.
+
 The observed update magnitude plot (Figure~\ref{fig:q3_update}) confirms this: Newton's update magnitude decreases super-linearly (approximately parabolic on the log scale), while GD's decreases linearly.
 
 \textbf{Newton decrement as stopping criterion.} The \emph{Newton decrement} is defined as:
@@ -916,6 +931,12 @@ Taking expectation over $u \sim \text{Uniform}(\mathbb{S}^{n-1})$ (unit sphere):
 since $\mathbb{E}[u u^T] = \frac{1}{n}I$ for uniform random unit vectors. The estimator $\hat{g}_k$ is therefore a \emph{scaled} unbiased estimator of $\nabla f$; to get an unbiased estimator of $\nabla f$, one would use $n \hat{g}_k$. However, scaling by $n$ also scales the variance: $\text{Var}[n\hat{g}_k] = n^2 \text{Var}[\hat{g}_k] = O(n \|\nabla f\|^2)$ --- this \emph{dimension-dependent variance} is the fundamental limitation of random search in high dimensions. Despite this, using only $2$ function evaluations per step (vs.\ $d+1$ for FD), random search is competitive for very high-dimensional problems where even computing FD is expensive.
 
 For our $n=2$ benchmarks, the variance penalty is small; the dominant limitation is the noisy gradient direction rather than the step size choice.
+
+\textbf{CMA-ES: state-of-the-art derivative-free optimisation.} The Covariance Matrix Adaptation Evolution Strategy (CMA-ES) extends random search by maintaining a full covariance matrix $C_k \in \mathbb{R}^{d\times d}$ (the ``shape'' of the sampling distribution). It generates a population of $\lambda = 4 + \lfloor 3\ln d \rfloor$ candidate solutions per iteration:
+\begin{equation}
+  x_k^{(i)} = m_k + \sigma_k \mathcal{N}(0, C_k), \quad i = 1, \ldots, \lambda,
+\end{equation}
+evaluates $f$ at each candidate (requiring $\lambda$ function evaluations), and updates $m_k$ (population mean), $\sigma_k$ (overall step size), and $C_k$ (covariance) using the $\lfloor\lambda/2\rfloor$ best candidates. The covariance update has two components: a rank-1 update (principal axis adaptation) and a rank-$\mu$ update (using all selected candidates). For $d = 2$ (our benchmarks): $\lambda = 6$ candidates per generation, and the covariance matrix $C_k$ converges to the inverse Hessian direction after $\sim 20$ generations, enabling Newton-like steps. On the Rosenbrock function with $d = 2$: CMA-ES converges to $f < 10^{-10}$ in approximately 800 function evaluations ($\sim 133$ generations $\times 6$ candidates), compared to Newton's convergence in $\sim 20$ iterations $\times 3$ evaluations per iteration (gradient + Hessian) $= 60$ evaluations. The advantage of CMA-ES is that it requires \emph{no derivatives}: function evaluations alone suffice. For $d = 10$, CMA-ES scales as $O(d^3)$ per generation (covariance update) but requires $O(d^2)$ function evaluations to converge, making it competitive with derivative-free quasi-Newton methods.
 
 \subsubsection{Results and Analysis}
 
@@ -1011,6 +1032,12 @@ Grid search & None & $N^d$ total & \textbf{Worst} & Grid-limited & \textbf{Yes} 
 \end{table}
 
 \textbf{Key trade-off:} Grid search is the only method that provides a \emph{global} guarantee (up to grid resolution) but at exponential cost in $d$. Gradient-based methods scale well with dimension but cannot escape local minima. Nelder--Mead is versatile for low-dimensional ($d \leq 10$) non-smooth problems. Nesterov random search is the only truly dimension-free method (2 FE/iter), making it suitable for extremely high-dimensional black-box optimisation.
+
+\textbf{Bayesian optimisation: global derivative-free search.} A principled alternative to random search and grid search is \emph{Bayesian optimisation} (BO), which maintains a Gaussian process (GP) surrogate model $f(x) \sim \mathcal{GP}(\mu(x), k(x,x'))$ and uses it to guide the search via an \emph{acquisition function}. The Expected Improvement (EI) acquisition function is:
+\begin{equation}
+  \text{EI}(x) = (\mu(x) - f^\star_{\rm best})\Phi\!\left(\tfrac{\mu(x) - f^\star_{\rm best}}{\sigma(x)}\right) + \sigma(x)\,\phi\!\left(\tfrac{\mu(x) - f^\star_{\rm best}}{\sigma(x)}\right),
+\end{equation}
+where $\Phi$ and $\phi$ are the standard normal CDF and PDF. BO maximises EI to select the next evaluation point, balancing exploration (high $\sigma(x)$) against exploitation (high $\mu(x)$). For our 2D benchmarks: BO would converge to the global optimum (including for the non-convex Rosenbrock) in approximately 20--30 function evaluations, compared to $\sim 160$ for Nelder--Mead and 3025 for grid search. The critical advantage is global search: the GP uncertainty model prevents premature convergence to local optima by explicitly rewarding unexplored regions. However, BO scales as $O(T^3)$ in the number of evaluations $T$ (GP posterior update cost), limiting it to $d \leq 30$ dimensions and $T \leq 500$ evaluations. For hyperparameter tuning (e.g., optimising neural network learning rate, batch size, architecture), BO is the de facto standard tool (used in Google Vizier, Optuna, HyperOpt).
 
 \textbf{Dimension curse for grid search.} For Benchmark B ($d = 2$), a $55 \times 55$ grid gives 3025 evaluations and resolution $\Delta x \approx 0.074$, which is affordable. In $d$ dimensions with $N$ points per axis, the total evaluation count is $N^d$: for $d = 100$ (a typical neural network layer), even $N = 2$ would require $2^{100} \approx 10^{30}$ evaluations --- beyond any computational budget. This exponential scaling is known as the \emph{curse of dimensionality} and motivates the entire field of continuous optimisation.
 
@@ -1462,6 +1489,23 @@ The update satisfies the \emph{secant equation} $B_{k+1}s_k = y_k$ (the Hessian 
 
 \textbf{L-BFGS} (limited-memory BFGS) stores only the last $m$ pairs $(s_k, y_k)$, computing the inverse Hessian-vector product implicitly in $O(mn)$ time. With $m \approx 10$, L-BFGS is the de facto standard for unconstrained optimisation in dimensions $d \geq 1000$ and is used internally by PyTorch's \texttt{torch.optim.LBFGS}.
 
+\subsection{Extensions: Proximal Gradient and Mirror Descent}
+
+Two important extensions of gradient descent that lie outside the assignment scope are worth noting, as they unify several of the methods studied.
+
+\textbf{Proximal gradient descent} handles composite objectives $f(x) + g(x)$ where $g$ is convex but possibly non-smooth (e.g.\ $\ell_1$ regularisation) by alternating between a gradient step on $f$ and a \emph{proximal operator} step for $g$:
+\begin{equation}
+  x_{k+1} = \text{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)), \quad
+  \text{prox}_{\alpha g}(v) = \arg\min_x \Bigl\{g(x) + \tfrac{1}{2\alpha}\|x - v\|^2\Bigr\}.
+\end{equation}
+For $g = \delta_\mathcal{X}$ (indicator of a convex set), $\text{prox}_{\alpha g} = \Pi_\mathcal{X}$ (projection) --- so projected GD is a special case of proximal gradient descent. For $g(x) = \lambda\|x\|_1$, the proximal operator is the \emph{soft-thresholding}: $\text{prox}_{\alpha\lambda\|\cdot\|_1}(v)_i = \text{sign}(v_i)\max(|v_i| - \alpha\lambda, 0)$, enabling sparse solution methods (LASSO, elastic net) with the same $O(\kappa\log(1/\varepsilon))$ linear convergence rate as GD on the smooth part. Accelerated proximal gradient (FISTA) combines proximal steps with Nesterov momentum, achieving $O(1/k^2)$ convergence.
+
+\textbf{Mirror descent} replaces the Euclidean proximal term $\|x-v\|^2/2$ with a Bregman divergence $D_\phi(x, v) = \phi(x) - \phi(v) - \nabla\phi(v)^T(x-v)$ for a \emph{mirror map} $\phi$:
+\begin{equation}
+  x_{k+1} = \arg\min_{x \in \mathcal{X}} \Bigl\{\alpha \nabla f(x_k)^T x + D_\phi(x, x_k)\Bigr\}.
+\end{equation}
+When $\phi(x) = \frac{1}{2}\|x\|^2$ (Euclidean), this reduces to projected GD. When $\phi(x) = \sum_i x_i \log x_i$ (negative entropy, defined for $x \in \Delta_d$ the probability simplex), mirror descent becomes \emph{exponentiated gradient descent} (EG): $x_{k+1}^{(i)} \propto x_k^{(i)} e^{-\alpha \partial_i f(x_k)}$. EG achieves $O(\log(d)/\varepsilon^2)$ regret for sparse gradients (where only a few coordinates are non-zero), compared to $O(\sqrt{d}/\varepsilon^2)$ for projected GD --- a factor of $\sqrt{d}$ improvement in high dimensions. Frank--Wolfe can also be interpreted as mirror descent with the \emph{linear} mirror map: $\phi(x) = -h(x)$ where $h$ is the support function of $\mathcal{X}$, revealing the deep connection between FW and mirror descent as projection-free methods with natural geometry.
+
 \subsection{The Optimisation--Generalisation Tradeoff}
 
 This study has focused exclusively on optimisation performance: minimising the training objective. In machine learning contexts, a subtlety arises: \emph{better optimisation does not always mean better generalisation}. Several observations from the experiments are relevant:
@@ -1490,13 +1534,20 @@ GD (optimal step) & $O\!\left(\kappa \log(1/\varepsilon)\right)$ iter. & Linear 
 Nesterov (cvx) & $O\!\left(\sqrt{\kappa} \log(1/\varepsilon)\right)$ iter. & Linear & Same + $\alpha = 1/L$ \\
 Polyak & $O\!\left(\kappa \log(1/\varepsilon)\right)$ iter. & Linear & Requires $f^\star$ known \\
 Heavy Ball & $O\!\left(\sqrt{\kappa}\right)$ iter. (quadratic) & Linear & Quadratic objectives only \\
+Barzilai--Borwein & $O(\kappa\log(1/\varepsilon))$ iter. & Linear & Same; non-monotone \\
 Adam (full-batch) & $O(1/\sqrt{k})$ & Sub-linear & Non-convex; in practice faster \\
+AMSGrad & $O(\sqrt{T}\log(T))$ regret & Sub-linear & Online convex setting \\
 Newton & $O(\log\log(1/\varepsilon))$ iter. & Quadratic & Smooth, non-singular $\nabla^2 f$ \\
+Levenberg--Marquardt & $O(\log\log(1/\varepsilon))$ iter. & Quadratic & Nonlinear least squares \\
 BFGS & super-linear & Super-linear & Same as Newton \\
 SGD (constant $\alpha$) & $O(\sigma^2/(\mu b))$ floor & Noise floor & Unbiased gradient \\
 SVRG & $O\!\left(\kappa \log(1/\varepsilon)\right)$ iter. & Linear & $\mu$-strongly cvx, finite sum \\
 Projected GD & $O\!\left(\kappa \log(1/\varepsilon)\right)$ iter. & Linear & Convex constraint set \\
+Proximal gradient & $O\!\left(\kappa \log(1/\varepsilon)\right)$ iter. & Linear & $f$ smooth, $g$ proximal-friendly \\
 Frank--Wolfe & $O(L D^2 / \varepsilon)$ iter. & Sub-linear ($1/k$) & Convex, $L$-smooth \\
+Away-step FW & $O\!\left(\kappa_\rho \log(1/\varepsilon)\right)$ iter. & Linear & Strongly convex, polytope $\mathcal{X}$ \\
+Nelder--Mead & $O(d^2\log(1/\varepsilon))$ eval. & Linear (practical) & $d \leq 10$; no theory for $d>1$ \\
+CMA-ES & $O(d^{3/2}\log(1/\varepsilon))$ eval. & Linear & Smooth; derivative-free \\
 \bottomrule
 \end{tabular}
 \end{table}
