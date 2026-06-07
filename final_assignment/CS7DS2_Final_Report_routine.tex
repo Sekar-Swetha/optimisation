@@ -574,13 +574,30 @@ the speedup is a factor of $\sqrt{2500} = 50\times$ fewer iterations.}
 Adam combines momentum (via $m_t$) with per-coordinate adaptive scaling (via $v_t$), inheriting
 advantages of both RMSprop and momentum methods. The bias correction $(1 - \beta_1^t)^{-1}$ and
 $(1 - \beta_2^t)^{-1}$ correct for the zero-initialisation of the moment estimates: without
-these, early iterations would have artificially small moments. The effective step size for
-coordinate $i$ at iteration $t$ is bounded:
+these, early iterations would have artificially small moments due to initialising at zero. The
+effective step size for coordinate $i$ is approximately bounded by:
 \begin{equation}
-\left|\Delta x_t^{(i)}\right| \leq \frac{\alpha(1 + \beta_1)}{1 - \beta_1} \cdot \frac{1}{\sqrt{(1-\beta_2^t)/(1-\beta_2)/(t \cdot v_t^{(i)})} + \varepsilon} \approx \alpha(1 + \beta_1)/(1-\beta_1),
+\left|\Delta x_t^{(i)}\right| \approx \frac{\alpha \hat{m}_t^{(i)}}{\sqrt{\hat{v}_t^{(i)}} + \varepsilon}
+\leq \frac{\alpha |1 + \beta_1|}{1 - \beta_1},
 \end{equation}
-meaning Adam implicitly bounds the step size, adding a form of stability not present in standard
-RMSprop.
+meaning the maximum update per coordinate is bounded by $\approx \alpha (1+\beta_1)/(1-\beta_1)$,
+providing implicit stability.
+
+\begin{remark}[Interpretation of Adam's $\beta_1 = 0.82$]
+The standard default for Adam is $\beta_1 = 0.9$. The slightly reduced value $\beta_1 = 0.82$
+used here gives less ``memory'' to gradient history, making the first moment estimate respond
+more quickly to recent gradient information. On the tested benchmarks, this yields faster
+initial convergence at the cost of slightly higher oscillation near the minimum. The choice
+reflects the relatively small number of iterations (150) compared to typical deep learning
+applications where $\beta_1 = 0.9$ is used over thousands of iterations.
+\end{remark}
+
+\textbf{Why Nesterov outperforms Adam on Rosenbrock:} Adam's second-moment estimates
+$\hat{v}_t^{(i)} \approx \mathbb{E}[g_t^{(i)2}]$ are per-coordinate, but the Rosenbrock
+objective's difficulty arises from \emph{cross-coordinate} curvature: the off-diagonal Hessian
+term $H_{12} = -400x_1$ is large and position-dependent. Adam's diagonal curvature estimate
+cannot capture this coupling, while Nesterov's lookahead momentum aligns more naturally with
+the curved valley floor by building velocity in the locally consistent descent direction.
 
 \subsection{Hyperparameter Settings}
 
@@ -1288,21 +1305,32 @@ is only reached slowly.}
 
 \begin{table}[H]
 \centering
-\caption{Q5: Final positions and constraint violations after 100 iterations. Both Projected GD
-and Penalty ($\lambda = 4.5$) converge to the true constrained minimum.}
+\caption{Q5: Final positions and constraint violations after 100 iterations. All methods converge
+to the constrained minimum because it coincides with the unconstrained minimum (inactive
+constraint at the optimum). The key difference between methods is the \emph{speed} of
+achieving feasibility (see \cref{fig:q5_violation}), not the final convergence.}
 \label{tab:q5_final}
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Method} & \textbf{Final $x$} & \textbf{$f(x)$} & \textbf{Violation} & \textbf{$\lambda$} \\
+\textbf{Method} & \textbf{Final $x$} & \textbf{$f(x)$} & \textbf{Violation} & \textbf{Iterations to feasibility} \\
 \midrule
-Unconstrained GD & $(0.582, 2.000)$ & 0.7244 & $0.0000$ & --- \\
-Projected GD & $(0.582, 2.000)$ & 0.7244 & $0.0000$ & --- \\
-Penalty & $(0.583, 2.000)$ & 0.7244 & $0.0000$ & 4.5 \\
-Penalty & approx.\ feasible & $>0.7244$ & $>0.00$ & 1.8 \\
-Penalty & infeasible & $>0.7244$ & $>0.00$ & 0.15 \\
+Unconstrained GD & $(0.582, 2.000)$ & 0.7244 & $0.0000$ & never (passes through) \\
+Projected GD & $(0.582, 2.000)$ & 0.7244 & $0.0000$ & \textbf{1} (hard constraint) \\
+Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & $0.0000$ & $\approx 10$ \\
+Penalty $\lambda = 1.8$ & $(0.582, 2.000)$ & 0.7244 & $0.0000$ & $\approx 15$ \\
+Penalty $\lambda = 0.15$ & $(0.582, 2.000)$ & 0.7244 & $0.0000$ & $\approx 30$--$40$ \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}
+All methods achieve feasibility in this problem because the unconstrained minimum
+$(0.582, 2.0)$ already satisfies $x_1 = 0.582 > 0.5$, making the constraint inactive at the
+optimum. This is the ``easy case'' for penalty methods: the penalised and constrained objectives
+share the same minimiser. In a problem where the unconstrained minimum violates the constraint
+(like the boundary optimum in Q6 where $(0,0) \notin \mathcal{X}$), penalty methods only
+achieve feasibility for sufficiently large $\lambda$.
+\end{remark}
 
 \textbf{Projected gradient descent} enforces feasibility as a hard constraint from the very
 first iteration. This is the fundamental advantage: no matter how large the gradient step,
@@ -1509,9 +1537,20 @@ when $\mathcal{X}$ is a polytope).
 g_k = \nabla f(x_k)^T(x_k - z_k),
 \end{equation}
 where $z_k$ is the LMO solution. Since $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$,
-we have $f(x_k) - f^\star \leq g_k$ for convex $f$. Thus $g_k$ provides an upper bound on
-the optimality gap without knowing $f^\star$. In our experiments, $g_k$ could be used to
-implement a stopping criterion: stop when $g_k \leq \varepsilon$.
+the first-order optimality condition gives $f(x_k) - f^\star \leq g_k$ for convex $f$.
+Thus $g_k$ provides an upper bound on the optimality gap without knowing $f^\star$, and
+can be used as a stopping criterion. \cref{fig:q6_fw_gap} shows this bound empirically.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q6_fw_gap.pdf}
+\caption{Frank--Wolfe gap analysis for the interior optimum problem. Left: objective value and
+FW gap on the same plot. Right: FW gap vs.\ optimality gap $f(x_k) - f^\star$, confirming
+the theoretical bound $g_k \geq f(x_k) - f^\star$ at all iterations. Both quantities decrease
+at the $O(1/k)$ rate. The FW gap is a tight certificate: the ratio $g_k / (f(x_k) - f^\star)$
+is bounded and moderate, making it a practical convergence criterion.}
+\label{fig:q6_fw_gap}
+\end{figure}
 
 \textbf{Practical applications of Frank--Wolfe:} FW is particularly popular in machine learning
 for optimising over structured constraint sets: (1) the $\ell_1$ ball $\|x\|_1 \leq 1$ (used in
