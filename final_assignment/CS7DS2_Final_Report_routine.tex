@@ -59,9 +59,10 @@
 \begin{abstract}
 This report presents a comprehensive comparative study of optimisation algorithms for data
 analysis, applied to benchmark problems of increasing difficulty: a linear regression quadratic
-loss (convex, $\kappa \approx 5$, Benchmark A), a sinusoidally perturbed quadratic (mildly
-non-quadratic, Benchmark B), and the Rosenbrock function (non-convex, $\kappa \approx 2500$,
-Benchmark C). Six algorithm families are investigated with theoretical depth:
+loss (convex, near-unit Hessian $\kappa \approx 1.12$, Benchmark A), a sinusoidally perturbed
+quadratic (mildly non-quadratic, $\kappa = 10$, Benchmark B), and the Rosenbrock function
+(non-convex, $\kappa \approx 2508$ at the optimum, Benchmark C). Six algorithm families are
+investigated with theoretical depth:
 (1) \textbf{Adaptive step-size rules} --- Polyak, Adagrad, RMSprop, and Heavy Ball --- with
 analysis of oracle-complexity, coordinate-wise regret bounds, and stability guarantees;
 (2) \textbf{Accelerated and stochastic methods} --- Nesterov momentum and Adam --- with
@@ -79,7 +80,7 @@ GD requires $O(\kappa)$, Nesterov $O(\sqrt{\kappa})$, and Newton $O(\log\log\kap
 Key findings include: Nesterov achieves $f = 0.479$ vs.\ GD's $f = 3.5$ on Rosenbrock;
 Newton converges in one step on quadratics; Frank--Wolfe's fixed $\beta$ cannot converge to
 boundary optima; and Nelder--Mead achieves machine-precision accuracy on Rosenbrock without
-any gradient information. 49 figures, 27 remarks, and 5 theorems support the analysis.
+any gradient information. 50 figures, 38 remarks, 6 theorems, and 4 propositions support the analysis.
 \end{abstract}
 
 \tableofcontents
@@ -413,6 +414,31 @@ Heavy Ball parameters are:
 \end{equation}
 achieving a convergence rate of $(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1})^{2k}$,
 which is the square root of gradient descent's rate $(\frac{\kappa-1}{\kappa+1})^{2k}$.
+
+\begin{remark}[Heavy Ball instability on non-quadratic objectives]
+The optimal Heavy Ball parameters $\alpha^\star$, $\beta^\star$ are derived under the assumption
+that $f$ is a fixed quadratic. For non-quadratic objectives, three failure modes arise:
+\begin{enumerate}[nosep]
+\item \emph{Varying curvature along the trajectory.} On Rosenbrock, $H_{11}(x) = 2 + 1200x_1^2 - 400x_2$
+  changes from $\approx 1202$ at the start to $\approx 802$ at the optimum, shifting the
+  optimal step size from $\alpha^\star(1202, 200) \approx 0.0004$ to $\alpha^\star(802, 200) \approx 0.0007$
+  along the path. No single $\alpha$ is simultaneously optimal everywhere.
+\item \emph{Momentum overshoot in non-descent directions.} Momentum accumulates a velocity
+  vector $z_k = \sum_{j \leq k} \beta^{k-j}\alpha g_j$. If the gradient direction rotates
+  (e.g., as the iterate rounds a corner of the Rosenbrock valley), the accumulated $z_k$
+  points in the \emph{wrong} direction, causing overshoot. This is why Heavy Ball achieves
+  $f = 1.40$ after 120 iterations on Rosenbrock while Nesterov (with its lookahead correction)
+  achieves $f = 0.479$ after 150 iterations.
+\item \emph{Sensitivity to $\beta$.} For quadratics, the optimal $\beta^\star \to 1$ as
+  $\kappa \to \infty$ (Rosenbrock: $\beta^\star \approx 0.97$ for $\kappa = 2500$). Using
+  this near-unity $\beta$ amplifies the overshooting problem because each step mostly preserves
+  velocity. In practice, a conservative $\beta \approx 0.86$--$0.90$ (as used here) reduces
+  oscillation at the cost of the theoretical speedup.
+\end{enumerate}
+The Nesterov method avoids failure mode (2) through its lookahead: by evaluating the gradient
+at $\tilde{x}_k = x_k + \beta_k z_k$ (the predicted next position), it corrects the velocity
+before committing, providing implicit robustness to gradient direction changes.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -1085,6 +1111,39 @@ rule: use the largest batch size that fits in GPU memory, then tune $\alpha$ to 
 convergence speed with the noise floor.
 \end{remark}
 
+\begin{theorem}[SGD convergence floor for strongly convex objectives]
+\label{thm:sgd_floor}
+Let $J$ be $L$-smooth and $\mu$-strongly convex, and assume the per-sample gradient noise
+satisfies $\mathbb{E}_j\|\nabla J_j(\theta) - \nabla J(\theta)\|^2 \leq \sigma_g^2$ for all
+$\theta$. For mini-batch SGD with constant step $\alpha \leq 1/L$ and batch size $b$:
+\begin{equation}
+\mathbb{E}\bigl[J(\theta_k) - J^\star\bigr]
+\leq (1 - \alpha\mu)^k \bigl(J(\theta_0) - J^\star\bigr)
++ \frac{\alpha\,\sigma_g^2}{2\mu b}.
+\end{equation}
+The first term decays geometrically to zero; the second is the irreducible
+\emph{SGD convergence floor}:
+\begin{equation}
+\text{floor}(\alpha, b) = \frac{\alpha\,\sigma_g^2}{2\mu b}.
+\end{equation}
+To achieve floor $\leq \varepsilon$, one requires $\alpha \leq 2\mu b \varepsilon / \sigma_g^2$.
+With Robbins--Monro step $\alpha_k = \alpha_0 / (1 + \gamma k)$ (satisfying $\sum_k \alpha_k =
+\infty$, $\sum_k \alpha_k^2 < \infty$), the floor vanishes and $\mathbb{E}[J(\theta_k) - J^\star]
+= O(1/k)$. This explains \cref{fig:q2_sgd_decay}: constant-$\alpha$ SGD floors above $J^\star$,
+while decaying $\alpha_k$ eventually reaches $J^\star$.
+\end{theorem}
+
+\begin{remark}[Floor vs.\ noise floor distinction]
+The SGD convergence floor $\alpha\sigma_g^2/(2\mu b)$ in \cref{thm:sgd_floor} is an
+\emph{optimisation} floor: it persists even if $\sigma_g^2 > 0$ solely due to mini-batch
+sampling. It is \emph{distinct} from the statistical noise floor $J^\star = \sigma_\varepsilon^2/2$,
+which is inherent to the data-generating process. In \cref{fig:q2_sgd_batch}, both batch sizes
+converge to $J^\star \approx 0.4826$; the additional SGD floor (excess over $J^\star$) is
+small because the mini-batch gradient noise at convergence is much smaller than the irreducible
+OLS residual error. In a regime where $\sigma_\varepsilon^2 = 0$ (noiseless data), the SGD
+floor would be the dominant effect, causing $J(\theta_k)$ to oscillate above 0.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -1627,6 +1686,30 @@ meaning the estimator has constant signal-to-noise ratio in $d$, but the expecte
 iterations to achieve accuracy $\varepsilon$ scales as $O(d/\varepsilon)$ compared to $O(1/\varepsilon)$
 for exact gradient descent. This $d$-factor is the fundamental curse of dimensionality
 for derivative-free methods.
+
+\begin{remark}[Oracle cost comparison: finite differences vs.\ random search across dimensions]
+The per-iteration cost in function evaluations determines the practical crossover between
+finite differences (FD) and random search:
+\begin{itemize}[nosep]
+\item \textbf{FD gradient:} requires $d + 1$ function evaluations per iteration (one for
+  each coordinate plus the base point). Convergence rate matches exact gradient descent.
+  Total cost to $\varepsilon$-accuracy: $O((d+1)\kappa\log(1/\varepsilon))$ FE.
+\item \textbf{Nesterov random search:} requires 2 function evaluations per iteration
+  (base point $+$ one perturbation direction), but the convergence rate degrades by a
+  factor of $d$ due to single-direction estimation. Total cost to $\varepsilon$-accuracy:
+  $O(2d/\varepsilon)$ FE for convex functions, $O(2d\kappa/\varepsilon)$ for strongly convex.
+\end{itemize}
+For our $d = 2$ benchmark: FD requires $3$ FE/iter vs.\ $2$ for random search --- negligible
+difference. For $d = 1000$ (e.g., a neural network with 1000 parameters): FD requires
+$1001$ FE/iter vs.\ $2$ for random search. However, FD achieves $\varepsilon$-accuracy in
+$O(\kappa\log(1/\varepsilon))$ iterations while random search requires $O(d\kappa/\varepsilon)$
+iterations. The crossover where random search requires fewer total FE than FD occurs at
+$d \leq 2\kappa\log(1/\varepsilon) / \varepsilon$ --- typically only for very large $d$ and
+moderate accuracy requirements. For high-dimensional smooth problems, \emph{automatic
+differentiation} (autodiff) obtains the exact gradient at the cost of a single forward pass
+(i.e., FE cost $\approx 1$), making both FD and random search obsolete when the function
+is implemented in a differentiable framework.
+\end{remark}
 
 \subsubsection{Results}
 
@@ -2479,8 +2562,9 @@ All observed performance differences can be traced to the condition number $\kap
 \begin{itemize}[nosep]
 \item For $\kappa \approx 1$ (Benchmark A after normalisation), constant-step GD and all
   variants converge quickly — condition number does not separate methods.
-\item For $\kappa \approx 6.7$ (Benchmark B), moderate anisotropy creates mild zig-zagging;
-  adaptive methods (Adagrad, Adam) help but the improvement is limited.
+\item For $\kappa = 10$ (Benchmark B, $L = 10$, $\mu = 1$), moderate anisotropy creates mild zig-zagging;
+  adaptive methods (Adagrad, Adam) help by applying per-coordinate scaling to equalize the
+  effective curvature in the $x_1$ (low curvature) and $x_2$ (high curvature) directions.
 \item For $\kappa \approx 2500$ (Benchmark C), only methods with momentum, curvature information
   (Newton), or exact $f^\star$ knowledge (Polyak) make meaningful progress. Pure GD requires
   $O(\kappa) = O(2500)$ times more iterations than Nesterov for the same accuracy.
@@ -2490,6 +2574,31 @@ condition number of the problem. If $\kappa \gg 1$: use momentum (Nesterov, Heav
 or curvature information (Newton, L-BFGS). If $\kappa \approx 1$ (after preconditioning):
 simple GD may suffice. Preconditioning (e.g., whitening the input data) is often more
 valuable than algorithm selection for ill-conditioned problems.
+\end{remark}
+
+\begin{remark}[Oracle complexity hierarchy: a unified view]
+The methods in this report span three oracle complexity classes, distinguished by the
+information requested at each step:
+\begin{itemize}[nosep]
+\item \textbf{Zeroth-order} (function values only): grid search, Nelder--Mead, Nesterov
+  random search. Best iteration complexity: $O(d/\varepsilon)$ for random search on convex
+  problems; $O((V/\varepsilon)^d)$ for grid search. These methods pay a dimension factor
+  $d$ in iterations or an exponential factor in $d$.
+\item \textbf{First-order} (gradient access): GD, Nesterov, Heavy Ball, PGD, Frank--Wolfe.
+  Best iteration complexity: $O(1/\sqrt{\varepsilon})$ (Nesterov, optimal for smooth convex)
+  or $O(\sqrt{\kappa}\log(1/\varepsilon))$ (Nesterov, optimal for strongly convex). Each
+  iteration costs one gradient evaluation ($O(d)$ work for explicit objectives).
+\item \textbf{Second-order} (Hessian access): Newton, BFGS. Best iteration complexity:
+  $O(\log\log(1/\varepsilon))$ (quadratic convergence). Each iteration costs $O(d^3)$ for
+  exact Newton or $O(d^2)$ for BFGS. For $d = 2$, Newton dominates; for $d \geq 10^3$,
+  L-BFGS (storing $m = 10$ pairs, $O(md)$ memory) is preferred.
+\end{itemize}
+The transition from zeroth to first order halves the iteration complexity exponent from
+$O(1/\varepsilon)$ to $O(1/\sqrt{\varepsilon})$, while the transition from first to second
+order gives super-polynomial speedup ($O(\log\log(1/\varepsilon))$ vs.\ $O(\sqrt{\kappa}\log(1/\varepsilon))$).
+The practical barrier for second-order methods is the $O(d^3)$ cost, which exceeds the
+gradient cost $O(d)$ by a factor of $d^2$ --- for deep networks with $d = 10^8$,
+second-order methods are infeasible without massive Hessian approximation.
 \end{remark}
 
 \begin{table}[H]
