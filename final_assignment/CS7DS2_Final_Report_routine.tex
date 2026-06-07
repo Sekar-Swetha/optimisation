@@ -266,7 +266,14 @@ $\alpha_k^{(i)} = \alpha_0 / (\sqrt{v_k^{(i)}} + \varepsilon)$.
 \begin{proposition}[Polyak convergence]
 For a convex function with minimum $f^\star$, the Polyak step satisfies
 $f(x_{k+1}) - f^\star \leq \tfrac{1}{2}\|x_k - x^\star\|^2 / \alpha_k$.
-When $f^\star$ is known exactly and $f$ is strongly convex, this gives geometric convergence.
+When $f^\star$ is known exactly and $f$ is strongly convex with constant $\mu$, this gives
+the geometric convergence:
+\begin{equation}
+\|x_{k+1} - x^\star\|^2 \leq \left(1 - \frac{\mu}{\|\nabla f(x_k)\|^2/(f(x_k)-f^\star)}\right)\|x_k - x^\star\|^2.
+\end{equation}
+For a strongly convex function, $f(x) - f^\star \leq \|\nabla f(x)\|^2 / (2\mu)$, so the
+ratio $\|\nabla f(x_k)\|^2/(f(x_k)-f^\star) \geq 2\mu$, yielding contraction by factor
+$(1 - \mu \cdot \alpha_k) \leq (1 - 2\mu^2/\|\nabla f(x_k)\|^2)$.
 \end{proposition}
 
 \begin{algorithm}[H]
@@ -695,6 +702,19 @@ objective's difficulty arises from \emph{cross-coordinate} curvature: the off-di
 term $H_{12} = -400x_1$ is large and position-dependent. Adam's diagonal curvature estimate
 cannot capture this coupling, while Nesterov's lookahead momentum aligns more naturally with
 the curved valley floor by building velocity in the locally consistent descent direction.
+
+\begin{remark}[Adam's convergence in the deterministic setting]
+Adam was designed for stochastic gradient settings where gradient noise provides implicit
+regularisation. In a deterministic setting (like the benchmarks here), Adam is not guaranteed
+to converge to a local minimum of smooth objectives: the non-decreasing nature of the
+cumulative second-moment estimate $v_t$ can cause the adaptive step sizes to shrink too fast
+in some coordinates, ``locking'' the iterate away from the minimum. Empirically, Adam performs
+best on deep learning tasks with heterogeneous feature scales and non-stationary gradient
+distributions. On smooth, low-dimensional, deterministic problems like the benchmarks here,
+momentum methods (Nesterov, Heavy Ball) with their global momentum accumulation provide a
+better inductive bias. For such problems, full-batch gradient methods with hand-tuned or
+line-search step sizes typically dominate Adam.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -1189,16 +1209,28 @@ elimination. For $d = 2$ (our benchmarks), this is trivial, but for large-scale 
 (e.g., neural networks with $d \sim 10^6$) it is infeasible.
 
 \textbf{Quasi-Newton methods} (e.g., BFGS, L-BFGS) build an approximation $B_k \approx \nabla^2 f(x_k)$
-from gradient difference information:
+from gradient difference information. The key idea is the \emph{secant condition}: if the
+Hessian were constant at $H$, then $H s_k = y_k$ where $s_k = x_{k+1} - x_k$ and
+$y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$. Among all symmetric positive-definite matrices
+satisfying $B_{k+1} s_k = y_k$, the BFGS update selects the one closest to $B_k$ in the
+weighted Frobenius norm, yielding:
 \begin{equation}
 s_k = x_{k+1} - x_k, \quad y_k = \nabla f(x_{k+1}) - \nabla f(x_k), \quad
-B_{k+1} = B_k + \frac{y_k y_k^T}{y_k^T s_k} - \frac{B_k s_k s_k^T B_k^T}{s_k^T B_k s_k}.
+B_{k+1} = B_k + \frac{y_k y_k^T}{y_k^T s_k} - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k}.
 \end{equation}
-This \emph{BFGS update} maintains positive definiteness while incorporating curvature information
-from the secant condition $B_{k+1} s_k = y_k$. BFGS achieves superlinear (but not quadratic)
-convergence at $O(d^2)$ cost per iteration --- a practical middle ground between GD ($O(d)$)
-and Newton ($O(d^3)$). L-BFGS stores only the $m$ most recent $(s_k, y_k)$ pairs, reducing
-memory to $O(md)$ and making it practical for very large $d$.
+The positive-definiteness of $B_{k+1}$ is maintained provided $y_k^T s_k > 0$ (which holds
+when $f$ is strongly convex or when a Wolfe-condition line search is used). The BFGS inverse
+update avoids explicit matrix inversion: defining $H_k = B_k^{-1}$,
+\begin{equation}
+H_{k+1} = \left(I - \frac{s_k y_k^T}{y_k^T s_k}\right) H_k \left(I - \frac{y_k s_k^T}{y_k^T s_k}\right)
++ \frac{s_k s_k^T}{y_k^T s_k},
+\end{equation}
+enabling direct computation of the Newton direction $p_k = H_k g_k$ in $O(d^2)$ operations.
+BFGS achieves superlinear (but not quadratic) convergence at $O(d^2)$ cost per iteration
+--- a practical middle ground between GD ($O(d)$) and Newton ($O(d^3)$). L-BFGS stores only
+the $m_{\text{hist}}$ most recent $(s_k, y_k)$ pairs, reducing memory to $O(m_{\text{hist}} d)$
+and making it practical for very large $d$, where $m_{\text{hist}} \in [5, 20]$ typically
+suffices.
 
 \subsection{Contour Trajectories}
 
@@ -1453,6 +1485,19 @@ functions or simulations). Nesterov random search is theoretically appealing for
 high-dimensional problems where the $d + 1$ FE cost of finite differences becomes prohibitive,
 but its $O(d)$ variance increase means convergence is slow in practice.
 
+\begin{remark}[Finite differences vs.\ automatic differentiation in practice]
+The methods in this question (FD, Nesterov random search, Nelder--Mead) address the setting
+where the gradient is unavailable, e.g., for simulation-based objectives or wrapped legacy
+code. In modern machine learning, \emph{automatic differentiation} (autograd) is preferred:
+by decomposing $f$ into elementary operations and applying the chain rule symbolically,
+exact gradients are obtained at cost $O(d)$ forward evaluations (reverse-mode AD) or
+$O(1)$ forward evaluation (reverse mode using the computation graph). This makes finite
+differences largely obsolete for differentiable objectives in modern frameworks (PyTorch,
+JAX), though FD remains essential for (a) gradient checking/debugging of AD implementations,
+(b) hyperparameter optimisation where $f$ is a full training run, and (c) physics
+simulations where only function evaluations are available.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q4_oracle_comparison.pdf}
@@ -1573,6 +1618,17 @@ penalty function. The penalised problem converges to the constrained optimum as 
 For finite $\lambda$, the minimiser of $F_\lambda$ satisfies the first-order condition
 $\nabla f(x^\star_\lambda) = \lambda\, \mathbf{1}[x_1 < 0.5]\, e_1$, yielding a constraint
 violation of $O(1/\lambda)$ for typical smooth problems.
+
+\begin{theorem}[$\ell_1$ exact penalty theorem]
+Let $x^\star$ satisfy the KKT conditions for the constrained problem with dual variable $\mu^\star \geq 0$.
+For the $\ell_1$ penalty $F_\lambda(x) = f(x) + \lambda \max(0, 0.5 - x_1)$, if
+$\lambda > \mu^\star$, then any local minimiser of $F_\lambda$ that is feasible is also a local
+minimiser of the original constrained problem. In our Q5 problem, $\mu^\star = 0$ (inactive
+constraint), so for \emph{any} $\lambda > 0$, the unconstrained minimum $(0.582, 2.0)$ is also
+a minimiser of $F_\lambda$ once the iterate reaches feasibility. This is why even $\lambda = 0.15$
+converges to the correct solution: the penalty threshold $\lambda > \mu^\star = 0$ is satisfied
+for all positive $\lambda$.
+\end{theorem}
 
 \subsection{Hyperparameter Settings}
 
@@ -2062,6 +2118,54 @@ Frank--Wolfe & $O(1/k)$ & 0 & 1 & 0 & LMO \\
 \multicolumn{6}{l}{\small $^*$Requires $f^\star$; $^{**}$Optimal for quadratics; $^{***}$Feasibility not guaranteed for finite $\lambda$}
 \end{tabular}
 \end{table}
+
+\begin{table}[H]
+\centering
+\caption{Cross-question empirical results summary: final objective value $f(x_T)$ achieved by
+each method (best achievable from the respective starting point, given the iteration budget).
+Bold = best in class per benchmark. A dash (--) indicates the method was not tested on that
+benchmark in the corresponding question.}
+\label{tab:cross_question}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Q} & \textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} & \textbf{Iters} \\
+\midrule
+\multirow{5}{*}{Q1} & GD (baseline) & 0.4826 & 0.7244 & 3.514 & 120 \\
+ & Polyak (correct $f^\star$) & -- & -- & \textbf{0.009} & 120 \\
+ & Adagrad & \textbf{0.4826} & \textbf{0.7244} & 2.203 & 120 \\
+ & RMSprop & 0.503 & 0.727 & 3.120 & 120 \\
+ & Heavy Ball & \textbf{0.4826} & \textbf{0.7244} & 1.400 & 120 \\
+\midrule
+\multirow{2}{*}{Q2} & Nesterov & \textbf{0.4826} & \textbf{0.7244} & \textbf{0.479} & 150 \\
+ & Adam & \textbf{0.4826} & \textbf{0.7244} & 1.579 & 150 \\
+\midrule
+\multirow{2}{*}{Q3} & Newton ($\alpha{=}1.0/0.85/0.22$) & \textbf{0.4826} & \textbf{0.7244} & 0.686 & 20 \\
+ & GD & 0.4827 & 0.7244 & 3.732 & 80 \\
+\midrule
+\multirow{4}{*}{Q4} & FD GD ($\delta{=}0.05$) & -- & $\approx$0.7244 & -- & -- \\
+ & FD GD ($\delta{=}0.8$) & -- & $>$0.7244 & -- & -- \\
+ & Nelder--Mead & -- & -- & $\approx$\textbf{0.0} & 160 \\
+ & Grid search & -- & -- & $\approx$\textbf{0.0} & $55^2{=}3025$ FE \\
+\bottomrule
+\multicolumn{6}{l}{\small Bench.\ C $f^\star=0$; Bench.\ A,B noise floor $J^\star=0.4826$, $f^\star=0.7244$.}
+\end{tabular}
+\end{table}
+
+\textbf{Practical algorithm selection guide:} The choice of optimisation algorithm should be
+guided by:
+\begin{enumerate}[nosep]
+\item \emph{Are gradients available?} If no: use Nelder--Mead (low $d$), FD approximation
+  (moderate $d$), or random search (high $d$, variance tolerated).
+\item \emph{Are constraints present?} If yes: use PGD (projection cheap) or Frank--Wolfe
+  (LMO cheap); penalty methods if the constraint structure permits.
+\item \emph{Is the condition number large?} If $\kappa \gg 1$: use Nesterov, Heavy Ball, or
+  Newton/L-BFGS; avoid constant-step GD.
+\item \emph{Is the problem stochastic?} If yes: use Adam or SGD with momentum; Nesterov
+  with variance reduction (e.g., SVRG) for finite-sum problems.
+\item \emph{Is the problem low-dimensional and smooth?} If yes: Newton or L-BFGS for fastest
+  convergence; BFGS provides quadratic-like convergence at $O(d^2)$ cost.
+\end{enumerate}
+These rules explain all the patterns observed in this assignment.
 
 % ============================================================
 \newpage
