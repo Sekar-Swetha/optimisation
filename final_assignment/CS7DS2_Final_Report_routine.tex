@@ -483,20 +483,34 @@ fixed or nearly-fixed base learning rates.}
 \begin{table}[H]
 \centering
 \caption{Q1: Final objective values after 120 iterations. Bold indicates best per benchmark.
-Results confirm that no single adaptive rule dominates across all problem structures.}
+$f^\star$: noise floor $0.4826$ (A), minimum $0.7244$ (B), minimum $0$ (C).
+RMSprop's $0.5027 > f^\star_A$ and $0.7271 > f^\star_B$ reflect oscillation near the minimum,
+not stagnation: the EMA-stabilised step overshoots as $v_k$ retains history of the larger
+initial gradients even after converging close to the minimum.}
 \label{tab:q1_final}
 \begin{tabular}{lccc}
 \toprule
 \textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} \\
 \midrule
 GD (baseline) & 0.4826 & 0.7244 & 3.5142 \\
-Polyak & 2.7189 & 24.0659 & \textbf{0.0094} \\
+Polyak (misspecified $f^\star=0$) & 2.7189 & 24.0659 & \textbf{0.0094} \\
 Adagrad & \textbf{0.4826} & \textbf{0.7244} & 2.2034 \\
 RMSprop & 0.5027 & 0.7271 & 3.1204 \\
 Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}[Why RMSprop exceeds the noise floor on Benchmarks A and B]
+On Benchmark A, RMSprop converges to $J = 0.5027 > J^\star = 0.4826$, and on Benchmark B
+to $f = 0.7271 > f^\star = 0.7244$. The cause is EMA inertia: near the minimum, the gradient
+norm $\|g_k\|$ is small, but $v_k = 0.9 v_{k-1} + 0.1 g_k^2$ retains nonzero memory of the
+large gradients encountered earlier (EMA window $\approx 10$ iterations). This causes
+$\alpha_0/\sqrt{v_k}$ to remain larger than the safe step for the region, inducing persistent
+oscillation around the minimum. This is the \emph{bias effect} of EMA: the effective step
+adapts to average recent gradient magnitude, not the current local curvature, causing
+over-stepping in flat regions after steep initial descent.
+\end{remark}
 
 \subsection{Contour Plots with Optimisation Trajectories}
 
@@ -593,10 +607,19 @@ achieves the linear convergence rate:
 f(x_{k+1}) - f^\star \leq \left(1 - \frac{\mu}{L}\right)(f(x_k) - f^\star)
 = \left(\frac{\kappa - 1}{\kappa}\right)(f(x_k) - f^\star),
 \end{equation}
-where $\kappa = L/\mu$ is the condition number. For Benchmark A, $\kappa = \lambda_{\max}(H)/\lambda_{\min}(H)$;
-for Benchmark B, $\kappa \approx 10/1.5 \approx 6.7$; for Rosenbrock (near the optimum),
-$\kappa \approx 2500$. These condition numbers directly explain why GD struggles on Benchmark C
-while performing well on A and B.
+where $\kappa = L/\mu$ is the condition number. For our benchmarks:
+\begin{itemize}[nosep]
+\item Benchmark A: $\kappa \approx 5.75$ ($\lambda_{\max}/\lambda_{\min}$ of $X^TX/m$),
+  GD rate $\rho \approx 0.826$, $N_{10^{-4}} \approx 28$ iters (observed: all methods converge
+  in $\ll 80$ iterations).
+\item Benchmark B: $\kappa = 10/1 = 10$, GD rate $\rho \approx 0.90$, $N_{10^{-4}} \approx 88$
+  iters (observed: converges in $\approx 50$ iterations due to near-quadratic structure).
+\item Benchmark C: $\kappa \approx 2500$ (near optimum), GD rate $\rho \approx 0.9992$,
+  $N_{10^{-4}} \approx 51{,}000$ iters (observed: 120 iterations gives $f \approx 3.5$,
+  far from converged).
+\end{itemize}
+These condition numbers directly explain why GD struggles on Benchmark C while performing
+well on A and B.
 
 \begin{itemize}[nosep]
 \item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest
@@ -1629,9 +1652,15 @@ vertex). The centroid path follows the valley floor, approaching $(1,1)$.
 Right: the best objective value decreases steadily but non-monotonically as the simplex
 contracts. Non-monotone steps arise from the shrink operation, which may temporarily worsen
 the centroid position while improving the worst vertex. After 160 iterations, the best
-simplex vertex achieves $f \approx 0$ (machine precision), converging exactly to $(1,1)$ ---
-\emph{a better result than all gradient-based methods in Q1 on Rosenbrock}, because Nelder--Mead
-effectively adapts its simplex shape to the curved valley without needing a hand-tuned step size.}
+simplex vertex achieves $f \approx 3 \times 10^{-10}$ (near machine precision), converging
+to within $\approx 10^{-5}$ of $(1,1)$ --- \emph{a better result than all gradient-based
+methods in Q1 on Rosenbrock (best: Polyak at $f = 0.009$)}, because Nelder--Mead effectively
+adapts its simplex shape to the curved valley. Unlike gradient descent, which is constrained to
+move in gradient directions, Nelder--Mead can follow the parabolic valley by adjusting its
+simplex orientation through reflection and contraction.
+The convergence rate of Nelder--Mead on Rosenbrock is empirically super-linear: the final
+100 of 160 iterations reduce the error by a factor of $\approx 10^{9}$, characteristic of
+the rapid simplex contraction once the simplex aligns with the valley direction.}
 \label{fig:q4_nm}
 \end{figure}
 
@@ -2114,6 +2143,24 @@ For box constraints $\mathcal{X} = [l, u]^d$, the LMO decomposes per coordinate:
 (z_k)_i = \begin{cases} l_i & \text{if } (\nabla f(x_k))_i > 0 \\ u_i & \text{if } (\nabla f(x_k))_i \leq 0 \end{cases}
 \end{equation}
 requiring only $O(d)$ operations.
+
+\begin{remark}[Frank--Wolfe vs.\ coordinate descent on box constraints]
+For box-constrained problems, an alternative to Frank--Wolfe is \emph{coordinate descent}:
+at each step, minimise $f$ over one coordinate while holding the others fixed. For the
+linear objective (LP case), coordinate descent is equivalent to the LMO per coordinate,
+but for non-linear objectives, coordinate descent performs an exact line search along one
+dimension at each step, potentially converging faster. For the box constraint $\mathcal{X}$
+and smooth $f$:
+\begin{itemize}[nosep]
+\item \textbf{FW:} Moves towards the LMO vertex (a corner of $\mathcal{X}$), maintaining
+  feasibility; natural for structured constraint sets.
+\item \textbf{Coordinate descent:} Takes a step within $[l_i, u_i]$ for one coordinate;
+  efficient for separable objectives or diagonal Hessians; achieves $O(\kappa/\varepsilon)$
+  iterations for strongly convex objectives.
+\end{itemize}
+Coordinate descent is commonly used for Lasso regression (ISTA/ADMM), SVM training (SMO),
+and mixed-integer programming relaxations.
+\end{remark}
 
 \begin{theorem}[Frank--Wolfe convergence rate \cite{frank1956algorithm}]
 For a convex, $L$-smooth objective $f$ over a compact convex set $\mathcal{X}$ with
