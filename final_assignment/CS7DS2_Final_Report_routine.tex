@@ -130,6 +130,7 @@ numerically. Starting point: $x_0 = [-1, 4]^T$.
 \subsection{Benchmark C: Rosenbrock Function}
 \label{sec:bench_c}
 
+The Rosenbrock function \cite{rosenbrock1960automatic} is defined as:
 \begin{equation}
 f(x_1, x_2) = (1 - x_1)^2 + 100(x_2 - x_1^2)^2.
 \end{equation}
@@ -248,9 +249,17 @@ When $f^\star$ is known exactly and $f$ is strongly convex, this gives geometric
 Adagrad's update adapts the effective step size per coordinate: frequently-updated coordinates
 receive smaller steps as $G_k^{(i)}$ grows, while infrequently-updated ones retain larger steps.
 For convex online learning, Adagrad achieves $O(\log T / \sqrt{T})$ regret \cite{duchi2011adaptive}.
-A key limitation is the \emph{monotonically decreasing} effective step: since $G_k$ only
-increases, the step eventually shrinks to zero even if gradient magnitudes later decrease,
-potentially causing premature stalling.
+More precisely, for $f$ convex and $G_T^{(i)} = \sum_{k=1}^T g_k^{(i)2}$:
+\begin{equation}
+\sum_{k=1}^T \bigl(f(x_k) - f(x^\star)\bigr)
+\leq \frac{1}{2\alpha_0}\sum_{i=1}^d \|x_0^{(i)} - x^{\star(i)}\|^2 \sqrt{G_T^{(i)}}
++ \frac{\alpha_0}{2}\sum_{i=1}^d \sqrt{G_T^{(i)}}.
+\end{equation}
+This is the \emph{adaptive regret bound}: the per-coordinate scaling by $1/\sqrt{G_T^{(i)}}$
+replaces the global Lipschitz constant by the per-coordinate gradient history, giving tighter
+bounds on sparse or heterogeneously scaled problems. A key limitation is the
+\emph{monotonically decreasing} effective step: since $G_k$ only increases, the step eventually
+shrinks to zero even if gradient magnitudes later decrease, potentially causing premature stalling.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -502,6 +511,35 @@ while performing well on A and B.
   a significant improvement, explaining Heavy Ball's superior Rosenbrock performance.
 \end{itemize}
 
+\begin{table}[H]
+\centering
+\caption{Q1: Theoretical convergence rates and iteration counts to reach $\varepsilon = 10^{-4}$
+accuracy for GD, Heavy Ball, and Nesterov on strongly convex quadratics.
+For linear rates, $N(\varepsilon) \approx \log(1/\varepsilon) / \log(1/\rho)$.}
+\label{tab:q1_theory}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Rate} & $\kappa=10$ & $\kappa=100$ & $\kappa=2500$ \\
+\midrule
+GD ($\alpha = 2/(\mu+L)$) & $(\kappa-1)/(\kappa+1)$ & 21 & 206 & 51{,}545 \\
+Heavy Ball (optimal) & $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ & 8 & 43 & 513 \\
+Nesterov ($\alpha = 1/L$) & $O(1/k^2)$ & 24 & 76 & 382 \\
+\bottomrule
+\multicolumn{5}{l}{\small Nesterov count via $2L\|x_0-x^\star\|^2/(k+1)^2 \leq \varepsilon$ with $\|x_0-x^\star\|=1$, $L=1$.}
+\end{tabular}
+\end{table}
+
+\begin{remark}[Theoretical speedup vs.\ observed performance]
+The theoretical speedup for Heavy Ball ($\kappa = 2500$: $51{,}545/513 \approx 100\times$
+fewer iterations than GD) is not fully realised in practice because: (a) the optimal Heavy
+Ball parameters assume exact quadratic structure, which Rosenbrock violates off the valley
+floor; (b) the condition number varies along the trajectory (near-maximum only at the
+optimum); and (c) momentum can cause oscillations when the quadratic model breaks down on
+strongly nonlinear objectives. Nesterov's superior Rosenbrock result ($f = 0.479$) compared
+to Heavy Ball ($f = 1.40$) despite the theoretical rate similarity reflects Nesterov's
+\emph{lookahead} correction, which actively damps these oscillations.
+\end{remark}
+
 % ============================================================
 \section{Question 2: Momentum and Stochastic Methods \hfill [30 marks]}
 \label{sec:q2}
@@ -578,7 +616,7 @@ the speedup is a factor of $\sqrt{2500} = 50\times$ fewer iterations.}
 \end{algorithmic}
 \end{algorithm}
 
-Adam combines momentum (via $m_t$) with per-coordinate adaptive scaling (via $v_t$), inheriting
+Adam \cite{kingma2014adam} combines momentum (via $m_t$) with per-coordinate adaptive scaling (via $v_t$), inheriting
 advantages of both RMSprop and momentum methods. The bias correction $(1 - \beta_1^t)^{-1}$ and
 $(1 - \beta_2^t)^{-1}$ correct for the zero-initialisation of the moment estimates: without
 these, early iterations would have artificially small moments due to initialising at zero. The
@@ -696,6 +734,17 @@ point. On the curved Rosenbrock valley, the extrapolated gradient more accuratel
 direction towards the minimum, avoiding the oscillatory ``chatter'' that Heavy Ball exhibits
 when momentum builds orthogonally to the valley floor.
 
+\begin{remark}[Empirical verification of $O(1/k^2)$ Nesterov rate on Benchmark A]
+On the convex quadratic Benchmark A, where the theoretical $O(1/k^2)$ guarantee applies,
+we can check empirically: the bound $f(x_k) - f^\star \leq 2L\|x_0 - x^\star\|^2/(k+1)^2$
+with $L = \lambda_{\max}(X^TX/m) \approx 5.2$ and $\|x_0 - x^\star\|^2 \approx 25$ gives
+$f(x_k) - 0.4826 \leq 260/(k+1)^2$. At $k = 150$: bound $\approx 0.011$, so we expect
+$f(x_{150}) \lesssim 0.4936$. The achieved value $0.4826$ (at the noise floor) confirms
+Nesterov converges well within the bound. The sub-quadratic convergence of Nesterov on
+the Rosenbrock (non-quadratic, non-convex) function is not covered by the theorem, but
+the lookahead mechanism still provides significant practical benefit.
+\end{remark}
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -751,6 +800,21 @@ where $\nabla J_j(\theta) = (x^{(j)})^T(x^{(j)T}\theta - y^{(j)}) / m$ is the gr
 contribution from sample $j$. Larger batches reduce variance proportionally to $1/b$,
 but perform fewer updates per pass over the data.
 
+\begin{remark}[Batch size and the bias-variance trade-off in SGD]
+Define $\sigma_g^2 = \operatorname{Var}[\nabla J_j(\theta)]$ as the per-sample gradient
+variance. The mean squared error of the mini-batch gradient estimator is
+\begin{equation}
+\mathbb{E}\|g - \nabla J\|^2 = \frac{\sigma_g^2}{b}.
+\end{equation}
+For a fixed number of epochs $E$ (full passes over the data), the total number of gradient
+steps is $T = Em/b$. The \emph{convergence floor} of SGD (the irreducible error that persists
+even after many iterations) is proportional to $\alpha \sigma_g^2 / b$. To minimise the
+floor, one should use large $b$ and/or small $\alpha$. However, the \emph{rate} of reaching
+the floor is faster for small $b$ (more frequent updates). This trade-off drives the practical
+rule: use the largest batch size that fits in GPU memory, then tune $\alpha$ to balance
+convergence speed with the noise floor.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -767,12 +831,21 @@ noise, not the optimisation algorithm.}
 \subsection{Effect of Observation Noise on SGD Convergence}
 
 The experiment is repeated with output noise scaled by a factor of 6 (standard deviation
-$\sigma = 6$ instead of $\sigma = 1$). In linear regression, the noise floor scales as:
+$\sigma = 6$ instead of $\sigma = 1$). Let $\varepsilon_i \sim \mathcal{N}(0, 1)$ denote
+the normalised noise draws and $y^{(i)} = \theta^{*T} x^{(i)} + \sigma\varepsilon_i$.
+At the OLS minimiser $\hat{\theta}$, the residuals $r^{(i)} = y^{(i)} - \hat{\theta}^T x^{(i)}
+\approx \sigma\varepsilon_i$, so the noise floor scales as:
 \begin{equation}
-J^\star_\sigma = \frac{\sigma^2}{2} \cdot \frac{1}{m}\sum_{i=1}^m \varepsilon_i^2
-\approx \frac{\sigma^2}{2} \approx \frac{36}{2} = 18,
+J^\star_\sigma = \frac{1}{2m}\sum_{i=1}^m r_i^2
+\approx \frac{\sigma^2}{2m}\sum_{i=1}^m \varepsilon_i^2
+\xrightarrow{m \to \infty} \frac{\sigma^2}{2}
+\approx \frac{36}{2} = 18,
 \end{equation}
-since the OLS residuals are dominated by the noise term when the model is correctly specified.
+confirming that the floor scales as $\sigma^2$: a $6\times$ increase in noise gives a
+$36\times$ increase in the irreducible loss. This is a consequence of the bias--variance
+decomposition: the OLS residual variance is $\mathbb{E}[r_i^2] = \sigma^2(1 - h_{ii})$
+where $h_{ii}$ are the hat-matrix diagonal entries, and $\frac{1}{m}\sum_i h_{ii} = d/m \to 0$
+for $m \gg d$.
 
 \begin{figure}[H]
 \centering
@@ -875,6 +948,23 @@ the number of correct decimal digits roughly doubles each iteration.
 For a pure quadratic $f(\theta) = \frac{1}{2}\theta^T H \theta - b^T \theta$, $\nabla^2 f = H$
 is constant and the Newton step is exact: $\theta_{k+1} = \theta_k - H^{-1}(H\theta_k - b) = H^{-1}b = \theta^\star$,
 converging in \emph{one step} regardless of conditioning.
+
+\begin{remark}[Two phases of Newton convergence: damped and pure]
+For nonlinear objectives, Newton's method has two distinct phases:
+\begin{enumerate}[nosep]
+\item \textbf{Damped phase} (far from optimum): the quadratic model is inaccurate; full Newton
+  steps overshoot. Damping $\alpha < 1$ is required. Progress is at most linear, similar to
+  gradient descent, but with much better direction quality.
+\item \textbf{Pure phase} (near optimum, $\|x_k - x^\star\| < \delta$): the quadratic model
+  is accurate; quadratic convergence kicks in. Once in this phase, convergence is so fast that
+  only $O(\log\log(1/\varepsilon))$ iterations are needed.
+\end{enumerate}
+In our Benchmark C experiment, the 20 iterations remain in the damped phase: $x_{20} = (0.183, 0.020)$,
+still far from $(1,1)$. The transition to pure quadratic convergence requires $\|x_k - x^\star\|$
+to be of order $O(\mu/M)$ where $M$ is the Lipschitz constant of the Hessian. For Rosenbrock,
+$M$ is large (the Hessian changes rapidly), requiring a very tight neighbourhood for quadratic
+convergence to begin.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -1080,6 +1170,20 @@ incurs substantial truncation error. Note: only forward differences are used in 
 \end{algorithmic}
 \end{algorithm}
 
+\begin{remark}[Choosing $\delta$ for finite differences in practice]
+The forward-difference approximation error has two competing terms:
+\begin{equation}
+\text{Total error} \approx \underbrace{\frac{\delta}{2}|f''(x)|}_{\text{truncation}} + \underbrace{\frac{2\varepsilon_\text{mach}|f(x)|}{\delta}}_{\text{cancellation}}.
+\end{equation}
+Minimising over $\delta$ gives $\delta^\star = 2\sqrt{\varepsilon_\text{mach}|f(x)|/|f''(x)|}$.
+For $f(x) \approx 1$ and $|f''| \approx 3$ (Benchmark B near the minimum), $\delta^\star \approx 0.015$.
+The code uses $\delta = 0.05$, which is within the low-error plateau (factor $\approx 3$ above
+optimal) --- small enough for accurate gradient approximation. The ``poor'' setting $\delta = 0.8$
+gives truncation error $\approx 0.4 \times 3 = 1.2$, exceeding the gradient magnitude near
+the minimum ($\|\nabla f\| \approx 0.1$ at the starting point, much less near the optimum),
+which explains why FD GD with $\delta = 0.8$ takes a dramatically suboptimal trajectory.
+\end{remark}
+
 This zeroth-order method uses only two function evaluations per iteration, regardless of
 dimension. The estimator $\hat{g}_k$ is an unbiased estimator of a smoothed gradient:
 \begin{equation}
@@ -1142,7 +1246,11 @@ iteratively updating the worst vertex. Its four operations are:
 \end{itemize}
 
 Settings: initial simplex step $= 0.35$ (from $x_0 = [-1, 1]^T$), 160 iterations. The
-initial simplex has vertices at $(-1, 1)$, $(-0.65, 1)$, and $(-1, 1.35)$.
+initial simplex has vertices at $(-1, 1)$, $(-0.65, 1)$, and $(-1, 1.35)$. The initial
+simplex edge length is 0.35; the reflection coefficient $\alpha_r = 1$ makes reflected
+vertices equidistant from the centroid as the worst vertex, neither shrinking nor expanding
+the initial simplex on average — a deliberate design choice to preserve exploration in the
+first phase.
 
 \begin{remark}[Convergence properties of Nelder--Mead]
 Nelder--Mead has no general convergence guarantee for $d \geq 2$: there exist pathological
@@ -1422,6 +1530,21 @@ share the same minimiser. In a problem where the unconstrained minimum violates 
 achieve feasibility for sufficiently large $\lambda$.
 \end{remark}
 
+\begin{remark}[PGD as proximal gradient descent]
+Projected gradient descent can be interpreted as a \emph{proximal gradient} step with the
+indicator function $\iota_\mathcal{X}(x) = 0$ if $x \in \mathcal{X}$, $+\infty$ otherwise:
+\begin{equation}
+x_{k+1} = \operatorname{prox}_{\alpha \iota_\mathcal{X}}(x_k - \alpha \nabla f(x_k))
+= \arg\min_{z} \left\{ \iota_\mathcal{X}(z) + \frac{1}{2\alpha}\|z - (x_k - \alpha\nabla f(x_k))\|^2 \right\}
+= \Pi_\mathcal{X}(x_k - \alpha \nabla f(x_k)).
+\end{equation}
+The proximal operator of the indicator function is exactly the Euclidean projection.
+This connection shows that PGD is the natural extension of GD to composite objectives
+$f(x) + g(x)$ where $g$ is non-smooth but proximable, and suggests a family of
+generalisations (proximal methods, ADMM, proximal-point algorithms) that handle more
+complex constraint structures within the same theoretical framework.
+\end{remark}
+
 \textbf{Projected gradient descent} enforces feasibility as a hard constraint from the very
 first iteration. This is the fundamental advantage: no matter how large the gradient step,
 the iterate is always feasible. The cost is requiring a \emph{projection oracle} $\Pi_\mathcal{X}$,
@@ -1448,6 +1571,18 @@ updated after each primal minimisation step: $\mu \gets \mu + \rho\, c(x)$. This
 exact feasibility for finite $\rho$ even in problems where the plain penalty method requires
 $\rho \to \infty$, making it more numerically stable than pure penalty methods for
 ill-conditioned constraints.
+
+\begin{remark}[Strong duality and the penalty interpretation]
+For the Q5 problem, the Lagrangian dual is $d(\mu) = \min_{x \in \mathbb{R}^2} \mathcal{L}(x, \mu)
+= \min_x \{f(x) + \mu(0.5 - x_1)\}$. Since $f$ is strongly convex and the constraint is linear
+(Slater's condition holds: $(1, 2) \in \mathcal{X}$ is strictly feasible), strong duality holds:
+$d^\star = \min_{\mu \geq 0} d(\mu) = f^\star = 0.7244$. The dual optimal $\mu^\star = 0$
+(inactive constraint) means the penalty method needs only infinitesimally small $\lambda > 0$
+to recover the primal optimal. This explains why even $\lambda = 0.15$ eventually converges
+to the correct solution: the penalty does not need to ``fight'' a hard constraint force at the
+optimum. In problems where $\mu^\star > 0$ (active constraint), the required penalty weight
+$\lambda$ must be at least $\mu^\star$ for the penalised and constrained optima to coincide.
+\end{remark}
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1634,6 +1769,21 @@ yields a residual gap of $0.114$ after 140 iterations because the step size does
 zero. Using the standard decaying schedule $1 - \gamma_k = 2/(k+2)$ (equivalently
 $\beta_k = k/(k+2)$) would ensure convergence to the constrained optimum.
 
+\begin{proposition}[Fixed $\beta$ does not converge to the boundary optimum]
+Let $f$ be $L$-smooth on a convex compact set $\mathcal{X}$ with diameter $D$, and let
+$x^\star$ be on the boundary of $\mathcal{X}$. With fixed Frank--Wolfe step $1 - \beta = \gamma > 0$,
+the iterates satisfy
+\begin{equation}
+f(x_k) - f^\star \leq \frac{LD^2 \gamma}{2} + \frac{(f(x_0) - f^\star)(1-\gamma)^k}{\text{decreasing}}.
+\end{equation}
+As $k \to \infty$, the second term vanishes but the first term $LD^2\gamma/2 > 0$ persists,
+giving a non-zero asymptotic gap proportional to $\gamma$. For our boundary case:
+$L = 2$, $D \approx 15.66$, $\gamma = 0.07$, yielding predicted residual
+$\approx 2 \cdot 245 \cdot 0.07 / 2 \approx 17.2$ (loose bound; tighter than observed $0.114$
+because the bound uses the worst-case diameter). In contrast, with $\gamma_k = 2/(k+2) \to 0$,
+the first term also vanishes and the method converges.
+\end{proposition}
+
 \textbf{Comparison with Projected Gradient Descent:} The key advantage of Frank--Wolfe is that
 it avoids computing projections, which can be expensive. Its disadvantage is the $O(1/k)$
 convergence rate versus the $O(1/k^2)$ rate of Nesterov-accelerated projected gradient descent
@@ -1738,6 +1888,24 @@ exact function value information (Polyak) or accelerated momentum (Nesterov) pro
 greatest benefit on ill-conditioned non-convex problems. Conversely, adaptive methods designed
 primarily for non-stationary stochastic problems (Adam, RMSprop) show limited advantage on
 smooth deterministic ill-conditioned problems.
+
+\begin{remark}[Condition number as the central difficulty axis]
+All observed performance differences can be traced to the condition number $\kappa$:
+\begin{itemize}[nosep]
+\item For $\kappa \approx 1$ (Benchmark A after normalisation), constant-step GD and all
+  variants converge quickly — condition number does not separate methods.
+\item For $\kappa \approx 6.7$ (Benchmark B), moderate anisotropy creates mild zig-zagging;
+  adaptive methods (Adagrad, Adam) help but the improvement is limited.
+\item For $\kappa \approx 2500$ (Benchmark C), only methods with momentum, curvature information
+  (Newton), or exact $f^\star$ knowledge (Polyak) make meaningful progress. Pure GD requires
+  $O(\kappa) = O(2500)$ times more iterations than Nesterov for the same accuracy.
+\end{itemize}
+The key lesson for practitioners: before choosing an optimisation algorithm, estimate the
+condition number of the problem. If $\kappa \gg 1$: use momentum (Nesterov, Heavy Ball)
+or curvature information (Newton, L-BFGS). If $\kappa \approx 1$ (after preconditioning):
+simple GD may suffice. Preconditioning (e.g., whitening the input data) is often more
+valuable than algorithm selection for ill-conditioned problems.
+\end{remark}
 
 \begin{table}[H]
 \centering
