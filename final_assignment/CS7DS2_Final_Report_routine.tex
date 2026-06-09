@@ -682,6 +682,24 @@ While Newton's method is theoretically superior, it has practical limitations th
 \item \textbf{Quasi-Newton methods} (e.g., BFGS, L-BFGS) address both issues by building a low-rank approximation $B_k \approx H(x_k)^{-1}$ from gradient differences across iterations, requiring only $O(d)$ storage and $O(d^2)$ (or $O(md)$ for L-BFGS) work per step while achieving superlinear convergence. These methods are the practical state-of-the-art for medium-scale unconstrained optimisation.
 \end{itemize}
 
+\begin{table}[H]
+\centering
+\caption{Q3: Per-iteration cost comparison for optimisation methods. $d$ = dimension, $m$ = L-BFGS memory.}
+\label{tab:q3_cost}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Storage} & \textbf{Cost/iter} & \textbf{Convergence rate} & \textbf{Practical $d$} \\
+\midrule
+Gradient Descent & $O(d)$ & $O(d)$ & Linear ($\rho^k$) & $d \leq 10^9$ \\
+Newton's method & $O(d^2)$ & $O(d^3)$ & Quadratic ($\|e\|^2$) & $d \leq 10^4$ \\
+BFGS (Quasi-Newton) & $O(d^2)$ & $O(d^2)$ & Superlinear & $d \leq 10^5$ \\
+L-BFGS & $O(md)$ & $O(md)$ & Superlinear & $d \leq 10^8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For the 2D benchmarks in this experiment ($d=2$), the cost differences are negligible. The distinction becomes critical at scale: a neural network with $d=10^7$ parameters admits L-BFGS with $m=10$ in $O(10^8)$ operations per step, but Newton would require $O(10^{21})$ per step---completely infeasible. This dimensional argument explains why gradient-based methods (GD, Adam, SGD) dominate deep learning, while Newton's method is reserved for small-scale problems (e.g., logistic regression with $d \leq 10^3$, or trust-region methods in robotics).
+
 \subsection{Analysis: Convergence Rate Evidence from Update Magnitudes}
 
 The update magnitude plots (Figure~\ref{fig:q3_update}) provide empirical evidence for the theoretical convergence rates:
@@ -753,6 +771,18 @@ minimised at $\delta^{\star} = \sqrt{C_2\varepsilon_{\text{mach}}/C_1} \approx \
 \end{algorithm}
 
 This zeroth-order method estimates a directional derivative along a random direction $u_k$, requiring only \emph{two function evaluations} per iteration regardless of dimension $n$---unlike FD which requires $n+1$ evaluations. The expected gradient estimate satisfies $\mathbb{E}[\hat{g}_k] \propto \nabla f(x_k)$ (up to a scaling factor depending on $\delta$), but the variance is $O(n)$ times larger than a single coordinate FD estimate, reflecting that a random direction provides only a $1/n$-fraction of the gradient information per step.
+
+\begin{proposition}[NRS--FD Function Evaluation Parity]
+For an $L$-smooth function $f:\mathbb{R}^n \to \mathbb{R}$, the total function evaluation cost to achieve $\mathbb{E}[f(x_k)] - f^\star \leq \epsilon$ is:
+\begin{equation}
+\text{NRS:}\ O\!\left(\frac{nL\|x_0-x^\star\|^2}{\epsilon}\right) \text{ iter} \times 2\ \text{FE} = O\!\left(\frac{n}{\epsilon}\right)\ \text{FE},
+\qquad
+\text{FD GD:}\ O\!\left(\frac{L\|x_0-x^\star\|^2}{\epsilon}\right) \text{ iter} \times (n+1)\ \text{FE} = O\!\left(\frac{n}{\epsilon}\right)\ \text{FE}.
+\end{equation}
+Despite NRS needing $O(n)$ more \emph{iterations} than FD GD, its $2$ FE/iter cost versus FD GD's $n+1$ FE/iter cost makes them \emph{asymptotically equivalent in total function evaluations}: both require $O(n/\epsilon)$ total queries.
+\end{proposition}
+
+The practical implication: NRS is not cheaper than FD GD in total computation; its advantage is \emph{memory}: it requires no intermediate storage of $n$ partial perturbations and is naturally parallelisable (a single random perturbation suffices per machine). For the 2D Benchmark~B: NRS needs $2$ FE/iter vs FD GD's $3$ FE/iter, but NRS requires $\approx 2 \times 2 = 4\times$ more iterations to compensate, leading to comparable total cost empirically.
 
 \subsubsection{Results}
 
@@ -941,7 +971,13 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Yes & $\approx 10
 
 \textbf{Projected GD} is the most principled approach: feasibility is a \emph{hard} constraint enforced at every step by construction. The projection $x_1 \leftarrow \max(0.5, x_1)$ costs $O(1)$ per iteration for a half-space constraint. In more complex settings (e.g., Euclidean ball: $O(d)$, simplex: $O(d\log d)$, positive semidefinite cone: $O(d^3)$), the projection cost dominates the gradient computation.
 
-\textbf{Penalty methods} trade exact feasibility for implementational simplicity: only the gradient of $F_\lambda(x) = f(x) + \lambda\max(0, 0.5-x_1)$ is needed. The weight $\lambda$ controls a fundamental trade-off: small $\lambda$ enforces feasibility weakly; large $\lambda$ enforces feasibility quickly but makes $F_\lambda$ ill-conditioned (effective condition number grows as $O(\kappa + \lambda/\mu)$), requiring smaller step sizes. The augmented Lagrangian method---which updates $\lambda$ dynamically at each outer iteration---resolves this trade-off but is more complex to implement. Figure~\ref{fig:q5_lambda} demonstrates empirically that $\lambda \geq 1.8$ is sufficient to achieve the constrained minimum within 100 iterations here.
+\textbf{Penalty methods} trade exact feasibility for implementational simplicity: only the gradient of $F_\lambda(x) = f(x) + \lambda\max(0, 0.5-x_1)$ is needed. The weight $\lambda$ controls a fundamental trade-off: small $\lambda$ enforces feasibility weakly; large $\lambda$ enforces feasibility quickly but makes $F_\lambda$ ill-conditioned (effective condition number grows as $O(\kappa + \lambda/\mu)$), requiring smaller step sizes. Figure~\ref{fig:q5_lambda} demonstrates empirically that $\lambda \geq 1.8$ is sufficient to achieve the constrained minimum within 100 iterations here.
+
+\textbf{Augmented Lagrangian: resolving the ill-conditioning trade-off.} The fundamental flaw of the pure penalty method is that it needs $\lambda \to \infty$ for exact constraint satisfaction, but large $\lambda$ makes the subproblem ill-conditioned. The \emph{augmented Lagrangian method} (ALM, also called the method of multipliers) avoids this by augmenting the objective with both a dual variable $\mu$ and a penalty term:
+\begin{equation}
+L_\rho(x, \mu) = f(x) + \mu\, g(x) + \frac{\rho}{2}\|g(x)\|^2,
+\end{equation}
+where $g(x) = 0$ is the constraint (for an equality-constrained problem). The key is to update $\mu$ at each outer iteration: $\mu_{k+1} = \mu_k + \rho\, g(x_k)$. This dual update ensures that even with a \emph{finite, moderate} $\rho$, ALM converges to the exact constrained minimum. The condition number of the augmented Lagrangian is $O(\kappa + \rho)$ rather than $O(\kappa + \lambda)$, but since $\rho$ need not grow to infinity, the ill-conditioning is bounded. For the inequality constraint $x_1 \geq 0.5$ in this experiment, the analogous ALM update is $\mu_{k+1} = \max(0, \mu_k + \rho(0.5 - x_{k+1,1}))$, clamped to $[0, \infty)$ to enforce the non-negativity of the dual variable. ALM is the foundation of ADMM (Alternating Direction Method of Multipliers), widely used in distributed optimisation and signal processing.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
