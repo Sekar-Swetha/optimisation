@@ -193,7 +193,9 @@ equivalently $f(x_k) - f^{\star} \leq \kappa\left(\frac{\kappa-1}{\kappa+1}\righ
 \end{algorithmic}
 \end{algorithm}
 
-\paragraph{Key design differences.} Adagrad divides by $\sqrt{\sum_{t=0}^k g_{t,i}^2}$ for each coordinate $i$, giving large steps where gradients have historically been small and small steps where they have been large. This automatically rescales coordinates, effectively preconditioning for anisotropic functions. The downside is that the accumulator $G_k$ only grows, causing the effective step to decay to zero. RMSprop corrects this with exponential forgetting (decay $\beta$), making it suitable for non-stationary problems. Heavy Ball adds a momentum term that smooths gradient updates but does not correct for trajectory before updating (unlike Nesterov, discussed in Section~\ref{sec:q2}).
+\paragraph{Key design differences.} Adagrad divides by $\sqrt{\sum_{t=0}^k g_{t,i}^2}$ for each coordinate $i$, giving large steps where gradients have historically been small and small steps where they have been large. This automatically rescales coordinates, effectively preconditioning for anisotropic functions. The downside is that the accumulator $G_k$ only grows, causing the effective step to decay to zero. RMSprop corrects this with exponential forgetting (decay $\beta$), making it suitable for non-stationary problems.
+
+Heavy Ball (Polyak momentum) adds a velocity term that accumulates past gradients. For a quadratic $f(x) = \frac{1}{2}x^T H x$ with optimal parameters $(\alpha^*, \beta^*)$, Heavy Ball achieves the same $O(\sqrt{\kappa})$ iteration complexity as Nesterov --- both improve upon GD's $O(\kappa)$ complexity. The optimal parameters for a quadratic with eigenvalues in $[\mu, L]$ are $\alpha^* = (2/(\sqrt{L}+\sqrt{\mu}))^2$ and $\beta^* = ((\sqrt{L}-\sqrt{\mu})/(\sqrt{L}+\sqrt{\mu}))^2$. However, Heavy Ball lacks Nesterov's convergence guarantees for non-quadratic functions, while Nesterov's lookahead provides provable $O(1/k^2)$ convergence (Theorem~\ref{thm:nesterov}).
 
 \subsection{Hyperparameter Settings}
 
@@ -317,10 +319,11 @@ The Polyak step size can be derived from the optimality condition: if we want $\
 \subsection{Comparative Analysis}
 
 \begin{itemize}[nosep]
-\item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest ($f = 0.009$ on Rosenbrock). Otherwise, Adagrad and Heavy Ball consistently match or exceed the GD baseline.
-\item \textbf{Smoothness vs.\ oscillation:} RMSprop produces the smoothest convergence curves due to exponential averaging but requires careful choice of $\alpha_0$. Heavy Ball shows characteristic overshoot followed by damped oscillation, especially on anisotropic benchmarks.
+\item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest ($f = 0.009$ on Rosenbrock, $375\times$ better than GD). Otherwise, Adagrad and Heavy Ball consistently match or exceed the GD baseline.
+\item \textbf{Smoothness vs.\ oscillation:} RMSprop produces the smoothest convergence curves due to exponential averaging but requires careful choice of $\alpha_0$. Heavy Ball shows characteristic overshoot followed by damped oscillation. On Rosenbrock, Heavy Ball's momentum ($f = 1.40$) outperforms GD ($f = 3.51$) by building up velocity along the persistent valley-floor direction.
 \item \textbf{Stability:} GD is most stable but slowest on ill-conditioned problems. Polyak is provably unstable under $f^{\star}$ misspecification. Adagrad's monotonically decreasing step guarantees convergence but can cause premature stalling on deep neural networks where gradients become very small.
-\item \textbf{Practical implication:} RMSprop and Adagrad are preferable in practice since exact $f^{\star}$ is rarely known. The Polyak step requires an oracle for $f^{\star}$, limiting it to benchmark functions or problems where duality theory provides a lower bound.
+\item \textbf{Heavy Ball vs.\ Nesterov:} On Rosenbrock (Q2), Nesterov ($f = 0.479$) outperforms Heavy Ball ($f = 1.40$) significantly. This is consistent with theory: Nesterov's lookahead provides corrective guidance that prevents momentum overshoot in the curved valley. Heavy Ball, despite its optimal quadratic convergence properties, lacks this correction for nonlinear functions.
+\item \textbf{Practical implication:} RMSprop and Adagrad are preferable in practice since exact $f^{\star}$ is rarely known. The Polyak step requires an oracle for $f^{\star}$, limiting it to benchmark functions or problems where a lower bound is available from duality theory.
 \end{itemize}
 
 % ============================================================
@@ -488,10 +491,11 @@ With $m = 1000$ samples, batch $b = 5$ yields $1000/5 = 200$ gradient steps per 
 
 \subsection{SGD with Increased Noise}
 
-The experiment is repeated with output noise scaled by $\sigma = 6$ (vs.\ original $\sigma = 1$). Since $J^{\star}(\sigma) = \frac{\sigma^2}{2}$ for this regression problem (asymptotically, as $m \to \infty$), the noise floor scales as $\sigma^2$:
+The experiment is repeated with output noise scaled by $\sigma = 6$ (vs.\ original $\sigma = 1$), using $y_{\rm noisy} = X\theta^{\star} + 6\varepsilon$ where $\varepsilon$ is the same noise realisation. The irreducible noise floor (minimum achievable loss at the OLS solution) is:
 \begin{equation}
-J^{\star}(\sigma=6) \approx 36 \times J^{\star}(\sigma=1) \approx 36 \times 0.4826 \approx 17.4.
+J^{\star}(\sigma) = \frac{1}{2m}\sum_{i=1}^m (\sigma\varepsilon_i)^2 = \sigma^2 \cdot J^{\star}(\sigma=1), \qquad J^{\star}(\sigma=6) \approx 36 \times 0.4826 \approx 17.4.
 \end{equation}
+The noise floor scales as $\sigma^2$ because the minimum value of $J$ is the variance of the irreducible residuals $\varepsilon_i$. Crucially, the Hessian $H = X^{\top}X/m$ and hence the GD convergence rate are unchanged --- only the convergence target shifts upward.
 
 \begin{figure}[H]
 \centering
@@ -601,7 +605,7 @@ Iterations & 80 & 20 & 80 & 20 & 80 & 20 \\
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q3_fval_A.pdf}
-\caption{Q3: Newton vs.\ GD on Benchmark A. Newton converges in \textbf{one iteration} to $J = 0.4826$ (machine precision). Since $J$ is exactly quadratic and Newton with $\alpha = 1$ achieves $\theta^{\star} = H^{-1}b$ in one step, all subsequent values remain at the minimum. GD requires $\sim$40 iterations to reach the same accuracy (the very fast convergence is consistent with $\kappa \approx 1.12$, giving GD rate $\approx (0.12-1)/(0.12+1) \approx 0.003$ per iteration).}
+\caption{Q3: Newton vs.\ GD on Benchmark A. Newton converges in \textbf{one iteration} to $J = 0.4826$ (machine precision): one Newton step from any starting point gives the exact OLS solution $\hat\theta = H^{-1}b$ for a quadratic. GD with $\alpha = 0.08$ requires $\sim$75--80 iterations. The per-iteration contraction factor for $(J - J^{\star})$ is $r^2 \approx 0.926^2 \approx 0.857$ (where $r = \max_i|1 - 0.08\lambda_i| = 0.926$), so $0.857^{75} \approx 10^{-6}$ relative reduction is needed to reach the noise floor. With the theoretically optimal $\alpha^{\star} \approx 1.02$, GD would converge in only $\sim$5 iterations.}
 \label{fig:q3_fval_A}
 \end{figure}
 
@@ -704,7 +708,11 @@ The total error $\|\hat{g} - \nabla f\| = O(\delta) + O(\varepsilon_{\rm mach}/\
 \end{algorithmic}
 \end{algorithm}
 
-This zeroth-order method requires only \emph{two} function evaluations per iteration regardless of dimension $d$, making it dimension-independent in cost per step (unlike FD which requires $d+1$ evaluations). Each iteration estimates a \emph{directional} derivative along a random direction. In expectation, $\mathbb{E}[\hat{g}_k] = \mathbb{E}[d \cdot \nabla f(x_k + \delta'u_k)]$ for some intermediate $\delta' \in [0, \delta]$, providing a (scaled) gradient signal. However, since only one random projection is used, the variance is high and convergence is slow. With $\alpha = 0.025$ and $\delta = 0.08$.
+This zeroth-order method requires only \emph{two} function evaluations per iteration regardless of dimension $d$, making it dimension-independent in cost per step (unlike FD which requires $d+1$ evaluations). The expected value of the gradient estimate is:
+\begin{equation}
+\mathbb{E}_{u}[\hat{g}_k] = \mathbb{E}_u\!\left[\frac{f(x + \delta u) - f(x)}{\delta} u\right] \approx \mathbb{E}_u\!\left[(\nabla f(x)^{\top} u)\, u\right] = \frac{1}{d}\,\nabla f(x),
+\end{equation}
+since for $u$ uniformly distributed on the unit sphere, $\mathbb{E}[u u^{\top}] = \frac{1}{d}I$. Thus the estimate is unbiased for $\nabla f$ (up to the $1/d$ scaling factor). However, the \emph{variance} of the estimate is $O(\|\nabla f\|^2)$, comparable to the gradient magnitude itself, meaning the signal-to-noise ratio does not improve with iterations --- unlike FD, which is deterministic given $\delta$. For $d = 2$, the signal from each step is essentially a single noisy directional measurement, requiring many more steps than GD to converge. With $\alpha = 0.025$ and $\delta = 0.08$.
 
 \subsubsection{Hyperparameter Settings for Part A}
 
