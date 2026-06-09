@@ -383,3 +383,79 @@ plt.tight_layout()
 plt.savefig('figures/all_methods_rosenbrock.pdf', bbox_inches='tight')
 plt.close()
 print('Saved figures/all_methods_rosenbrock.pdf')
+
+# ================================================================
+# Figure 6: FW duality gap g_k vs iteration (boundary case)
+# Confirms g_k >= f(x_k) - f* (valid certificate) and O(1/k) rate
+# ================================================================
+np.random.seed(42)
+
+def f_q6_boundary(x):
+    return x[0]**2 + x[1]**2
+
+def grad_q6_boundary(x):
+    return 2.0 * x
+
+bounds_q6 = [(0.5, 5.0), (-5.0, 10.0)]
+f_star_boundary = 0.25  # constrained min at (0.5, 0)
+
+x0_fw = np.array([3.0, 3.0])
+beta_fw = 0.93
+n_fw = 141
+
+x = x0_fw.copy()
+iters_fw, f_vals_fw, gap_vals_fw = [], [], []
+
+for k in range(n_fw):
+    iters_fw.append(k)
+    fk = f_q6_boundary(x)
+    f_vals_fw.append(fk)
+    g = grad_q6_boundary(x)
+    # LMO over box
+    z = np.array([bounds_q6[i][0] if g[i] > 0 else bounds_q6[i][1]
+                  for i in range(len(g))])
+    fw_gap = float(np.dot(g, x - z))  # g_k = grad f(x_k)^T (x_k - z_k)
+    gap_vals_fw.append(fw_gap)
+    x = beta_fw * x + (1 - beta_fw) * z
+
+iters_fw = np.array(iters_fw, dtype=float)
+f_vals_fw = np.array(f_vals_fw)
+gap_vals_fw = np.array(gap_vals_fw)
+subopt_fw = f_vals_fw - f_star_boundary  # f(x_k) - f*
+
+# Theoretical O(1/k) bound: 2*L*C^2 / (k+2)
+L_fw = 2.0
+C2_fw = (5.0 - 0.5)**2 + (10.0 - (-5.0))**2  # 20.25 + 225 = 245.25
+bound_fw = 2.0 * L_fw * C2_fw / (iters_fw + 2)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+ax = axes[0]
+ax.semilogy(iters_fw, subopt_fw + 1e-16, 'b-', lw=2, label=r'$f(x_k) - f^*$ (actual suboptimality)')
+ax.semilogy(iters_fw, gap_vals_fw + 1e-16, 'r--', lw=2, label=r'FW gap $g_k = \nabla f(x_k)^\top(x_k - z_k)$')
+ax.semilogy(iters_fw[1:], bound_fw[1:], 'k:', lw=1.8, label=r'Theoretical bound $2LC^2/(k+2) = 980/(k+2)$')
+ax.set_xlabel('Iteration $k$')
+ax.set_ylabel('Value (log scale)')
+ax.set_title(r'Q6: FW Duality Gap vs Suboptimality ($\beta=0.93$, boundary case)')
+ax.legend(fontsize=9)
+ax.grid(True, which='both', alpha=0.3)
+ax.text(0.5, 0.5, r'$f(x_k)-f^* \leq g_k$ always holds',
+        transform=ax.transAxes, fontsize=9,
+        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.85))
+
+# Right panel: ratio g_k / (f(x_k) - f*) -- should be >= 1
+ax2 = axes[1]
+ratio = gap_vals_fw / (subopt_fw + 1e-16)
+ax2.plot(iters_fw, ratio, 'g-', lw=2, label=r'$g_k \,/\, (f(x_k) - f^*)$')
+ax2.axhline(1.0, color='red', lw=1.5, linestyle='--', label='Lower bound = 1 (certificate validity)')
+ax2.set_xlabel('Iteration $k$')
+ax2.set_ylabel(r'Ratio $g_k / (f(x_k) - f^*)$')
+ax2.set_title(r'Q6: Gap $g_k$ as Duality Certificate (ratio $\geq 1$ always)')
+ax2.legend(fontsize=9)
+ax2.grid(True, alpha=0.3)
+ax2.set_ylim(0, 5)
+
+plt.tight_layout()
+plt.savefig('figures/q6_fw_gap.pdf', bbox_inches='tight')
+plt.close()
+print('Saved figures/q6_fw_gap.pdf')
