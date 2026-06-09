@@ -459,3 +459,87 @@ plt.tight_layout()
 plt.savefig('figures/q6_fw_gap.pdf', bbox_inches='tight')
 plt.close()
 print('Saved figures/q6_fw_gap.pdf')
+
+# ================================================================
+# Figure 7: FW fixed vs decaying step schedule comparison
+# Shows why decaying γ_k = 2/(k+2) eliminates vertex oscillation
+# ================================================================
+np.random.seed(42)
+
+def f_q6b(x):
+    return x[0]**2 + x[1]**2
+
+def grad_q6b(x):
+    return 2.0 * x
+
+bounds_q6b = [(0.5, 5.0), (-5.0, 10.0)]
+f_star_q6b = 0.25
+x0_q6b = np.array([3.0, 3.0])
+n_q6b = 180
+
+# Fixed step schedule (beta=0.93)
+x = x0_q6b.copy()
+f_fixed = []
+gap_fixed = []
+for k in range(n_q6b):
+    f_fixed.append(f_q6b(x))
+    g = grad_q6b(x)
+    z = np.array([bounds_q6b[i][0] if g[i] > 0 else bounds_q6b[i][1] for i in range(2)])
+    gap_fixed.append(float(np.dot(g, x - z)))
+    x = 0.93 * x + 0.07 * z
+
+# Decaying step schedule gamma_k = 2/(k+2)
+x = x0_q6b.copy()
+f_decay = []
+gap_decay = []
+for k in range(n_q6b):
+    f_decay.append(f_q6b(x))
+    g = grad_q6b(x)
+    z = np.array([bounds_q6b[i][0] if g[i] > 0 else bounds_q6b[i][1] for i in range(2)])
+    gap_decay.append(float(np.dot(g, x - z)))
+    gamma_k = 2.0 / (k + 2)
+    x = (1 - gamma_k) * x + gamma_k * z
+
+f_fixed = np.array(f_fixed)
+f_decay = np.array(f_decay)
+gap_fixed = np.array(gap_fixed)
+gap_decay = np.array(gap_decay)
+iters_q6b = np.arange(n_q6b)
+
+# Theoretical O(1/k) bound with L=2, C^2=245.25
+bound = 2.0 * 2.0 * 245.25 / (iters_q6b + 2)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+ax = axes[0]
+ax.semilogy(iters_q6b, f_fixed - f_star_q6b + 1e-16, 'r-', lw=2,
+            label='Fixed $\\gamma=0.07$ (f={:.4f})'.format(f_fixed[-1]))
+ax.semilogy(iters_q6b, f_decay - f_star_q6b + 1e-16, 'b-', lw=2,
+            label='Decaying $\\gamma_k=2/(k+2)$ (f={:.4f})'.format(f_decay[-1]))
+ax.semilogy(iters_q6b[1:], bound[1:], 'k--', lw=1.5,
+            label=r'Theoretical bound $2LC^2/(k+2)$')
+ax.axhline(0, color='grey', lw=0.8)
+ax.set_xlabel('Iteration $k$')
+ax.set_ylabel(r'$f(x_k) - f^*$ (log scale)')
+ax.set_title('Q6: FW Fixed vs Decaying Step (boundary case)')
+ax.legend(fontsize=9)
+ax.grid(True, which='both', alpha=0.3)
+
+ax2 = axes[1]
+ax2.semilogy(iters_q6b, gap_fixed + 1e-16, 'r-', lw=2, label=r'Fixed $\gamma=0.07$: gap $g_k$')
+ax2.semilogy(iters_q6b, gap_decay + 1e-16, 'b-', lw=2, label=r'Decaying: gap $g_k$')
+ax2.semilogy(iters_q6b[1:], bound[1:], 'k--', lw=1.5, label=r'Theoretical bound')
+ax2.set_xlabel('Iteration $k$')
+ax2.set_ylabel(r'FW duality gap $g_k$ (log scale)')
+ax2.set_title('Q6: FW Duality Gap — Fixed vs Decaying Schedule')
+ax2.legend(fontsize=9)
+ax2.grid(True, which='both', alpha=0.3)
+ax2.text(0.4, 0.25, 'Fixed step: $g_k$ grows\n(vertex oscillation)', transform=ax2.transAxes,
+         fontsize=9, color='red', bbox=dict(facecolor='white', alpha=0.7))
+ax2.text(0.4, 0.1, 'Decaying step: $g_k$ decreases\n(standard $O(1/k)$ behaviour)', transform=ax2.transAxes,
+         fontsize=9, color='blue', bbox=dict(facecolor='white', alpha=0.7))
+
+plt.tight_layout()
+plt.savefig('figures/q6_fw_schedules.pdf', bbox_inches='tight')
+plt.close()
+print('Saved figures/q6_fw_schedules.pdf')
