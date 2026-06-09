@@ -343,7 +343,7 @@ C & 0.40 & 1001.6 & 2508 & 0.0012 & 0.9995 & $\sim$14000 \\
 
 \begin{itemize}[nosep]
 \item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest ($f = 0.009$ on Rosenbrock, $375\times$ better than GD). Otherwise, Adagrad and Heavy Ball consistently match or exceed the GD baseline.
-\item \textbf{Why RMSprop gives $f = 0.5027$ on Benchmark A (vs.\ others at $0.4826$):} RMSprop's exponential moving average of squared gradients maintains a non-zero effective step near the optimum (since $v_k \to v_{\infty} > 0$ as $\beta = 0.9$). This prevents convergence to the exact minimum --- the iterate oscillates in a ball of radius $O(\alpha_0 / \sqrt{v_{\infty}})$ around $\theta^{\star}$, giving a final loss above the noise floor. By contrast, Adagrad's cumulative sum $G_k \to \infty$ forces the effective step to zero, allowing exact convergence. This explains why Adagrad (and GD) reach $0.4826$ while RMSprop does not.
+\item \textbf{Why RMSprop gives $f = 0.5027$ on Benchmark A (vs.\ others at $0.4826$):} RMSprop's exponential moving average satisfies $v_k \to v_{\infty} = \mathbb{E}[g^2] / (1-\beta) > 0$ as $k \to \infty$ (since gradients don't vanish exactly when $f^{\star} > 0$, i.e., the noise floor is non-zero). This maintains a non-zero effective learning rate $\alpha_0 / \sqrt{v_\infty}$ near the optimum. The iterate then oscillates in a ball of radius $\approx \alpha_0 / (\sqrt{v_\infty} \cdot \mu)$ around $\theta^{\star}$, yielding a final loss above the noise floor by approximately $\frac{1}{2}\mu \cdot (\alpha_0/(\sqrt{v_\infty}\mu))^2 = \alpha_0^2/(2\mu v_\infty)$. By contrast, Adagrad's cumulative sum $G_k = \sum_{t=0}^k g_t^2 \to \infty$ forces the effective step $\alpha_0/\sqrt{G_k} \to 0$, allowing convergence to the exact minimum. This is the fundamental difference: Adagrad's \emph{monotone} (ever-growing) accumulator guarantees eventual convergence while RMSprop's \emph{exponential forgetting} enables continued progress but not exact minimisation.
 \item \textbf{Smoothness vs.\ oscillation:} RMSprop produces the smoothest convergence curves due to exponential averaging but requires careful choice of $\alpha_0$. Heavy Ball shows characteristic overshoot followed by damped oscillation. On Rosenbrock, Heavy Ball's momentum ($f = 1.40$) outperforms GD ($f = 3.51$) by building up velocity along the persistent valley-floor direction.
 \item \textbf{Stability:} GD is most stable but slowest on ill-conditioned problems. Polyak is provably unstable under $f^{\star}$ misspecification. Adagrad's monotonically decreasing step guarantees convergence but can cause premature stalling on deep neural networks where gradients become very small.
 \item \textbf{Heavy Ball vs.\ Nesterov:} On Rosenbrock (Q2), Nesterov ($f = 0.479$) outperforms Heavy Ball ($f = 1.40$) significantly. This is consistent with theory: Nesterov's lookahead provides corrective guidance that prevents momentum overshoot in the curved valley. Heavy Ball, despite its optimal quadratic convergence properties, lacks this correction for nonlinear functions.
@@ -523,6 +523,8 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 \end{algorithm}
 
 With $m = 1000$ samples, batch $b = 5$ yields $1000/5 = 200$ gradient steps per epoch, while $b = 40$ yields $25$ steps per epoch. The stochastic gradient variance is $\operatorname{Var}[\hat{g}] = O(\sigma^2 / b)$, where $\sigma^2$ is the per-sample gradient variance. The key trade-off is:
+
+\paragraph{Polyak--Ruppert averaging.} When a constant learning rate $\alpha$ is used with SGD, the iterate converges not to $\theta^{\star}$ but oscillates in an $O(\alpha \sigma^2 / (\mu b))$-ball around it. The classical remedy is \emph{Polyak--Ruppert (iterate) averaging}: instead of the final iterate $\theta_T$, return $\bar{\theta}_T = \frac{1}{T}\sum_{k=1}^T \theta_k$. This achieves the optimal $O(\sigma^2 / (\mu b T))$ MSE convergence rate (Polyak \& Ruppert 1992), matching the Cram\'er--Rao lower bound for stochastic approximation. For the well-conditioned Benchmark A ($\mu \approx 0.925$), the averaging benefit is small; for ill-conditioned problems with $\mu \ll L$, averaging can dramatically reduce the final error. An alternative is a decaying schedule $\alpha_k = \alpha_0 / \sqrt{k}$, which achieves the same $O(1/\sqrt{T})$ rate without requiring averaging but requires careful choice of $\alpha_0$.
 
 \begin{itemize}[nosep]
 \item \textbf{Smaller batch ($b=5$)}: $200 \times 1 = 200$ cheap updates/epoch vs.\ $25 \times 8 = 200$ expensive comparisons --- the same computational work but many more, noisier descent steps. Near the optimum, the $O(\sigma^2/b)$ variance dominates, causing persistent oscillation around $\theta^{\star}$.
@@ -796,7 +798,25 @@ since for $u$ uniformly distributed on the unit sphere, $\mathbb{E}[u u^{\top}] 
 
 \paragraph{Gaussian smoothing interpretation.} The NRS estimate can be interpreted as the gradient of the Gaussian-smoothed function: $f_\delta(x) = \mathbb{E}_{u \sim \mathcal{N}(0,I)}[f(x + \delta u)]$. The identity $\nabla f_\delta(x) = d \cdot \mathbb{E}_{u}[\hat{g}_k]$ holds (by Stein's lemma), so NRS is actually performing gradient descent on $f_\delta$ rather than $f$. The bias $\|f_\delta - f\| = O(\delta^2)$ is small for small $\delta$. This interpretation connects NRS to zeroth-order optimisation theory and explains why using $\delta = 0.08$ (moderate) rather than $\delta \to 0$ (which would require high-precision function evaluations) is appropriate.
 
-\paragraph{Oracle complexity of zeroth-order methods~\cite{nesterov2013}.} An important insight is that NRS introduces an intrinsic $O(d)$ complexity penalty: since each step only probes one random direction, the effective gradient update is scaled by $1/d$. Formally, for a $\mu$-strongly convex $L$-smooth function, NRS requires $O(d \cdot \kappa / \varepsilon)$ function evaluations to achieve $\mathbb{E}[f(x_k)] - f^{\star} \leq \varepsilon$, compared to $O(\kappa / \varepsilon)$ for gradient descent. This $d$-factor is the \emph{zeroth-order oracle gap}: the price paid for not computing the gradient analytically. For $d = 2$ (as here), the gap is small (factor 2), but for deep learning with $d = O(10^7)$, FD and NRS become impractical, and automatic differentiation is essential.
+\paragraph{Oracle complexity of zeroth-order methods~\cite{nesterov2013}.} An important insight is that NRS introduces an intrinsic $O(d)$ complexity penalty: since each step only probes one random direction, the effective gradient update is scaled by $1/d$. Formally, for a $\mu$-strongly convex $L$-smooth function, NRS requires $O(d \cdot \kappa / \varepsilon)$ function evaluations to achieve $\mathbb{E}[f(x_k)] - f^{\star} \leq \varepsilon$, compared to $O(\kappa / \varepsilon)$ for gradient descent. This $d$-factor is the \emph{zeroth-order oracle gap}: the price paid for not computing the gradient analytically. Table~\ref{tab:oracle_compare} puts this in perspective:
+
+\begin{table}[H]
+\centering
+\caption{Q4: Oracle complexity comparison (function evaluations to reach $\varepsilon$-accuracy). GD requires 1 gradient evaluation (GE), equivalent to $d+1$ function evaluations (FE) if computed via FD. NRS is dimension-free per step but pays a $d$-factor in total steps. The ``bottleneck'' for large $d$ is FD gradient computation, not the number of iterations.}
+\label{tab:oracle_compare}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{FE per step} & \textbf{Steps to $\varepsilon$-accuracy} & \textbf{Total FE} \\
+\midrule
+Exact GD & $d$ (1 gradient) & $O(\kappa/\varepsilon)$ & $O(d\kappa/\varepsilon)$ \\
+FD GD & $d+1$ & $O(\kappa/\varepsilon)$ (same as GD) & $O(d\kappa/\varepsilon)$ \\
+NRS & $2$ & $O(d\kappa/\varepsilon)$ & $O(d\kappa/\varepsilon)$ \\
+Nelder--Mead & $\leq 2n=4$ ($d=2$) & Empirically $O(d^2/\varepsilon)$ & $O(d^3/\varepsilon)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent For $d = 2$ (as here), all three function-evaluation-based methods (FD GD, NRS, Nelder--Mead) have the same total FE complexity $O(\kappa/\varepsilon)$, but differ in constant factors and sensitivity to noise. For deep learning with $d = O(10^7)$, the $O(d)$ per-step cost of FD becomes prohibitive and automatic differentiation (which computes the full gradient in $O(d)$ time via backpropagation) is essential.
 
 \subsubsection{Hyperparameter Settings for Part A}
 
