@@ -239,3 +239,147 @@ print('  figures/q3_newton_iterations.pdf')
 print('  figures/q4_fd_error.pdf')
 print('  figures/q1_summary_bar.pdf')
 print('  figures/q5_penalty_landscape.pdf')
+
+# ================================================================
+# Figure 5: Comprehensive Rosenbrock convergence comparison
+# All methods from all 6 questions on Benchmark C
+# ================================================================
+np.random.seed(42)
+
+def rosenbrock(x):
+    return (1-x[0])**2 + 100*(x[1]-x[0]**2)**2
+
+def grad_rosenbrock(x):
+    return np.array([
+        -2*(1-x[0]) - 400*x[0]*(x[1]-x[0]**2),
+        200*(x[1]-x[0]**2)
+    ])
+
+def hess_rosenbrock(x):
+    return np.array([
+        [2 + 1200*x[0]**2 - 400*x[1], -400*x[0]],
+        [-400*x[0], 200]
+    ])
+
+x0 = np.array([-1.0, 1.0])
+n_gd = 120
+
+# GD
+def gd_rosen(x0, alpha, n):
+    x = x0.copy(); hist = [rosenbrock(x)]
+    for _ in range(n):
+        x = x - alpha * grad_rosenbrock(x)
+        hist.append(rosenbrock(x))
+    return np.array(hist)
+
+# Heavy Ball
+def heavyball_rosen(x0, alpha, beta, n):
+    x = x0.copy(); z = np.zeros(2); hist = [rosenbrock(x)]
+    for _ in range(n):
+        z = beta*z + alpha*grad_rosenbrock(x)
+        x = x - z
+        hist.append(rosenbrock(x))
+    return np.array(hist)
+
+# Nesterov
+def nesterov_rosen(x0, alpha, beta_max, n):
+    x = x0.copy(); z = np.zeros(2); hist = [rosenbrock(x)]
+    for k in range(1, n+1):
+        bk = min((k-1)/(k+2), beta_max)
+        lookahead = x + bk*z
+        g = grad_rosenbrock(lookahead)
+        z = bk*z - alpha*g
+        x = x + z
+        hist.append(rosenbrock(x))
+    return np.array(hist)
+
+# Polyak (correct f*=0)
+def polyak_rosen(x0, n):
+    x = x0.copy(); hist = [rosenbrock(x)]
+    for _ in range(n):
+        g = grad_rosenbrock(x)
+        f = rosenbrock(x)
+        alpha_k = f / (np.dot(g,g) + 1e-3)
+        x = x - alpha_k*g
+        hist.append(rosenbrock(x))
+    return np.array(hist)
+
+# Newton (damped)
+def newton_rosen(x0, alpha, n):
+    x = x0.copy(); hist = [rosenbrock(x)]
+    for _ in range(n):
+        g = grad_rosenbrock(x)
+        H = hess_rosenbrock(x) + 1e-8*np.eye(2)
+        try:
+            p = np.linalg.solve(H, g)
+        except:
+            p = g
+        x = x - alpha*p
+        hist.append(rosenbrock(x))
+    return np.array(hist)
+
+# Adagrad
+def adagrad_rosen(x0, alpha0, n):
+    x = x0.copy(); G = np.zeros(2); hist = [rosenbrock(x)]
+    for _ in range(n):
+        g = grad_rosenbrock(x)
+        G += g**2
+        x = x - alpha0/(np.sqrt(G)+1e-5)*g
+        hist.append(rosenbrock(x))
+    return np.array(hist)
+
+f_gd = gd_rosen(x0, 0.0012, n_gd)
+f_hb = heavyball_rosen(x0, 0.0008, 0.86, n_gd)
+f_polyak = polyak_rosen(x0, n_gd)
+f_adagrad = adagrad_rosen(x0, 0.45, n_gd)
+f_nesterov = nesterov_rosen(x0, 0.0007, 0.90, 150)
+f_newton = newton_rosen(x0, 0.22, 20)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Left: convergence curves
+ax = axes[0]
+iters_gd = np.arange(len(f_gd))
+iters_nest = np.arange(len(f_nesterov))
+iters_newton = np.arange(len(f_newton))
+
+ax.semilogy(iters_gd, f_gd+1e-16, 'k-', lw=2, label=f'GD (f={f_gd[-1]:.3f})')
+ax.semilogy(iters_gd, f_hb+1e-16, 'b--', lw=2, label=f'Heavy Ball (f={f_hb[-1]:.3f})')
+ax.semilogy(iters_gd, f_adagrad+1e-16, 'orange', lw=2, label=f'Adagrad (f={f_adagrad[-1]:.3f})')
+ax.semilogy(iters_gd, f_polyak+1e-16, 'g-', lw=2, label=f'Polyak (f={f_polyak[-1]:.4f})')
+ax.semilogy(iters_nest, f_nesterov+1e-16, 'r-.', lw=2, label=f'Nesterov (f={f_nesterov[-1]:.3f})')
+ax.semilogy(iters_newton, f_newton+1e-16, 'm:', lw=2.5, ms=8, marker='o',
+            markevery=5, label=f'Newton (f={f_newton[-1]:.3f})')
+ax.set_xlabel('Iteration $k$')
+ax.set_ylabel(r'$f(x_k)$ (log scale)')
+ax.set_title('Benchmark C (Rosenbrock): All Methods Compared')
+ax.legend(fontsize=8)
+ax.grid(True, which='both', alpha=0.3)
+
+# Right: table of final values
+methods_names = ['GD (Q1)', 'Adagrad (Q1)', 'Heavy Ball (Q1)', 'Polyak (Q1)',
+                 'Nesterov (Q2)', 'Newton (Q3)']
+final_vals = [f_gd[-1], f_adagrad[-1], f_hb[-1], f_polyak[-1], f_nesterov[-1], f_newton[-1]]
+clrs2 = ['black', 'orange', 'blue', 'green', 'red', 'purple']
+budgets = [120, 120, 120, 120, 150, 20]
+
+ax2 = axes[1]
+positions = np.arange(len(methods_names))
+bars = ax2.bar(positions, np.clip(final_vals, 0, 4.0), color=clrs2, alpha=0.8, edgecolor='white')
+best_idx = np.argmin(final_vals)
+bars[best_idx].set_edgecolor('gold'); bars[best_idx].set_linewidth(2.5)
+ax2.set_xticks(positions)
+ax2.set_xticklabels(methods_names, rotation=20, fontsize=8)
+ax2.set_ylabel('Final Objective Value')
+ax2.set_title('Final $f$ on Rosenbrock\n(gold = best; budget shown)')
+ax2.set_ylim(0, 4.2)
+ax2.grid(True, alpha=0.3, axis='y')
+for bar, val, bud in zip(bars, final_vals, budgets):
+    disp = f'{val:.3f}\n({bud}it)' if val < 4.0 else f'>{4.0:.1f}\n({bud}it)'
+    ax2.text(bar.get_x() + bar.get_width()/2., min(val,4.0) + 0.05, disp,
+             ha='center', va='bottom', fontsize=7.5)
+
+plt.tight_layout()
+plt.savefig('figures/all_methods_rosenbrock.pdf', bbox_inches='tight')
+plt.close()
+print('Saved figures/all_methods_rosenbrock.pdf')
