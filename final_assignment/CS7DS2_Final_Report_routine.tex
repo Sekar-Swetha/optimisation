@@ -585,6 +585,19 @@ exhibits damped oscillations typical of under-damped second-order systems.
 \item \textbf{Practical recommendation:} For problems where curvature information is unavailable
 and $f^{\star}$ is unknown, Adagrad or Heavy Ball with modest $\beta \in [0.85, 0.95]$ provide the
 best risk-adjusted performance. RMSprop is preferred when the gradient statistics are non-stationary.
+
+\item \textbf{Coordinate descent perspective.}
+An alternative interpretation of Adagrad's success is through the lens of coordinate descent (CD):
+if $f$ is separable (or nearly so), cycling through coordinates one at a time with exact line
+searches is equivalent to Newton's method on the diagonal Hessian.
+For Benchmark~C, $f = 100(x_2 - x_1^2)^2 + (1-x_1)^2$ is not separable, so exact CD is not
+directly applicable. However, Adagrad's diagonal pre-conditioning approximates the \emph{Jacobi
+preconditioner} $D = \mathrm{diag}(H)^{-1}$, which reduces the effective condition number from
+$\kappa(H)$ to $\kappa(D^{1/2} H D^{1/2})$ --- a quantity much closer to 1 when the off-diagonal
+entries of $H$ are small relative to the diagonal. For the Rosenbrock Hessian at $x^{\star}$,
+$h_{12} = -400$ compared to $h_{11} = 802$, $h_{22} = 200$, so the off-diagonal contribution is
+non-negligible --- this limits the effectiveness of diagonal pre-conditioning and is why full Newton
+(using the complete inverse Hessian) still significantly outperforms Adagrad on Benchmark~C.
 \end{itemize}
 
 % ============================================================
@@ -652,7 +665,7 @@ from being biased towards zero, which is important in early iterations when $\be
 close to zero.
 
 \noindent\textbf{Non-convergence of Adam.}
-Reddi et al.\ (2018) showed that Adam can fail to converge even on simple convex online problems:
+Reddi et al.~\cite{reddi2018} showed that Adam can fail to converge even on simple convex online problems:
 the adaptive step size using exponential moving averages of $g_t^2$ can ``forget'' past large
 gradients, allowing the step in a coordinate to grow when it should not.
 Their counter-example has the property that the EMA of $v_{t,i}$ oscillates such that
@@ -990,6 +1003,25 @@ With $\alpha = 1$ (pure Newton step) near $x^{\star}$, the number of correct dec
 roughly \emph{doubles} each iteration due to the quadratic convergence rate.
 The Tikhonov regularisation $\lambda I$ (damping with $\lambda = 10^{-8}$) ensures
 $H_k + \lambda I \succ 0$ globally, making the algorithm well-defined even far from the optimum.
+
+\noindent\textbf{Region of quadratic convergence.}
+The quadratic convergence theorem requires $x_0$ to be \emph{sufficiently close} to $x^{\star}$:
+specifically, $\|x_0 - x^{\star}\| < 2\mu/M$ where $M$ is the Hessian Lipschitz constant.
+For the Rosenbrock function, $\mu = \lambda_{\min}(H(x^{\star})) \approx 0.40$ and
+$M = \max\|\nabla^3 f\|$.  The Hessian entries are
+$h_{11}(x) = 1200 x_1^2 - 400 x_2 + 2$, $h_{12}(x) = -400 x_1$, $h_{22}(x) = 200$.
+The third derivatives are $\partial h_{11}/\partial x_1 = 2400 x_1$ and
+$\partial h_{12}/\partial x_1 = -400$; near the optimum $x_1 = 1$, we get
+$\|\nabla^3 f\| \approx \max(2400, 400) = 2400$, so $M \approx 2{,}400$
+(a tighter estimate than the rough $800$ above).
+The quadratic convergence ball is thus
+$\|x_0 - x^{\star}\| < 2 \times 0.40 / 2400 \approx 3 \times 10^{-4}$, even smaller.
+This gives a quadratic convergence ball of radius $\approx 2 \times 0.40 / 800 = 0.001$,
+much smaller than the initial distance $\|x_0 - x^{\star}\| = 2$.
+Outside this ball, the damped Newton method is in the ``global phase'' where each step
+decreases $f$ by a guaranteed fraction, but not necessarily quadratically.
+This explains why 20 damped iterations ($\alpha = 0.22$) are needed on Rosenbrock rather than
+the 2--3 iterations that would suffice if started inside the quadratic convergence ball.
 
 Settings: GD runs 80 iterations; Newton runs 20 iterations with damping $\lambda = 10^{-8}$.
 
@@ -1795,15 +1827,41 @@ The LMO in Frank--Wolfe always returns a vertex of $\mathcal{X}$, which makes th
 attractive for problems where sparse/vertex solutions are desirable (e.g., trace-norm
 constrained matrix factorisation, sparsity-constrained machine learning).
 
-\noindent\textbf{Addressing the zig-zagging problem.}
+\noindent\textbf{Addressing the zig-zagging problem: Away-Step Frank--Wolfe.}
 The oscillation of $z_k$ between vertices of $\mathcal{X}$ (observed in Figure~\ref{fig:q6_evolution}
 for $\beta = 0.90$) is a fundamental limitation of standard Frank--Wolfe.
-The \emph{away-step} variant addresses this: at each iteration, the algorithm considers both
-moving \emph{towards} a vertex (standard FW step) and moving \emph{away} from the current
-atom with maximum weight in the convex decomposition of $x_k$.  Away steps prevent the
-algorithm from repeatedly re-introducing the same extreme point, achieving a linear convergence
-rate $O((1 - \mu/(LC^2))^k)$ on strongly convex objectives~\cite{bubeck2015}, compared to the
-$O(1/k)$ rate of the standard FW algorithm.
+The \emph{away-step} (AFW) variant addresses this by augmenting the standard forward step with
+a step \emph{away} from an existing atom:
+
+\begin{algorithm}[H]
+\caption{Away-Step Frank--Wolfe (AFW)}
+\label{alg:afw}
+\begin{algorithmic}[1]
+\Require Initial point $x_0 \in \mathcal{X}$, maintain convex decomposition $x_k = \sum_{s \in \mathcal{S}_k} \lambda_s^k s$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $z_k \gets \arg\min_{z \in \mathcal{X}}\, \nabla f(x_k)^T z$ \Comment{FW vertex (forward direction)}
+    \State $v_k \gets \arg\max_{v \in \mathcal{S}_k}\, \nabla f(x_k)^T v$ \Comment{Away vertex (backward direction)}
+    \State $d_{\mathrm{FW}} \gets z_k - x_k$, \; $d_{\mathrm{A}} \gets x_k - v_k$
+    \If{$-\nabla f(x_k)^T d_{\mathrm{FW}} \geq -\nabla f(x_k)^T d_{\mathrm{A}}$}
+        \State Take FW step: $x_{k+1} \gets x_k + \gamma_k d_{\mathrm{FW}}$ \Comment{Add $z_k$ to decomposition}
+    \Else
+        \State Take away step: $x_{k+1} \gets x_k + \gamma_k d_{\mathrm{A}}$ \Comment{Remove $v_k$ from decomposition}
+    \EndIf
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+Away steps prevent the algorithm from repeatedly re-introducing the same extreme point.
+When the away step removes an atom $v_k$ from the active set $\mathcal{S}_k$, subsequent
+FW steps cannot undo that progress, which is the key structural difference from standard FW.
+This modification achieves a linear convergence rate
+$O\!\left(\left(1 - \frac{\mu}{LC^2}\right)^k\right)$ on $\mu$-strongly convex objectives
+with $L$-smooth gradients~\cite{bubeck2015}, where $C$ depends on the geometric structure of
+$\mathcal{X}$, compared to the $O(1/k)$ rate of the standard FW algorithm.
+For the box $\mathcal{X}$ in the experiments, $C \leq \mathrm{diam}(\mathcal{X}) \approx 15.66$,
+and with $\mu = 2$ (for $f = (x_1-1)^2 + (x_2-5)^2$) the AFW linear rate is
+$1 - 2/(2 \cdot 245) \approx 0.996$ --- still slow due to the large diameter, but
+asymptotically faster than $O(1/k)$ for large iteration budgets.
 
 % ============================================================
 \section{Summary and Conclusions}
@@ -2248,6 +2306,11 @@ Convergence of the Nelder--Mead simplex method to a nonstationary point.
 Robbins, H., \& Monro, S. (1951).
 A stochastic approximation method.
 \textit{The Annals of Mathematical Statistics}, 22(3), 400--407.
+
+\bibitem{reddi2018}
+Reddi, S.~J., Kale, S., \& Kumar, S. (2018).
+On the convergence of Adam and beyond.
+In \textit{Proceedings of the 6th International Conference on Learning Representations (ICLR)}.
 
 \end{thebibliography}
 
