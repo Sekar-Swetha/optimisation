@@ -1199,6 +1199,29 @@ per-iterate cost when $n \gg b$.
 The observed convergence of both batch sizes to $J^{\star} \approx 0.4826$ in the experiments
 is consistent with this theory: the noise floor $\alpha\sigma^2/(\mu b)$ for the fixed
 $\alpha = 0.06$ used here is small enough to be below the scale of the plot.
+
+\item \textbf{Importance sampling for SGD.}
+Standard SGD samples index $i$ uniformly: $P(i) = 1/n$.
+\emph{Importance sampling} instead samples proportional to the per-sample Lipschitz constant
+$L_i = \|\nabla^2 f_i\|$ (or its proxy $\|x_i\|^2$ for linear regression):
+\begin{equation}
+P(i) = \frac{L_i}{\sum_j L_j}, \qquad \text{with correction weight}\; w_i = \frac{1}{n P(i)}.
+\end{equation}
+The corrected gradient estimate $w_i \nabla f_i(x)$ remains unbiased: $\mathbb{E}[w_i \nabla f_i(x)] = \nabla f(x)$.
+The benefit: samples with large $L_i$ (high curvature) contribute more frequently, reducing
+the effective condition number of the noise covariance matrix.  For linear regression with
+$f_i(x) = \frac{1}{2}(a_i^T x - b_i)^2$, $L_i = \|a_i\|^2$ and importance sampling gives
+\begin{equation}
+\sigma^2_{\rm IS} = \frac{1}{n}\sum_{i=1}^n L_i \cdot \mathbb{E}\left[\frac{(a_i^T(x-x^{\star}))^2}{n P(i)^2}\right]
+\leq \frac{\left(\sum_i L_i\right)^2}{n} \cdot \|x - x^{\star}\|^2 / n,
+\end{equation}
+which can be substantially smaller than the uniform-sampling variance when $L_i$ is highly
+heterogeneous.  For Benchmark~A with 1,000 data points and feature scaling by 5$\times$
+in one coordinate, uniform sampling wastes most iterations on low-curvature samples.
+Importance sampling would concentrate updates on the $x_2$ direction (large $L_i$), effectively
+reducing the gradient noise and improving the convergence constant.
+In practice, the efficiency gain is modest for the well-scaled Benchmark~A ($\kappa = 1.12$),
+but becomes significant for ill-conditioned problems where feature scales differ by $\sqrt{\kappa}$.
 \end{itemize}
 
 % ============================================================
@@ -1592,6 +1615,54 @@ BFGS achieves \emph{superlinear} convergence: $\|x_{k+1} - x^{\star}\| = o(\|x_k
 faster than any linear rate but slower than Newton's quadratic rate in the worst case.
 L-BFGS limits memory to $O(n \cdot m)$ for a window of $m$ most recent $(s_k, y_k)$ pairs,
 enabling Newton-like performance at scale with $m = 5$--$20$ typically sufficient in practice.
+
+\noindent\textbf{Gauss-Newton for nonlinear least squares.}
+For least-squares objectives $f(x) = \frac{1}{2}\|r(x)\|^2$ where $r: \mathbb{R}^n \to \mathbb{R}^m$
+is a residual vector, the full Newton Hessian is
+\begin{equation}
+\nabla^2 f = J^T J + \sum_{i=1}^m r_i(x) \nabla^2 r_i(x),
+\end{equation}
+where $J = \partial r / \partial x$ is the Jacobian.  The \emph{Gauss-Newton} method drops the
+second-order term $\sum_i r_i \nabla^2 r_i$ (negligible near the minimum when $r_i \to 0$):
+\begin{equation}
+x_{k+1} = x_k - \alpha\,(J_k^T J_k)^{-1} J_k^T r_k.
+\end{equation}
+This \emph{normal equations} form has two advantages: (i) $J_k^T J_k \succeq 0$ is always
+positive semi-definite, avoiding the indefinite-Hessian problem of full Newton far from $x^{\star}$;
+(ii) for linear $r(x) = Ax - b$, $J = A$ is constant and $J^T J = A^T A$, giving the exact OLS
+solution $x_1 = (A^T A)^{-1} A^T b = \theta_{\rm OLS}$ in one step --- exactly matching the
+Benchmark~A result.
+
+For the Rosenbrock function viewed as a least-squares problem with
+$r_1(x) = 10(x_2 - x_1^2)$ and $r_2(x) = 1 - x_1$, the Jacobian is
+$J(x) = \begin{pmatrix} -20x_1 & 10 \\ -1 & 0 \end{pmatrix}$
+and the Gauss-Newton approximation $J^T J$ omits the $r_1 \nabla^2 r_1$ term:
+$\nabla^2 r_1 = \begin{pmatrix}-20 & 0 \\ 0 & 0\end{pmatrix}$, so the omitted term is
+$r_1 \cdot (-20) = -200(x_2 - x_1^2)$.
+Near $x^{\star} = (1,1)$, $r_1 \to 0$ and the Gauss-Newton approximation becomes exact.
+Far from $x^{\star}$, where $r_1$ is large, the Gauss-Newton direction can differ from the
+true Newton direction, potentially explaining the slower convergence of Gauss-Newton on
+Benchmark~C compared to full Newton (Figure~\ref{fig:q34_gauss_newton}).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q34_gauss_newton_sampling_hierarchy.pdf}
+\caption{Q3/Q2/Conclusion: Three views on convergence.
+\emph{Left}: Gauss-Newton vs Newton vs GD on Benchmark~C (Rosenbrock). All three use the
+same damped step $\alpha = 0.22$ (Newton and GN) or $\alpha = 0.001$ (GD). Newton uses
+the full Hessian $\nabla^2 f$; Gauss-Newton uses the approximation $J^T J$. Near $x^{\star}$,
+their paths are nearly identical; far away, Newton is slightly more accurate because it
+accounts for the $r_1 \nabla^2 r_1$ term.
+\emph{Middle}: SGD with importance sampling ($p_i \propto L_i = \|x_i\|^2$, the per-sample
+Lipschitz constant) vs.\ uniform sampling on the ill-conditioned linear regression problem.
+Importance sampling reduces the effective condition number, achieving faster convergence
+with a smaller effective learning rate.
+\emph{Right}: Oracle information hierarchy for $\kappa = 2{,}508$.  Zeroth-order: $O(1/\sqrt{k})$;
+first-order GD: $(1-1/\kappa)^k$ (nearly flat); first-order Nesterov: $(1-1/\sqrt{\kappa})^k$
+(50$\times$ faster); second-order Newton: $\approx 0.5^k$ (fastest after entering basin).
+The three benchmarks' GD convergence factors at $k = 80$ are marked.}
+\label{fig:q34_gauss_newton}
+\end{figure}
 
 \subsection{Update Magnitude}
 
