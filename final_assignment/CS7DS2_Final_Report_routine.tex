@@ -220,13 +220,28 @@ C & Rosenbrock (nonlinear) & 2508 & No & $(1.000, 1.000)$ & $0.000$ & Curved val
 
 \subsection{Theoretical Background}
 
-For a differentiable function $f$ with $L$-Lipschitz gradient
-($\|\nabla f(x) - \nabla f(y)\| \leq L\|x - y\|$ for all $x, y$),
-gradient descent with step $\alpha \leq 1/L$ satisfies the descent lemma
+\begin{definition}[$L$-smooth and $\mu$-strongly convex]
+A function $f: \mathbb{R}^n \to \mathbb{R}$ is \emph{$L$-smooth} if
+$\|\nabla f(x) - \nabla f(y)\| \leq L\|x - y\|$ for all $x, y$, equivalently
+$f(y) \leq f(x) + \nabla f(x)^T(y-x) + \frac{L}{2}\|y-x\|^2$.
+It is \emph{$\mu$-strongly convex} ($\mu > 0$) if
+$f(y) \geq f(x) + \nabla f(x)^T(y-x) + \frac{\mu}{2}\|y-x\|^2$,
+equivalently $\nabla^2 f(x) \succeq \mu I$ everywhere.
+The condition number is $\kappa = L/\mu$.
+\end{definition}
+
+\noindent\textbf{Descent Lemma.}
+For $L$-smooth $f$, the gradient descent update $x_{k+1} = x_k - \alpha \nabla f(x_k)$
+with $\alpha \leq 1/L$ satisfies, by applying the $L$-smoothness upper bound and completing the
+square with $y = x_k - \alpha \nabla f(x_k)$:
 \begin{equation}
-f(x_{k+1}) \leq f(x_k) - \frac{1}{2L}\|\nabla f(x_k)\|^2.
+f(x_{k+1}) \leq f(x_k) + \nabla f(x_k)^T(x_{k+1} - x_k) + \frac{L}{2}\|x_{k+1} - x_k\|^2
+= f(x_k) - \alpha\|\nabla f(x_k)\|^2\left(1 - \frac{\alpha L}{2}\right)
+\leq f(x_k) - \frac{\alpha}{2}\|\nabla f(x_k)\|^2.
 \end{equation}
-For convex $f$ this yields $f(x_k) - f^{\star} \leq \frac{L\|x_0 - x^{\star}\|^2}{2k}$ ($O(1/k)$ rate).
+The last step uses $\alpha \leq 1/L$.  This shows that \emph{every} iteration decreases $f$
+by at least $\frac{\alpha}{2}\|\nabla f(x_k)\|^2$, regardless of convexity.
+Telescoping over $k$ steps and using convexity then gives the $O(1/k)$ rate.
 When $f$ is also $\mu$-strongly convex, the convergence is linear:
 $f(x_k) - f^{\star} \leq \left(1 - \mu/L\right)^k [f(x_0) - f^{\star}]$.
 The adaptive methods below each address a different weakness of vanilla GD.
@@ -296,6 +311,21 @@ $\kappa_{\mathrm{eff}} = 1$ (all coordinates converge at the same rate), compare
 $\kappa = \lambda_{\max}/\lambda_{\min}$ for vanilla GD.  This \emph{implicit diagonal
 pre-conditioning} is why Adagrad performs well on anisotropic problems such as Benchmark~C
 ($\kappa = 2{,}508$) without requiring knowledge of $H$.
+
+\noindent\textbf{Online learning interpretation and regret bound.}
+Adagrad was originally designed for the \emph{online convex optimisation} setting, where a
+sequence of convex functions $f_1, \ldots, f_T$ is revealed one at a time and the algorithm
+must choose $x_t$ before seeing $f_t$.  The \emph{regret} is
+$R_T = \sum_{t=1}^T f_t(x_t) - \min_x \sum_{t=1}^T f_t(x)$.
+Duchi et al.~\cite{duchi2011} proved that Adagrad achieves
+\begin{equation}
+R_T \leq \frac{D_\infty}{2}\sum_{i=1}^n \sqrt{\sum_{t=1}^T g_{t,i}^2},
+\end{equation}
+where $D_\infty$ is the $\ell^\infty$ diameter of the domain.  When gradients are dense across
+all coordinates, $R_T = O(\sqrt{T})$; but when gradients are \emph{sparse} (most $g_{t,i} = 0$),
+Adagrad achieves $O(\sqrt{T_i})$ for each sparse coordinate $i$ with only $T_i$ non-zero
+gradient components --- dramatically better than the $O(\sqrt{T})$ bound of fixed-rate SGD.
+This sparsity exploitation is why Adagrad dominates in NLP tasks with large sparse vocabularies.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -619,8 +649,19 @@ Adam~\cite{kingma2015} combines RMSprop's per-coordinate scaling (via $v_t$, eff
 gradients by their recent magnitude) with gradient momentum (via $m_t$, reducing variance and
 providing acceleration). The bias correction terms $(1 - \beta_j^t)$ prevent the initial estimates
 from being biased towards zero, which is important in early iterations when $\beta_j^t$ is not yet
-close to zero. Adam's convergence on general non-convex problems is not guaranteed by classical
-theory; it performs best when gradients are informative and the learning rate is tuned carefully.
+close to zero.
+
+\noindent\textbf{Non-convergence of Adam.}
+Reddi et al.\ (2018) showed that Adam can fail to converge even on simple convex online problems:
+the adaptive step size using exponential moving averages of $g_t^2$ can ``forget'' past large
+gradients, allowing the step in a coordinate to grow when it should not.
+Their counter-example has the property that the EMA of $v_{t,i}$ oscillates such that
+$\alpha / \sqrt{\hat{v}_{t,i}}$ becomes large precisely when $g_{t,i}$ is large and positive,
+creating net upward drift.  The \emph{AMSGrad} fix uses
+$\hat{v}_t^{\max} = \max(\hat{v}_{t-1}^{\max}, \hat{v}_t)$ (replacing the EMA with a running maximum),
+ensuring the effective step never increases.  The experiments here do not trigger the
+non-convergence pathology because all benchmarks are smooth and the gradients decrease monotonically
+near the minimum; but it is an important practical caveat for Adam in adversarial or oscillatory settings.
 
 \subsection{Hyperparameter Settings}
 
@@ -973,6 +1014,21 @@ changing Hessian of the Rosenbrock function: far from $x^{\star}$, a full Newton
 overshoot the narrow valley. The Tikhonov damping $\lambda = 10^{-8}$ is negligible for all
 benchmarks (much smaller than $\lambda_{\min}(H) > 0$) but prevents numerical failure if
 $H$ is ever singular.
+
+\noindent\textbf{Line-search Newton.}
+Rather than fixing $\alpha$ in advance, line-search Newton selects the step $\alpha_k$ via the
+\emph{Armijo condition} (sufficient decrease):
+\begin{equation}
+f(x_k - \alpha_k p_k) \leq f(x_k) - c_1\, \alpha_k\, \nabla f(x_k)^T p_k,
+\end{equation}
+where $p_k = H_k^{-1}\nabla f(x_k)$ is the Newton direction and $c_1 \in (0, 1)$ is a small
+constant (typically $10^{-4}$).  A standard backtracking line search starts with $\alpha_k = 1$
+and halves it until the Armijo condition is satisfied.  Combined with the Wolfe conditions
+(which also control step-size curvature), this guarantees global convergence to a stationary point
+while retaining quadratic convergence once $\|\alpha_k - 1\| \to 0$ near $x^{\star}$.
+For the experiments here, the fixed damping $\alpha = 0.22$ on Rosenbrock plays the role of the
+line search: it was selected empirically to pass the narrow valley without overshooting,
+but an adaptive line search would generalise better to other starting points.
 
 \subsection{Convergence Comparison}
 
@@ -1539,6 +1595,23 @@ which allows convergence to the exact constrained optimum for any fixed finite $
 avoiding the ill-conditioning that grows with $\lambda$ in the pure penalty approach.
 For the current problem, since the constraint is inactive ($\mu^{\star} = 0$), the augmented
 Lagrangian reduces to the pure penalty at optimality.
+
+\noindent\textbf{Connection to proximal gradient descent.}
+Projected GD on the halfspace $\{x_1 \geq 0.5\}$ can be written as:
+\begin{equation}
+x_{k+1} = \underset{x \in \mathbb{R}^2}{\arg\min}\left\{
+  \nabla f(x_k)^T(x - x_k) + \frac{1}{2\alpha}\|x - x_k\|^2
+  + \mathbf{1}_{x_1 < 0.5} \cdot \infty \right\}
+= \mathrm{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)),
+\end{equation}
+where $g(x) = \mathbf{1}_{\mathcal{X}}(x)$ is the indicator function of the feasible set and
+$\mathrm{prox}_{\alpha g}(v) = \arg\min_{x}\{g(x) + \frac{1}{2\alpha}\|x-v\|^2\} = \Pi_\mathcal{X}(v)$
+is the proximal operator, which equals the projection.
+The \emph{proximal gradient} (ISTA) framework unifies projected GD, penalty methods, and
+Lasso-type regularisations: for $h(x) = f(x) + g(x)$ with $g$ non-smooth but proximal-friendly,
+ISTA achieves $O(1/k)$ convergence, and FISTA (Fast ISTA, the proximal analogue of Nesterov acceleration)
+achieves $O(1/k^2)$, making it the optimal first-order method for composite optimisation problems
+of this type.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
