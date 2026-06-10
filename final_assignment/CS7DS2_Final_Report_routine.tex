@@ -170,6 +170,25 @@ Starting point: $x_0 = [-1, 1]^T$.
 For constrained problems (Questions~5--6):
 $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10\}$.
 
+\subsection{Condition Number and Algorithmic Complexity}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/theory_condition_number.pdf}
+\caption{Theoretical analysis of how condition number $\kappa = L/\mu$ governs convergence for
+three representative methods on strongly convex quadratic problems.
+\emph{Left}: per-iteration convergence factor (closer to 1 = slower convergence, closer to 0 =
+faster).  GD's factor $((\kappa-1)/(\kappa+1))$ approaches 1 linearly in $\kappa$; Heavy Ball
+and Nesterov have factors that approach 1 as $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$, which grows
+much slower.  The three vertical lines mark the condition numbers of Benchmarks A, B, and C.
+\emph{Right}: log-log plot of iterations to achieve $\varepsilon = 0.01$ relative accuracy.
+GD requires $O(\kappa \log(1/\varepsilon))$ iterations; accelerated methods require
+$O(\sqrt{\kappa} \log(1/\varepsilon))$.  For Benchmark~C ($\kappa = 2{,}508$), this is the
+difference between $\sim\!2{,}500$ and $\sim\!50$ iterations --- the $\sqrt{\kappa}$-vs-$\kappa$
+complexity gap that motivates acceleration.}
+\label{fig:theory_kappa}
+\end{figure}
+
 \subsection{Summary of Benchmark Properties}
 
 \begin{table}[H]
@@ -969,6 +988,31 @@ direction of least resistance even when the gradient points across the valley. G
 \label{fig:q3_contour_C}
 \end{figure}
 
+\subsection{Why Newton Works: Curvature-Aware Steps}
+
+Newton's method is effective because the step direction $H^{-1}\nabla f(x)$ performs an implicit
+pre-conditioning: it scales the gradient by the inverse of the local curvature in each direction.
+For a quadratic with Hessian $H = \mathrm{diag}(\lambda_1, \ldots, \lambda_n)$, the Newton step
+moves distance $|\partial f / \partial x_i| / \lambda_i$ in each coordinate, which is exactly
+the distance to the minimum in that direction --- hence convergence in one step.
+For non-quadratic functions, the Hessian provides the best available local approximation to this
+ideal step, leading to quadratic convergence once the iterates are in the region where the
+quadratic model is accurate.
+
+\textbf{Limitations and extensions.} The main limitations of Newton's method are:
+\begin{itemize}[nosep]
+\item \textbf{Cost}: Computing and factorising the Hessian requires $O(n^2)$ and $O(n^3)$
+operations respectively, prohibitive for large $n$ (e.g., deep learning with millions of parameters).
+\item \textbf{Non-positive-definite Hessians}: Far from the optimum or at saddle points,
+$\nabla^2 f$ may not be positive definite, making the Newton direction non-descent.
+Tikhonov regularisation $(\nabla^2 f + \lambda I)^{-1}$ addresses this.
+\item \textbf{Storage}: The full Hessian matrix requires $O(n^2)$ memory.
+\end{itemize}
+\textbf{Quasi-Newton methods} (e.g., BFGS) approximate $H^{-1}$ using rank-1 or rank-2
+updates from gradient differences across iterates, achieving superlinear convergence without
+explicit Hessian computation. L-BFGS limits memory to $O(n \cdot m)$ for a window of $m$
+gradient pairs, enabling Newton-like performance at scale.
+
 \subsection{Update Magnitude}
 
 \begin{figure}[H]
@@ -1142,6 +1186,24 @@ $d = 10$ with $N = 55$ points per axis, this would require $55^{10} \approx 2.6 
 evaluations, illustrating the curse of dimensionality.}
 \label{fig:q4_grid}
 \end{figure}
+
+\subsection{Centred Differences and Automatic Differentiation}
+
+The forward difference formula achieves $O(\delta)$ accuracy.  The \emph{centred} difference
+\begin{equation}
+\hat{g}_i^{\rm cd}(x;\delta) = \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}
+\end{equation}
+achieves $O(\delta^2)$ accuracy at the cost of $2d$ function evaluations per gradient, because
+the first-order error terms cancel by symmetry.  For the assignment's ``good'' $\delta = 0.05$,
+the centred approximation error would be $O(0.05^2 \cdot M_3) \approx 0.0025 M_3$, potentially
+100$\times$ more accurate than the forward difference.
+
+\textbf{Automatic differentiation} (AD) provides exact gradients at $O(d)$ cost
+(forward mode) or $O(1)$ gradient evaluations for a scalar loss (reverse mode, i.e., backpropagation).
+AD eliminates both truncation and round-off errors entirely, making it the preferred method
+when the function is implemented in a differentiable framework (PyTorch, JAX, TensorFlow).
+The finite-difference approach tested here is most useful when the function is a black box
+or implemented in non-differentiable code.
 
 \subsection{Computational Cost Comparison}
 
@@ -1328,6 +1390,18 @@ implement for any differentiable constraint function, but provide only approxima
 for finite $\lambda$.  Increasing $\lambda$ improves feasibility but requires smaller step sizes,
 creating a computational trade-off.
 
+\noindent\textbf{Augmented Lagrangian improvement.}
+The \emph{augmented Lagrangian} method (Multiplier Method) overcomes the ill-conditioning
+of pure penalty methods by combining the penalty with a Lagrange multiplier estimate:
+\begin{equation}
+L_\lambda(x, \mu) = f(x) + \mu \max(0,\, 0.5 - x_1) + \frac{\lambda}{2}[\max(0,\, 0.5 - x_1)]^2.
+\end{equation}
+The multiplier $\mu$ is updated as $\mu_{k+1} = \mu_k + \lambda \max(0, 0.5 - x_{1,k})$,
+which allows convergence to the exact constrained optimum for any fixed finite $\lambda > 0$,
+avoiding the ill-conditioning that grows with $\lambda$ in the pure penalty approach.
+For the current problem, since the constraint is inactive ($\mu^{\star} = 0$), the augmented
+Lagrangian reduces to the pure penalty at optimality.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -1501,6 +1575,16 @@ $O(1/k^2)$ via Nesterov-style variants and adapts step sizes, but needs a projec
 The LMO in Frank--Wolfe always returns a vertex of $\mathcal{X}$, which makes the method
 attractive for problems where sparse/vertex solutions are desirable (e.g., trace-norm
 constrained matrix factorisation, sparsity-constrained machine learning).
+
+\noindent\textbf{Addressing the zig-zagging problem.}
+The oscillation of $z_k$ between vertices of $\mathcal{X}$ (observed in Figure~\ref{fig:q6_evolution}
+for $\beta = 0.90$) is a fundamental limitation of standard Frank--Wolfe.
+The \emph{away-step} variant addresses this: at each iteration, the algorithm considers both
+moving \emph{towards} a vertex (standard FW step) and moving \emph{away} from the current
+atom with maximum weight in the convex decomposition of $x_k$.  Away steps prevent the
+algorithm from repeatedly re-introducing the same extreme point, achieving a linear convergence
+rate $O((1 - \mu/(LC^2))^k)$ on strongly convex objectives~\cite{bubeck2015}, compared to the
+$O(1/k)$ rate of the standard FW algorithm.
 
 % ============================================================
 \section{Summary and Conclusions}
