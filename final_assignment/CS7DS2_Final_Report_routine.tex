@@ -228,6 +228,14 @@ The Heavy Ball method (Polyak, 1964) adds a momentum term that accumulates past 
 For Benchmark C ($L \approx 1001.6$, $\mu \approx 0.399$): the theoretically optimal parameters are $\alpha^*_C = 4/(\sqrt{1001.6}+\sqrt{0.399})^2 \approx 4/(31.65+0.632)^2 \approx 0.00384$ and $\beta^*_C \approx ((31.65-0.632)/(31.65+0.632))^2 \approx 0.923$. However, the code uses $\alpha_C = 0.0008$ and $\beta_C = 0.86$. The theoretical $\alpha^*$ would require exact knowledge of $L$ and $\mu$ at the minimum; the used value is $4.8\times$ smaller for safety. For Benchmark A ($\kappa \approx 1.12$): $\beta^*_A \approx ((1.016-0.962)/(1.016+0.962))^2 \approx 0.00075$ (near-zero), but the code uses $\beta_A = 0.88$. The discrepancy arises because the theoretical formula assumes a quadratic objective with globally constant $L$ and $\mu$; on non-quadratic problems, a high $\beta$ (near 1) empirically smooths gradient oscillations even when the theoretical optimal is near zero.
 \end{remark}
 
+\begin{remark}[Heavy Ball Convergence via Characteristic Polynomial]
+The Heavy Ball convergence rate can be derived via spectral analysis. On a 1D quadratic $f(x) = \frac{1}{2}\lambda x^2$, the iteration $x_{k+1} = (1+\beta - \alpha\lambda)x_k - \beta x_{k-1}$ is a linear second-order recurrence. Its characteristic polynomial is $r^2 - (1+\beta-\alpha\lambda)r + \beta = 0$, with roots
+\[
+r_{1,2} = \tfrac{1}{2}\!\left[(1+\beta-\alpha\lambda) \pm \sqrt{(1+\beta-\alpha\lambda)^2 - 4\beta}\right].
+\]
+Convergence requires $|r_{1,2}| < 1$; the optimal strategy is \emph{critical damping}: choose $\alpha,\beta$ so both roots lie on the circle $|r| = \sqrt{\beta}$ (complex conjugate pair). This requires the discriminant to vanish, $(1+\beta-\alpha\lambda)^2 = 4\beta$, giving $\alpha\lambda = (1-\sqrt{\beta})^2$. For $\lambda \in [\mu, L]$, one cannot satisfy this for all $\lambda$ simultaneously. The globally optimal $(\alpha^*, \beta^*)$ balance the worst-case roots at $\lambda = \mu$ and $\lambda = L$, yielding $|r_{1,2}| = \sqrt{\beta^*} = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ as the spectral radius for both extremes. This is the formal derivation of the ``square root of condition number'' speedup: $\rho_{\text{HB}} = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ versus GD's $\rho_{\text{GD}} = (\kappa-1)/(\kappa+1)$. Nesterov's adaptive $\beta_k = (k-1)/(k+2)$ is \emph{not} equivalent to Heavy Ball with time-varying $\beta$; it achieves the same asymptotic rate on strongly convex quadratics but through a different Lyapunov function argument (Polyak \& Juditsky, 1992).
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -431,6 +439,12 @@ Thus $\hat{m}_t = m_t/(1-\beta_1^t)$ is an unbiased estimator of $g$ for all $t$
 
 \begin{remark}[Adam Non-Convergence on Non-Convex Problems]
 Reddi et al.\ (2018) showed that Adam with the standard fixed $(\beta_1, \beta_2)$ can diverge on simple non-convex problems. The intuition: Adam's exponential moving average of $v_t$ ``forgets'' past gradient information at rate $(1-\beta_2)$. On Rosenbrock, the gradient magnitude varies rapidly along the trajectory (large when far from the valley, near-zero along the valley floor). If a large gradient is quickly forgotten, the step size can increase inappropriately just as the iterate enters a steep region. Nesterov, having no per-coordinate scaling, maintains a more conservative step bounded by $1/L$, and its lookahead correction prevents overshooting the valley walls.
+\end{remark}
+
+\begin{remark}[Adam Bias Correction: Quantitative Early-Step Effect]
+At step $t=1$ with $\beta_1 = 0.9$, $\beta_2 = 0.999$ and a constant gradient $g$:
+$m_1 = 0.1\,g$, $v_1 = 0.001\,g^2$.
+Without bias correction: $\|m_1\|/\sqrt{v_1} = 0.1|g|/\sqrt{0.001}\,|g| \approx 3.16$, so the step size is $\approx 3.16\alpha$ --- \emph{too large}. With bias correction: $\hat{m}_1 = g$, $\hat{v}_1 = g^2$, so the step is exactly $\alpha \cdot \text{sign}(g)$. Bias correction thus reduces the first step by $\approx 3.16\times$, preventing an overly aggressive initial move. This normalisation arises from the two correction factors having different convergence speeds: the first-moment correction $(1-\beta_1^t)^{-1}$ reaches $\approx 1$ by iteration $\sim 44$ (for $\beta_1 = 0.9$), but the second-moment correction $(1-\beta_2^t)^{-1}$ remains significant until iteration $\sim 4600$ (for $\beta_2 = 0.999$). Consequently, even after $m_t$ bias has vanished, the $v_t$ correction continues to suppress $\sqrt{\hat{v}_t}$ below $\sqrt{v_t}$, effectively keeping the adaptive step bounded by $\alpha$ throughout most of training. With the code's non-default $\beta_1 = 0.82$, the first-moment correction factor is $(1-0.82)^{-1} \approx 5.6$ at $t=1$, and it decays to $\approx 1.01$ by $t\approx 25$, reaching its steady state much earlier than the $v_t$ correction.
 \end{remark}
 
 Figure~\ref{fig:theory_rates} shows the theoretical convergence rates for GD and Nesterov on strongly convex quadratics with the three benchmark condition numbers, illustrating the theoretical advantage of acceleration.
@@ -791,6 +805,10 @@ Figure~\ref{fig:q4_fd_comparison} provides a direct comparison of forward and ce
 
 This zeroth-order method estimates the gradient via a random one-dimensional probe, requiring only \textbf{2 function evaluations per iteration} regardless of dimension $d$ (compared to $d+1$ for finite differences). The key property: for $u_k \sim \text{Uniform}(\mathbb{S}^{d-1})$ (uniform on the sphere), $\mathbb{E}[\hat{g}_k] = \mathbb{E}\!\left[\frac{f(x+\delta u) - f(x)}{\delta} u\right] \approx \mathbb{E}[u\, u^T] \nabla f(x) = \frac{1}{d}\nabla f(x)$, since $\mathbb{E}[uu^T] = \frac{1}{d}I_d$ for the uniform spherical distribution. Thus $d \cdot \hat{g}_k$ is an approximately unbiased estimator of $\nabla f(x_k)$, and the code's step is $x_{k+1} = x_k - \alpha \hat{g}_k = x_k - \frac{\alpha}{d}(d\hat{g}_k)$, effectively using step size $\alpha/d$ for the unbiased gradient. The high variance ($\text{Var}[\hat{g}_k] = O(1/d)\|\nabla f\|^2$) limits the convergence rate to $O(1/\sqrt{k})$ even for strongly convex functions, versus $O((1-\mu/L)^k)$ for exact GD.
 
+\begin{remark}[NRS Dimension Penalty on Strongly Convex Problems]
+For $\mu$-strongly convex and $L$-smooth $f$, each NRS gradient estimate $\hat{g}_k$ is an approximately unbiased estimator of $\frac{1}{d}\nabla f(x_k)$, so NRS behaves like GD with an \emph{effective step size} $\alpha_{\mathrm{eff}} = \alpha/d$ applied to the true gradient. The effective convergence rate is therefore approximately $(1 - \mu/L)^k$ per true-gradient step, but each such step costs $d$ NRS iterations (since each NRS step extracts $1/d$ of the gradient information). Equivalently, the per-NRS-iteration rate is $(1-\mu/(dL))^k$ --- a condition number effectively inflated to $\kappa_{\mathrm{eff}} = dL/\mu$ versus $\kappa = L/\mu$ for exact GD. For Benchmark B ($d=2$, $\mu \approx 0.4$, $L \approx 10$, $\kappa = 25$): $\kappa_{\mathrm{eff}} \approx 50$, and the per-iteration rate is approximately $1 - 0.4/(2 \times 10) = 0.98$. After 120 iterations: $(0.98)^{120} \approx 0.091$ (suboptimality reduced to $\sim$9\% of initial), while exact GD gives $(0.96)^{120} \approx 0.0076$ ($\sim$0.76\%). The $\sim$$12\times$ gap in iteration efficiency explains why NRS converges slowest on Benchmark B (Figure~\ref{fig:q4_fval_B}) despite the same number of gradient-oracle \emph{calls}: each NRS call yields a noisy, dimensionally-diluted gradient estimate rather than the true gradient.
+\end{remark}
+
 \subsubsection{Results and Comparison}
 
 \begin{figure}[H]
@@ -1050,6 +1068,27 @@ At $k = 180$: the bound gives $f - f^* \leq 5.37$, which is loose by $\sim 1200\
 f(x_k) - f^{\star} \leq \frac{2L\|x_0 - x^{\star}\|^2}{k+2} = \frac{2 \cdot 2 \cdot 16}{182} \approx 0.352 \quad (k=180).
 \end{equation}
 This tighter bound ($0.352$) is still $78\times$ looser than the empirical value ($0.0045$), indicating that even the instance-specific bound is not tight for this problem.
+
+\begin{proposition}[Frank--Wolfe $O(1/k)$ Rate via Descent Lemma]\label{prop:fw-rate}
+Let $f$ be $L$-smooth and convex on $\mathcal{X}$ with diameter $D$. Using step schedule $\gamma_k = 2/(k+2)$, the Frank--Wolfe iterates satisfy $f(x_k) - f^{\star} \leq 2LD^2/(k+2)$ for all $k \geq 0$.
+\end{proposition}
+\begin{proof}[Proof sketch]
+By $L$-smoothness applied to the convex combination $x_{k+1} = x_k + \gamma_k(z_k - x_k)$:
+\begin{equation}
+f(x_{k+1}) \leq f(x_k) + \gamma_k\langle\nabla f(x_k),\, z_k - x_k\rangle + \tfrac{L\gamma_k^2}{2}\|z_k - x_k\|^2
+\leq f(x_k) - \gamma_k\mathcal{G}(x_k) + \tfrac{L\gamma_k^2 D^2}{2},
+\end{equation}
+where $\mathcal{G}(x_k) = \langle\nabla f(x_k), x_k - z_k\rangle$ is the FW gap and $\|z_k - x_k\| \leq D$. Convexity of $f$ gives $\mathcal{G}(x_k) \geq f(x_k) - f^{\star}$ (since $z_k \in \mathcal{X}$ and $f(z_k) \geq f^{\star} + \langle\nabla f(x_k), z_k - x^{\star}\rangle$ ... simplifying via $\min_{z\in\mathcal{X}} f^{\star}$). Setting $h_k = f(x_k) - f^{\star}$ and $\gamma_k = 2/(k+2)$:
+\begin{equation}
+h_{k+1} \leq h_k\!\left(1 - \tfrac{2}{k+2}\right) + \tfrac{2LD^2}{(k+2)^2}.
+\end{equation}
+Claim: $h_k \leq 2LD^2/(k+2)$. The base case $k=0$ holds whenever $f(x_0) - f^{\star} \leq LD^2$ (satisfied by $L$-smoothness since $\|x_0 - x^{\star}\| \leq D$). For the inductive step, substituting $h_k \leq 2LD^2/(k+2)$:
+\[
+h_{k+1} \leq \frac{2LD^2}{k+2}\cdot\frac{k}{k+2} + \frac{2LD^2}{(k+2)^2}
+= \frac{2LD^2(k+1)}{(k+2)^2} \leq \frac{2LD^2}{k+3},
+\]
+where the last inequality uses $(k+1)(k+3) \leq (k+2)^2$, i.e., $k^2+4k+3 \leq k^2+4k+4$. \qed
+\end{proof}
 
 Fixed-step variants achieve similar rates when $\gamma = 1-\beta$ is appropriately chosen, but may oscillate near the optimum since the step does not decay, and in the boundary case create a limit cycle as analyzed above.
 
