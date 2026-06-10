@@ -283,6 +283,20 @@ The effective rate for coordinate $i$ after $k$ steps is
 $\alpha_0 / (\sqrt{\sum_{t=0}^k g_{t,i}^2} + \varepsilon)$, which monotonically decreases,
 ensuring stability but risking premature convergence.
 
+\noindent\textbf{Pre-conditioning effect.}
+On a strongly convex quadratic with $H = \mathrm{diag}(\lambda_1, \ldots, \lambda_n)$,
+the gradient at iterate $x_k$ satisfies $g_{k,i} \approx \lambda_i (x_{k,i} - x_i^{\star})$.
+After $k$ steps near the optimum, $\sum_{t=0}^k g_{t,i}^2 \approx k\,\bar{g}_i^2$
+where $\bar{g}_i \propto \lambda_i$.  Adagrad's effective step in coordinate $i$ is then
+\begin{equation}
+\alpha^{\mathrm{eff}}_i \approx \frac{\alpha_0}{\sqrt{k}\,|\bar{g}_i|} \propto \frac{\alpha_0}{\sqrt{k}\,\lambda_i}.
+\end{equation}
+The effective per-coordinate condition number seen by Adagrad is therefore
+$\kappa_{\mathrm{eff}} = 1$ (all coordinates converge at the same rate), compared to
+$\kappa = \lambda_{\max}/\lambda_{\min}$ for vanilla GD.  This \emph{implicit diagonal
+pre-conditioning} is why Adagrad performs well on anisotropic problems such as Benchmark~C
+($\kappa = 2{,}508$) without requiring knowledge of $H$.
+
 \begin{algorithm}[H]
 \caption{RMSprop}
 \label{alg:rmsprop}
@@ -320,6 +334,25 @@ $\alpha^* = \frac{4}{(\sqrt{L} + \sqrt{\mu})^2}$ and
 $\beta^* = \left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^2$,
 giving convergence factor $\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^2$ per iteration,
 which is substantially smaller than the GD factor $(1 - 1/\kappa)$ for large $\kappa$.
+
+\noindent\textbf{Spectral analysis.}
+For a quadratic $f(x) = \frac{1}{2}x^T H x - b^T x$ with $H = \mathrm{diag}(\mu_1,\ldots,\mu_n)$
+(w.l.o.g.\ after eigen-decomposition), the Heavy Ball update in coordinate $i$ satisfies the
+linear recurrence
+\begin{equation}
+x_{k+1}^{(i)} - x_i^{\star} = (1 + \beta)(x_k^{(i)} - x_i^{\star}) - \alpha\mu_i(x_k^{(i)} - x_i^{\star})
+  - \beta(x_{k-1}^{(i)} - x_i^{\star}).
+\end{equation}
+The characteristic polynomial is $p(\lambda) = \lambda^2 - (1 + \beta - \alpha\mu_i)\lambda + \beta$.
+Its roots are $\lambda_{1,2} = \frac{(1+\beta-\alpha\mu_i) \pm \sqrt{(1+\beta-\alpha\mu_i)^2 - 4\beta}}{2}$.
+The spectral radius $\rho(\mu_i) = \max|\lambda_{1,2}|$ is minimised when the discriminant is zero,
+i.e.\ when $(1+\beta-\alpha\mu_i)^2 = 4\beta$, giving the optimal $\beta^*$ and $\alpha^*$ above.
+With these optimal parameters, $\rho(\mu_i) = \sqrt{\beta^*}$ for every eigenvalue $\mu_i \in [\mu, L]$
+simultaneously, which is \emph{why} Heavy Ball achieves uniform fast convergence on quadratics:
+it is the unique two-term recurrence that simultaneously achieves $\rho = \sqrt{\beta^*}$
+across all curvatures.  However, on non-quadratic functions the ``optimal'' parameters
+from the quadratic analysis may cause divergence, since the local curvature $\mu_i(x)$ varies
+with $x$ and can temporarily violate the stability condition $4\beta < (1+\beta-\alpha\mu_i)^2$.
 
 \subsection{Hyperparameter Settings}
 
@@ -700,6 +733,29 @@ the deviation from the $O(1/k^2)$ line at small $k$.}
 \label{fig:q2_rates}
 \end{figure}
 
+\subsection{Quantitative Rate Comparison on Benchmark~C}
+
+To make the $O(1/k)$ vs $O(1/k^2)$ distinction concrete, consider the bounds:
+\begin{align}
+f_{\mathrm{GD}}(x_k) - f^{\star} &\leq \frac{L\|x_0 - x^{\star}\|^2}{2k}, \\
+f_{\mathrm{Nes}}(x_k) - f^{\star} &\leq \frac{2L\|x_0 - x^{\star}\|^2}{(k+1)^2}.
+\end{align}
+At $k = 150$, with $L \approx 1{,}002$ and $\|x_0 - x^{\star}\|^2 = \|(-1,1)-(1,1)\|^2 + \|(−1,1)-(1,1)\|^2$...
+More precisely, $\|x_0 - x^{\star}\|^2 = (-1-1)^2 + (1-1)^2 = 4$, so the GD bound gives
+\begin{equation}
+f_{\mathrm{GD}}(x_{150}) - f^{\star} \leq \frac{1{,}002 \times 4}{2 \times 150} \approx 13.4,
+\end{equation}
+and the Nesterov bound gives
+\begin{equation}
+f_{\mathrm{Nes}}(x_{150}) - f^{\star} \leq \frac{2 \times 1{,}002 \times 4}{151^2} \approx 0.176.
+\end{equation}
+The experimental values ($f_{\mathrm{GD}} \approx 3.39$, $f_{\mathrm{Nes}} \approx 0.479$) lie
+\emph{well within} both theoretical bounds (the bounds are loose because they assume the worst-case
+geometry, while the Rosenbrock function is smoother along the valley floor than the global $L$
+suggests). The ratio of bounds is $(13.4 / 0.176) \approx 76$, consistent with the observed
+improvement ratio of $3.39 / 0.479 \approx 7$.  The theoretical advantage of Nesterov grows
+quadratically with $k$ and with $\sqrt{L/\mu}$, making it most valuable for ill-conditioned smooth problems with many iterations.
+
 \subsection{Mini-Batch Stochastic Gradient Descent}
 
 Mini-batch SGD on Benchmark~A uses learning rate $\alpha = 0.06$,
@@ -794,6 +850,22 @@ showing that variance decreases proportional to $1/b$ for large $b$.
 Smaller batches introduce more noise but allow more frequent updates, which can escape shallow
 local minima in non-convex problems. For the convex Benchmark~A, the optimal batch size is the
 full dataset (batch GD), but mini-batching provides a useful stochastic regularisor.
+
+\item \textbf{Noise floor and convergence radius.}
+With \emph{constant} step size $\alpha$, SGD does not converge to $x^{\star}$ exactly even for
+strongly convex $f$: it converges to a ball around $x^{\star}$ of radius
+\begin{equation}
+\|x_k - x^{\star}\|^2 \;\lesssim\; \frac{\alpha \sigma^2}{\mu b},
+\end{equation}
+where $\sigma^2 = \mathbb{E}[\|g_i - \nabla f(x^{\star})\|^2]$ is the gradient noise variance and
+$b$ is the batch size.  This is the \emph{irreducible noise floor}: to drive it to zero,
+one must either use $b = n$ (full batch) or decay $\alpha \to 0$.
+With the diminishing schedule $\alpha_k = c/k$ (Robbins--Monro~\cite{robbins1951}), SGD achieves
+$\mathbb{E}[f(x_k)] - f^{\star} = O(1/k)$ for strongly convex $f$, matching batch GD's rate
+but with $n/b$-times cheaper per-iterate cost when $n \gg b$.
+The observed convergence of both batch sizes to $J^{\star} \approx 0.4826$ in the experiments
+is consistent with this theory: the noise floor $\alpha\sigma^2/(\mu b)$ for the fixed
+$\alpha = 0.06$ used here is small enough to be below the scale of the plot.
 \end{itemize}
 
 % ============================================================
@@ -1014,10 +1086,25 @@ $\nabla^2 f$ may not be positive definite, making the Newton direction non-desce
 Tikhonov regularisation $(\nabla^2 f + \lambda I)^{-1}$ addresses this.
 \item \textbf{Storage}: The full Hessian matrix requires $O(n^2)$ memory.
 \end{itemize}
-\textbf{Quasi-Newton methods} (e.g., BFGS) approximate $H^{-1}$ using rank-1 or rank-2
-updates from gradient differences across iterates, achieving superlinear convergence without
-explicit Hessian computation. L-BFGS limits memory to $O(n \cdot m)$ for a window of $m$
-gradient pairs, enabling Newton-like performance at scale.
+\textbf{Quasi-Newton methods (BFGS).}
+The \emph{Broyden--Fletcher--Goldfarb--Shanno} (BFGS) update maintains an approximation
+$B_k \approx [\nabla^2 f(x_k)]^{-1}$ using only gradient information.
+Define the displacement and gradient-change vectors
+\begin{equation}
+s_k = x_{k+1} - x_k, \qquad y_k = \nabla f(x_{k+1}) - \nabla f(x_k).
+\end{equation}
+The BFGS inverse-Hessian update is the symmetric rank-2 correction
+\begin{equation}
+B_{k+1} = \left(I - \rho_k s_k y_k^T\right)B_k\left(I - \rho_k y_k s_k^T\right)
+           + \rho_k s_k s_k^T, \qquad \rho_k = \frac{1}{y_k^T s_k},
+\end{equation}
+which is the unique symmetric positive definite matrix satisfying the \emph{secant condition}
+$B_{k+1} y_k = s_k$ while minimising the weighted Frobenius distance to $B_k$.
+Under mild conditions (positive curvature $y_k^T s_k > 0$, ensured by Wolfe line-search),
+BFGS achieves \emph{superlinear} convergence: $\|x_{k+1} - x^{\star}\| = o(\|x_k - x^{\star}\|)$,
+faster than any linear rate but slower than Newton's quadratic rate in the worst case.
+L-BFGS limits memory to $O(n \cdot m)$ for a window of $m$ most recent $(s_k, y_k)$ pairs,
+enabling Newton-like performance at scale with $m = 5$--$20$ typically sufficient in practice.
 
 \subsection{Update Magnitude}
 
@@ -1082,6 +1169,22 @@ so the effective gradient signal is diluted by a factor of $1/n$ in $n$ dimensio
 This contrasts with finite differences which use $n+1$ function evaluations but recover
 the full gradient.
 
+\noindent\textbf{Expected convergence rate.}
+For a convex and $L$-smooth objective, the gradient estimator satisfies
+$\mathbb{E}[\hat{g}_k] = \nabla f_\delta(x)$
+where $f_\delta(x) = \mathbb{E}_u[f(x + \delta u)]$ is the Gaussian-smoothed objective.
+The resulting randomised update has the same convergence structure as SGD:
+\begin{equation}
+\mathbb{E}[f(x_k)] - f^{\star} \leq \frac{\|x_0 - x^{\star}\|^2}{2\alpha k}
+  + \frac{\alpha L n \delta^2}{2},
+\end{equation}
+where the second term is the bias from finite-difference smoothing.
+Optimising over $\alpha$ and $\delta$ gives an $O(\sqrt{n} / \sqrt{k})$ convergence rate,
+which is $\sqrt{n}$ times slower than gradient descent's $O(1/\sqrt{k})$ rate for
+non-strongly-convex problems.  For $n = 2$ (as in the experiments) and the 220 iterations
+used, the expected gap relative to exact GD scales as $\sqrt{2} \approx 1.41$, consistent
+with the observed slower convergence in Figure~\ref{fig:q4_fval_B}.
+
 \subsubsection{Finite Difference Error Analysis}
 
 \begin{figure}[H]
@@ -1139,6 +1242,18 @@ $\mathbb{R}^2$ and iteratively applies four operations to deform it:
 \item \textbf{Shrink} ($\sigma = 0.5$): if contraction failed, contract all vertices towards the best.
 \end{enumerate}
 Settings: initial simplex step $= 0.35$, iterations $= 160$.
+
+\noindent\textbf{Convergence guarantees.}
+Nelder--Mead has \emph{no general convergence guarantee}: McKinnon~\cite{mckinnon1998} constructed
+counter-examples where the simplex converges to a non-stationary point in $\mathbb{R}^2$.
+In practice, convergence is observed on smooth unimodal functions because the simplex
+adaptively deforms to align with the local curvature --- the $2\times 1$ aspect ratio
+that emerges in the Rosenbrock valley approximately captures the $\sqrt{\kappa} \approx 50:1$
+curvature ratio along the valley.  The method is scale-invariant within the simplex operations
+but sensitive to the initial simplex size: too large a step leads to coarse resolution near
+the minimum; too small risks the simplex collapsing before reaching the basin of attraction.
+The step $= 0.35$ chosen here places one initial simplex vertex within the Rosenbrock valley
+basin, enabling rapid exploration of the curved valley geometry.
 
 \begin{figure}[H]
 \centering
@@ -1323,6 +1438,23 @@ minimiser.  For finite $\lambda$, the residual violation at the penalty minimise
 satisfies $0.5 - (x_\lambda^{\star})_1 \leq f(x_0)/\lambda$, so larger $\lambda$ implies
 smaller violation but also a stiffer (larger Lipschitz constant) objective, requiring
 smaller step sizes for stability.
+
+\textbf{Ill-conditioning of the penalised objective.}
+Near the feasible boundary, the Hessian of $F_\lambda$ has an eigenvalue of order $\lambda$ in
+the constraint normal direction, while the objective curvature contributes eigenvalues of order $L_f$.
+The condition number therefore grows as
+\begin{equation}
+\kappa(F_\lambda) \approx \frac{\lambda + L_f}{\mu_f} \sim \frac{\lambda}{\mu_f} \quad
+  \text{as } \lambda \to \infty,
+\end{equation}
+requiring a step size $\alpha \lesssim 1/(\lambda + L_f)$ for stability.
+This is the fundamental ill-conditioning trade-off of the penalty method:
+feasibility improves as $O(1/\lambda)$, but the required step size shrinks as $O(1/\lambda)$,
+so the total number of iterations to reach $\varepsilon$-feasibility is $O(1/\varepsilon)$
+regardless of $\lambda$ --- no free lunch.
+The augmented Lagrangian method avoids this by updating the multiplier $\mu$ alongside the
+penalty, achieving $O(1/\lambda^2)$ feasibility at fixed $\lambda$, so $\lambda$ need not
+be driven to infinity.
 
 Settings: Projected GD ($\alpha = 0.08$), Penalty with $\lambda \in \{0.15, 1.8, 4.5\}$
 ($\alpha = 0.05$ for $\lambda \leq 1.8$; $\alpha = 0.03$ for $\lambda = 4.5$, reflecting the
@@ -1557,9 +1689,17 @@ alternates between opposing extreme points of $\mathcal{X}$ as the gradient rota
 interior optimum, and the convex combination gradually averages these jumps.
 The theoretical $O(1/k)$ rate applies with the standard $\gamma_k = 2/(k+2)$ schedule;
 the fixed-$\beta$ variant used here achieves similar empirical behaviour but without a formal
-guarantee. For the interior case, the Frank--Wolfe gap at the final iterate is
-$g_{\mathrm{FW}}(x_k) = \nabla f(x_k)^T(x_k - z_k)$, which can be evaluated without knowledge
-of $f^{\star}$ and provides an upper bound on suboptimality.
+guarantee. For the interior case at the final iterate $(1.066, 4.932)$ with $\beta = 0.90$,
+\begin{equation}
+\nabla f(x_{180}) = 2(1.066-1, 4.932-5) = (0.132, -0.136),
+\end{equation}
+and the LMO selects $z_{180} = (0.5, 10)$ (since $\nabla_1 f > 0$ selects lower bound; $\nabla_2 f < 0$
+selects upper bound).  The Frank--Wolfe gap is
+\begin{equation}
+g_{\mathrm{FW}}(x_{180}) = 0.132(1.066 - 0.5) + (-0.136)(4.932 - 10) = 0.0748 + 0.689 \approx 0.764.
+\end{equation}
+This confirms $f(x_{180}) - f^{\star} = 0.0089 \leq g_{\mathrm{FW}} = 0.764$; the gap is a loose
+upper bound due to the distance to the nearest vertex being large relative to the true suboptimality.
 
 \textbf{Boundary optimum.}
 Frank--Wolfe is particularly well-suited to problems where $x^{\star}$ lies on the boundary:
@@ -1723,6 +1863,43 @@ box-constrained problems. Its natural tendency to favour vertices of the feasibl
 ideal for problems requiring sparse solutions.
 
 \end{enumerate}
+
+\subsection{Oracle Complexity: How Many Gradient Evaluations Does Each Method Need?}
+
+\begin{table}[H]
+\centering
+\caption{Oracle complexity to reach $f(x_k) - f^{\star} \leq \varepsilon$ under standard
+assumptions ($f$ is $\mu$-strongly convex and $L$-smooth, $\kappa = L/\mu$).
+Gradient evaluations (GE) counts full-gradient calls; for SGD, one pass over all $n$ data points
+counts as $n/b$ mini-batch gradient evaluations.}
+\label{tab:oracle}
+\begin{tabular}{lll}
+\toprule
+\textbf{Method} & \textbf{Gradient evaluations} & \textbf{Notes} \\
+\midrule
+Gradient Descent & $O\!\left(\kappa \log \frac{1}{\varepsilon}\right)$ & Optimal 1st-order rate \\
+Nesterov Acceleration & $O\!\left(\sqrt{\kappa} \log \frac{1}{\varepsilon}\right)$ & Information-theoretically optimal \\
+Heavy Ball (quadratic) & $O\!\left(\sqrt{\kappa} \log \frac{1}{\varepsilon}\right)$ & Matches Nesterov on quadratics \\
+Newton's Method & $O\!\left(\log\log \frac{1}{\varepsilon}\right)$ & Quadratic convergence near $x^{\star}$ \\
+BFGS & $o\!\left(\kappa \log \frac{1}{\varepsilon}\right)$ & Superlinear; rate not fully characterised \\
+SGD ($b$ mini-batch) & $O\!\left(\frac{\sigma^2}{\mu^2 \varepsilon}\right)$ gradient-noise calls & Noisy; no $\kappa$ dependence \\
+FD Gradient ($d$ dims) & $(d+1) \times O\!\left(\kappa \log \frac{1}{\varepsilon}\right)$ & $d+1$ function evals per GE \\
+Nesterov Rand.\ Search & $O\!\left(\frac{d^2 \kappa}{\varepsilon}\right)$ function evals & 2 evals/step; $d$-factor penalty \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The oracle complexity table reveals the core hierarchy: \textbf{Newton} is the most efficient
+when the Hessian is cheap ($n$ small), requiring essentially a constant number of iterations
+once in the quadratic convergence basin. \textbf{Nesterov acceleration} achieves the
+\emph{information-theoretic lower bound} for smooth strongly convex first-order optimisation
+(proved by Nesterov~\cite{nesterov1983,nesterov2004}): no first-order method can do better
+than $O(\sqrt{\kappa} \log 1/\varepsilon)$ gradient evaluations in the worst case.
+\textbf{Gradient descent} is sub-optimal by a factor of $\sqrt{\kappa}$, which for
+$\kappa = 2{,}508$ corresponds to roughly $50\times$ more iterations than Nesterov in theory.
+\textbf{SGD} sidesteps the $\kappa$ dependence entirely but pays with a $1/\varepsilon$ rate
+instead of $\log(1/\varepsilon)$; this trade-off favours SGD when the noise level $\sigma^2$ is
+small and $\varepsilon$ is not too small, as is typical in over-parameterised deep learning.
 
 \subsection{Method Selection Guidelines}
 
@@ -1988,6 +2165,16 @@ Convex optimization: Algorithms and complexity.
 Nesterov, Y. (2004).
 \textit{Introductory Lectures on Stochastic Optimization}.
 Kluwer Academic Publishers.
+
+\bibitem{mckinnon1998}
+McKinnon, K.~I.~M. (1998).
+Convergence of the Nelder--Mead simplex method to a nonstationary point.
+\textit{SIAM Journal on Optimization}, 9(1), 148--158.
+
+\bibitem{robbins1951}
+Robbins, H., \& Monro, S. (1951).
+A stochastic approximation method.
+\textit{The Annals of Mathematical Statistics}, 22(3), 400--407.
 
 \end{thebibliography}
 
