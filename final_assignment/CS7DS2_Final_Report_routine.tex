@@ -842,6 +842,50 @@ ensuring the effective step never increases.  The experiments here do not trigge
 non-convergence pathology because all benchmarks are smooth and the gradients decrease monotonically
 near the minimum; but it is an important practical caveat for Adam in adversarial or oscillatory settings.
 
+\noindent\textbf{AdamW: decoupled weight decay.}
+A critical issue in Adam with $\ell^2$ regularisation $f(x) = \ell(x) + \frac{\lambda}{2}\|x\|^2$
+is that the regularisation term enters the gradient as $\nabla f(x) = \nabla\ell(x) + \lambda x$,
+which is then \emph{scaled down} by the adaptive factor $1/\sqrt{\hat{v}_t}$.
+For coordinates with large historical gradients (large $\sqrt{\hat{v}_t}$), the effective
+regularisation rate $\lambda \alpha / \sqrt{\hat{v}_t}$ is much smaller than intended,
+under-regularising heavily-updated coordinates.
+\emph{AdamW} (Loshchilov \& Hutter, 2019) fixes this by \emph{decoupling} weight decay
+from the gradient update:
+\begin{equation}
+x_{t+1} = x_t - \alpha \cdot \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \varepsilon}
+           \underbrace{- \alpha\,\lambda\, x_t}_{\text{weight decay}}.
+\end{equation}
+The weight decay term $\alpha\lambda x_t$ is applied uniformly across all coordinates,
+independent of the gradient magnitude, ensuring the intended $\ell^2$ regularisation strength.
+AdamW is now the standard optimiser for large language models (BERT, GPT-3/4, LLaMA), because:
+\begin{enumerate}[nosep]
+\item Decoupled decay provides consistent $\ell^2$ regularisation across all parameter groups.
+\item Adam's adaptive scaling handles the extreme anisotropy of attention weight matrices.
+\item The $(1-\alpha\lambda)^T$ decay ensures parameter magnitudes remain bounded regardless
+  of the gradient direction.
+\end{enumerate}
+For the smooth benchmarks A--C in this report, the weight decay term is not used ($\lambda = 0$),
+so Adam and AdamW coincide.  The distinction becomes critical when the training objective
+includes explicit regularisation, which is standard in practice.
+
+\noindent\textbf{Gradient clipping.}
+In practice, particularly for recurrent neural networks and transformers, gradients can become
+extremely large (``exploding gradients''), causing numerical instability.
+\emph{Gradient clipping} rescales the gradient when its norm exceeds a threshold $C$:
+\begin{equation}
+\tilde{g}_t = \begin{cases}
+g_t & \text{if } \|g_t\| \leq C, \\
+C\, g_t / \|g_t\| & \text{if } \|g_t\| > C.
+\end{cases}
+\end{equation}
+This is equivalent to projecting $g_t$ onto the $\ell^2$ ball of radius $C$.
+Clipping is compatible with Adam by applying it before the first-moment update:
+$m_t \gets \beta_1 m_{t-1} + (1-\beta_1)\tilde{g}_t$.
+For the Rosenbrock benchmark ($\kappa = 2{,}508$), the maximum gradient norm along the
+trajectory is $\|\nabla f(-1, 1)\| = \|(2 \times 200(-1-1^2), 200(1-(-1)^2))\| = \|(400 \times (-3), 0)\| = 1{,}200$,
+showing that gradient clipping with $C \approx 10$ would rescale the initial gradient by $100\times$,
+potentially stabilising the early Adam trajectory on Benchmark~C.
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1968,6 +2012,39 @@ All conditions hold, confirming $x^{\star}$ is a KKT point.  Under the \emph{lin
 qualification} (LCQ, satisfied here since $\nabla g = (-1,0)^T \neq 0$), KKT conditions are
 also sufficient for optimality because $f$ is convex and the feasible set is convex.
 
+\noindent\textbf{Slater's condition and strong duality.}
+For general convex programs $\min_x f(x)$ subject to $g_i(x) \leq 0$, $i = 1, \ldots, m$,
+\emph{Slater's condition} (constraint qualification for strong duality) requires the existence
+of a \emph{strictly feasible point} $\bar{x}$ with $g_i(\bar{x}) < 0$ for all $i$.
+
+\begin{definition}[Slater's condition]
+A convex programme satisfies \emph{Slater's condition} if there exists $\bar{x} \in \mathbb{R}^n$
+with $g_i(\bar{x}) < 0$ for all $i = 1, \ldots, m$ (and $A\bar{x} = b$ for equality constraints).
+\end{definition}
+
+\begin{theorem}[Strong duality under Slater's condition]
+If Slater's condition holds, then the Lagrangian dual problem $\max_{\mu \geq 0} q(\mu)$
+attains its optimum $q^{\star} = f^{\star}$ (zero duality gap), and there exists a dual
+optimal $\mu^{\star} \geq 0$ satisfying the KKT conditions.
+\end{theorem}
+
+\noindent\emph{Proof sketch.}
+Strong duality follows from the separating hyperplane theorem.  Define the
+\emph{value function} $p(\mu) = \inf_x \{f(x) + \mu^T g(x)\}$.  The dual function
+$q(\mu) = p(\mu)$ is concave (infimum of linear functions of $\mu$).
+Under Slater's condition, the primal domain $\{(u, t) : \exists x,\, g(x) \leq u,\, f(x) \leq t\}$
+has non-empty interior (provided by $\bar{x}$), so a separating hyperplane exists between
+the domain and $\{(u, t) : u \leq 0, t \leq p^{\star} - \varepsilon\}$, giving the dual certificate.
+Without Slater's condition, the duality gap can be strictly positive (strong duality fails).
+
+\noindent\textbf{Verification for Q5 problem.}
+The constraint is $g(x) = 0.5 - x_1 \leq 0$ with feasible set $\{x_1 \geq 0.5\}$.
+A Slater point is any $\bar{x}$ with $\bar{x}_1 > 0.5$, e.g., $\bar{x} = (1, 2)$:
+$g(\bar{x}) = 0.5 - 1 = -0.5 < 0$. \checkmark
+Slater's condition holds, guaranteeing strong duality $q^{\star} = f^{\star} = 0.7244$.
+This confirms that the Lagrangian dual approach (used in the ADMM and augmented Lagrangian
+analysis) correctly recovers the primal optimum.
+
 \noindent\textbf{Lagrangian dual and penalty interpretation.}
 The Lagrangian is $L(x, \mu) = f(x) + \mu(0.5 - x_1)$ with dual function
 $q(\mu) = \inf_x L(x, \mu) = f(x^{\star}_\mu) + \mu(0.5 - x_{1,\mu}^{\star})$.
@@ -2471,6 +2548,40 @@ $D \approx 15.66$, the theoretical bound gives
 $f(x_k) - f^{\star} \leq \frac{2LD^2}{k+2} = \frac{2 \cdot 2 \cdot 245}{142} \approx 6.9$,
 which is a very loose bound due to the large diameter.
 Using $\gamma_k = 2/(k+2)$ instead of fixed $\beta$ would tighten convergence in theory.
+
+\textbf{Frank--Wolfe with strong convexity: linear convergence.}
+The $O(1/k)$ rate of Frank--Wolfe is a worst-case bound for convex objectives.
+When $f$ is \emph{$\mu$-strongly convex}, the convergence is substantially faster.
+The FW gap $g_{\mathrm{FW}}(x_k) = \nabla f(x_k)^T(x_k - z_k)$ satisfies
+\begin{equation}
+g_{\mathrm{FW}}(x_k) \leq f(x_k) - f^{\star} \leq \left(1 - \frac{\mu}{\mu + L D^2 / 4}\right)^k g_{\mathrm{FW}}(x_0),
+\end{equation}
+where $D = \mathrm{diam}(\mathcal{X})$ and the contraction factor is
+$\rho = 1 - \mu/(\mu + LD^2/4)$.
+For $\mu = 0.5$, $L = 2$, $D = 5$ (representative values): $\rho \approx 0.962$.
+At $k = 50$: FW-SC gap $\approx 50^2 e^{-1.9} \approx 0.39$ (geometric), while the convex
+FW bound gives $50/52 \cdot 50 \approx 48$ (arithmetic), confirming a $\sim 120\times$
+improvement due to strong convexity.
+Importantly, this linear rate applies \emph{only when the iterates are not near a vertex}:
+once $x_k$ approaches a vertex (the "zigzag regime"), the effective FW gap can briefly stall.
+The Away-Step FW avoids this by also stepping away from atoms, maintaining linear convergence
+throughout.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_strong_convex_slater.pdf}
+\caption{Q6: Frank--Wolfe under strong convexity and Slater's condition.
+\emph{Left}: Convergence rate comparison for FW (convex only: $O(1/k)$), FW (strongly convex,
+$\mu = 0.5$: geometric rate $\rho^k$ with $\rho \approx 0.962$), and Projected GD (strongly
+convex: $\rho = 0.75$). The strongly convex FW closes the gap with projected GD at the cost
+of a slower contraction rate (due to the diameter $D$ in the convergence bound).
+\emph{Right}: Slater's condition for strong duality.  The feasible set $\mathcal{X}$ (disk
+$\|x\|^2 \leq 4$ intersected with $x_2 \geq -1$) contains both a KKT point $x^{\star}$ (red star)
+and a strictly feasible interior point $\bar{x}$ (Slater point, green square).  The existence
+of $\bar{x}$ guarantees strong duality (zero duality gap) for the constrained problem with
+objective contours shown.}
+\label{fig:q6_sc_slater}
+\end{figure}
 
 \textbf{Frank--Wolfe vs Projected GD.}
 On box-constrained problems, both algorithms are computationally $O(d)$ per iteration
