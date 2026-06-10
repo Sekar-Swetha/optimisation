@@ -731,6 +731,51 @@ relative advantage of smaller batches at high noise.}
 \label{fig:q2_sgd_noisy}
 \end{figure}
 
+\subsection{Variance Reduction: Beyond Vanilla SGD}
+
+Vanilla mini-batch SGD maintains a gradient variance floor of $\sigma^2/b$ that prevents
+convergence below the noise floor even for strongly convex objectives, yielding at best an
+$O(1/\sqrt{k})$ rate (versus GD's linear rate). \textbf{Variance-reduced} methods break this
+barrier by incorporating periodic full-gradient corrections.
+
+The \textbf{SVRG} (Stochastic Variance Reduced Gradient) update is:
+\begin{equation}
+  \theta_{k+1} = \theta_k - \alpha\Bigl[\nabla \ell(\theta_k; \xi_k)
+  - \nabla \ell(\tilde\theta; \xi_k) + \nabla J(\tilde\theta)\Bigr],
+  \label{eq:svrg}
+\end{equation}
+where $\tilde\theta$ is a \emph{snapshot} recomputed every $p$ steps via a full gradient pass.
+The control variate $[\nabla\ell(\theta_k; \xi_k) - \nabla\ell(\tilde\theta; \xi_k)]$ has
+zero mean and variance $O(\|\theta_k - \tilde\theta\|^2)$ --- it shrinks to zero as the
+iterates converge.  This restores the linear convergence rate $O(\rho^k)$ for strongly convex
+$f$, matching full gradient descent but at an amortised cost of $O(m/(p+1))$ gradient
+evaluations per ``fast'' step.
+
+\begin{table}[H]
+\centering
+\caption{Q2 extension: Comparison of SGD variants for strongly convex finite-sum minimisation.
+$n$ = dataset size, $b$ = batch size, $\kappa = L/\mu$.}
+\label{tab:sgd_variants}
+\begin{tabular}{lccl}
+\toprule
+\textbf{Method} & \textbf{Cost/iter} & \textbf{Rate} & \textbf{Note} \\
+\midrule
+Full GD & $O(n)$ & $O(\rho^k)$, $\rho = 1-\mu/L$ & Exact gradient, slow per-iter \\
+Mini-batch SGD & $O(b)$ & $O(1/\sqrt{k})$ & Irreducible variance floor \\
+SAG/SAGA~\cite{sag2013} & $O(1)$ & $O(\rho^k)$ & $O(n)$ memory overhead \\
+SVRG~\cite{svrg2013} & $O(1) + O(n/p)$ & $O(\rho^k)$ & Epoch-based snapshot \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{remark}
+  For Benchmark~A with $m = 1000$ and $\kappa \approx 1.2$, variance reduction provides
+  minimal benefit because (i)~the problem is already so well-conditioned that SGD converges
+  in $O(\kappa^2) = O(1.44)$ effective passes anyway, and (ii)~the noise floor for $b = 40$
+  is small relative to $J^{\star}$.  Variance reduction pays off when $\kappa$ is large or
+  when low noise floors are required, as in training deep neural networks with many epochs.
+\end{remark}
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation}
 \label{sec:q3}
@@ -947,6 +992,51 @@ updates than GD throughout, indicating it is traversing the ill-conditioned land
 efficiently.}
 \label{fig:q3_update}
 \end{figure}
+
+\subsection{Quasi-Newton Methods: Practical Compromise}
+
+Full Newton's method costs $O(d^3)$ per iteration to solve the linear system $H_k p_k = g_k$
+and requires forming the $d \times d$ Hessian.  For large $d$ this is prohibitive.
+\textbf{Quasi-Newton} methods build a \emph{low-rank approximation} $B_k \approx H_k$ using
+only gradient information, reducing cost to $O(d^2)$ (BFGS) or $O(md)$ (L-BFGS with $m$
+stored vector pairs).
+
+The \textbf{BFGS} rank-2 Hessian update after step $s_k = x_{k+1} - x_k$ and
+gradient change $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$ is:
+\begin{equation}
+  B_{k+1} = B_k - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k} + \frac{y_k y_k^T}{y_k^T s_k}.
+  \label{eq:bfgs}
+\end{equation}
+$B_{k+1}$ satisfies the \emph{secant condition} $B_{k+1} s_k = y_k$, ensuring the
+approximate Hessian matches the true curvature along the most recent step.  Under mild
+conditions, BFGS achieves \emph{superlinear} convergence: $\|x_{k+1} - x^{\star}\| /
+\|x_k - x^{\star}\| \to 0$, slower than Newton's quadratic rate but much faster than the
+linear rate of GD.
+
+\begin{table}[H]
+\centering
+\caption{Q3 extension: Comparison of Newton-family methods.  $d$ = parameter dimension.}
+\label{tab:newton_family}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Cost/iter} & \textbf{Memory} & \textbf{Convergence} & \textbf{When useful} \\
+\midrule
+Gradient Descent & $O(d)$ & $O(d)$ & Linear & $d \gg 10^5$ \\
+L-BFGS ($m$ pairs) & $O(md)$ & $O(md)$ & Superlinear & $d \leq 10^6$ \\
+BFGS & $O(d^2)$ & $O(d^2)$ & Superlinear & $d \leq 10^4$ \\
+Newton (exact) & $O(d^3)$ & $O(d^2)$ & Quadratic & $d \leq 10^3$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{remark}
+  For Benchmark~C ($d = 2$), full Newton is feasible and quadratic convergence is observed.
+  In practice, L-BFGS with $m = 10$ stored pairs is the default choice for unconstrained
+  smooth optimisation when $d$ ranges from hundreds to millions: it achieves near-Newton
+  performance without the $O(d^2)$ storage or $O(d^3)$ solve cost.  The Tikhonov damping
+  used here ($\lambda_{\rm damp} = 10^{-8}$) is analogous to L-BFGS's safeguard against
+  indefinite approximate Hessians near saddle points.
+\end{remark}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation}
@@ -1274,6 +1364,44 @@ optimum, unconstrained GD also reaches the correct answer despite passing throug
 infeasible region. In general (when the optimum \emph{is} on the constraint boundary),
 projected GD is necessary for correctness.
 
+\subsection{Augmented Lagrangian: Bridging Penalty and Dual Methods}
+
+The pure penalty method suffers a fundamental trade-off: large $\lambda$ enforces feasibility
+but makes the penalised objective $F_\lambda$ ill-conditioned (condition number grows as
+$O(\lambda)$). The \textbf{Augmented Lagrangian} method resolves this by augmenting with
+\emph{both} a quadratic penalty \emph{and} a Lagrange multiplier estimate $\mu$:
+\begin{equation}
+  \mathcal{L}_\rho(x, \mu) = f(x) + \mu \max(0,\, 0.5 - x_1)
+  + \frac{\rho}{2}\max(0,\, 0.5 - x_1)^2.
+  \label{eq:auglag}
+\end{equation}
+The multiplier $\mu$ is updated after each inner optimisation as
+$\mu^{(j+1)} = \max\!\bigl(0,\; \mu^{(j)} - \rho\,(x_1^{(j)} - 0.5)\bigr)$,
+where the $\max$ enforces dual feasibility.  Unlike the pure penalty method, $\rho$ can be
+kept moderate (and hence the conditioning bounded) while the multiplier $\mu^{(j)}$ converges
+to the true KKT multiplier $\mu^{\star} = 0$ (since the constraint is inactive here).
+
+\begin{table}[H]
+\centering
+\caption{Q5 extension: Constrained optimisation method comparison.}
+\label{tab:constrained_compare}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Hard feasibility?} & \textbf{Cond.\ penalty} & \textbf{Extra vars} & \textbf{Best for} \\
+\midrule
+Projected GD & Yes (every iter) & None & None & Cheap projection \\
+Penalty & No (only as $\lambda\to\infty$) & $O(\lambda)$ growth & None & Simple setup \\
+Augmented Lagrangian & No (only at convergence) & Bounded $O(\rho)$ & Dual variable $\mu$ & General constraints \\
+Interior Point & Yes (barrier) & None & Slack variables & Large-scale LP/QP \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For the current problem (inactive constraint, $\mu^{\star} = 0$), all methods converge to the
+same point.  The augmented Lagrangian formulation becomes significantly more advantageous when
+the constraint \emph{is} active (i.e.\ the optimum lies on the boundary), since the multiplier
+update correctly identifies a nonzero $\mu^{\star}$ without requiring $\lambda \to \infty$.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm}
 \label{sec:q6}
@@ -1465,6 +1593,40 @@ $\mathcal{X} = \{A : \|A\|_* \leq 1\}$, the LMO requires only one SVD while proj
 requires solving a semidefinite program. Similarly, for the convex hull of a combinatorial
 set (e.g.\ the set of doubly stochastic matrices), the LMO corresponds to solving an
 assignment problem while projection is much harder.
+
+\subsection{Frank--Wolfe Duality Gap as a Convergence Certificate}
+
+A key feature of Frank--Wolfe absent from projected gradient methods is a built-in,
+\emph{computable upper bound} on the suboptimality:
+
+\begin{definition}[Frank--Wolfe Gap]
+  At iterate $x_k \in \mathcal{X}$, the \emph{Frank--Wolfe gap} (or duality gap) is
+  \begin{equation}
+    g_k = \nabla f(x_k)^T (x_k - z_k),
+    \label{eq:fw_gap}
+  \end{equation}
+  where $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$ is the LMO solution.
+\end{definition}
+
+\begin{proposition}
+  For convex $f$, the Frank--Wolfe gap satisfies
+  $f(x_k) - f^{\star} \leq g_k$.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+  By convexity, $f(x^{\star}) \geq f(x_k) + \nabla f(x_k)^T(x^{\star} - x_k)$.
+  Since $z_k$ minimises $\nabla f(x_k)^T z$ over $\mathcal{X} \ni x^{\star}$, we have
+  $\nabla f(x_k)^T z_k \leq \nabla f(x_k)^T x^{\star}$.  Combining:
+  $f^{\star} \geq f(x_k) + \nabla f(x_k)^T(x^{\star} - x_k) \geq
+   f(x_k) + \nabla f(x_k)^T(z_k - x_k) = f(x_k) - g_k$.
+\end{proof}
+
+The gap $g_k$ is computed \emph{for free} at every iteration (the LMO is already evaluated),
+providing a rigorous stopping criterion without knowing $f^{\star}$.  When $g_k < \varepsilon$,
+the iterate is guaranteed $\varepsilon$-optimal.  This contrasts with gradient-based methods
+where $\|\nabla f(x_k)\| < \varepsilon$ is only a first-order stationarity condition, not a
+primal suboptimality bound.  For the interior-optimum experiments, the gap decays
+as $g_k \approx 2LD^2/(k+2)$, consistent with the $O(1/k)$ convergence theorem.
 
 % ============================================================
 \section{Conclusion}
@@ -1700,5 +1862,18 @@ def frank_wolfe(grad_fn, loss_fn, x0, bounds, beta, n_iters):
         f_hist.append(loss_fn(x))
     return np.array(x_hist), np.array(f_hist), np.array(z_hist)
 \end{lstlisting}
+
+% ============================================================
+\newpage
+\begin{thebibliography}{9}
+\bibitem{sag2013}
+  M.~Schmidt, N.~Le~Roux, and F.~Bach,
+  ``Minimizing finite sums with the stochastic average gradient,''
+  \textit{Mathematical Programming}, 162(1), pp.~83--112, 2017.
+\bibitem{svrg2013}
+  R.~Johnson and T.~Zhang,
+  ``Accelerating stochastic gradient descent using predictive variance reduction,''
+  \textit{Advances in Neural Information Processing Systems (NIPS)}, pp.~315--323, 2013.
+\end{thebibliography}
 
 \end{document}
