@@ -782,7 +782,35 @@ For our experiments ($d = 2$, $m = 1000$): GD costs $O(2000)$ per iteration; New
 
 For large $d$ (e.g.\ deep learning with $d \sim 10^7$): the $O(d^3)$ Hessian solve makes exact Newton's method computationally intractable. A ResNet-50 model has $d \approx 2.5 \times 10^7$ parameters, so the Hessian would require $O((2.5 \times 10^7)^3) \approx 10^{22}$ operations per step --- far beyond any foreseeable computational budget. This motivates several approximations:
 
-\textbf{Quasi-Newton (BFGS/L-BFGS):} Maintain a rank-2 approximation $B_k \approx H_k^{-1}$ updated from successive gradient differences (BFGS), or store only the $m \sim 10$--$20$ most recent gradient pairs (L-BFGS, $O(md)$ per step). Achieves superlinear convergence on smooth functions.
+\textbf{Quasi-Newton (BFGS/L-BFGS):} Rather than computing $H_k$ explicitly, BFGS maintains an approximation $B_k \approx H_k^{-1}$ updated via a rank-2 correction:
+\begin{equation}
+B_{k+1} = \left(I - \rho_k s_k y_k^T\right) B_k \left(I - \rho_k y_k s_k^T\right) + \rho_k s_k s_k^T,
+\label{eq:bfgs_update}
+\end{equation}
+where $s_k = x_{k+1} - x_k$, $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$, and $\rho_k = 1/(y_k^T s_k)$. This satisfies the \emph{secant condition} $B_{k+1} y_k = s_k$ (the inverse Hessian approximation maps the gradient change to the step), and preserves positive definiteness when $y_k^T s_k > 0$ (guaranteed by the Wolfe curvature condition). BFGS achieves \emph{superlinear} convergence: $\|x_{k+1} - x^\star\|/\|x_k - x^\star\| \to 0$ without requiring the full Hessian. However, BFGS requires $O(d^2)$ memory for $B_k$.
+
+\textbf{L-BFGS} (Limited-memory BFGS) stores only the $m$ most recent $(s_k, y_k)$ pairs ($m \sim 10$--$20$) and applies the inverse Hessian implicitly via the two-loop recursion (Algorithm~\ref{alg:lbfgs}):
+
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop Recursion (computes $B_k^{(m)} g_k$ without forming $B_k^{(m)}$)}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+\Require Gradient $g_k$, stored pairs $\{(s_j, y_j)\}_{j=k-m}^{k-1}$, $\rho_j = 1/(y_j^T s_j)$
+\State $q \gets g_k$
+\For{$j = k-1, k-2, \ldots, k-m$} \Comment{Backward pass}
+    \State $\alpha_j \gets \rho_j\, s_j^T q$
+    \State $q \gets q - \alpha_j\, y_j$
+\EndFor
+\State $r \gets H_0\, q$ \Comment{Initial Hessian: typically $H_0 = (y_{k-1}^T s_{k-1}) / (y_{k-1}^T y_{k-1}) \cdot I$}
+\For{$j = k-m, \ldots, k-1$} \Comment{Forward pass}
+    \State $\beta_j \gets \rho_j\, y_j^T r$
+    \State $r \gets r + (\alpha_j - \beta_j)\, s_j$
+\EndFor
+\State \Return $r \approx B_k^{(m)} g_k$ \Comment{L-BFGS direction: cost $O(md)$}
+\end{algorithmic}
+\end{algorithm}
+
+L-BFGS costs $O(md)$ per step (with $m \ll d$) and $O(md)$ memory, making it tractable for $d \sim 10^7$ where exact Newton is not. It achieves superlinear convergence and is the default algorithm in scipy's \texttt{minimize} (\texttt{method='L-BFGS-B'}) and TensorFlow's \texttt{ScipyOptimizerInterface}. Achieves superlinear convergence on smooth functions.
 
 \textbf{Newton-CG (Hessian-free):} Solve the Newton system $H_k p = g_k$ approximately using the \emph{conjugate gradient} method, which requires only \emph{Hessian-vector products} $H_k v$ rather than the full Hessian. Hessian-vector products can be computed in $O(d)$ time via forward-mode autodiff (R-operator), making each CG iteration $O(d)$. With $k$ CG steps, the total Newton-CG cost is $O(kd)$, achieving nearly quadratic convergence.
 
