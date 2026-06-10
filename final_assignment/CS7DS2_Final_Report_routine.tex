@@ -508,7 +508,36 @@ Mini-batch SGD on Benchmark~A uses learning rate $\alpha = 0.06$, batch sizes $b
 
 Each mini-batch gradient $g = \frac{1}{b}X_\mathcal{B}^T(X_\mathcal{B}\theta - y_\mathcal{B})$ is an \emph{unbiased} estimator of the full gradient: $\mathbb{E}[g] = \nabla J(\theta)$. Its variance scales as $\mathbb{V}[g] \approx \frac{1}{b}\mathbb{V}[g_{\text{single sample}}]$, so halving the batch size doubles gradient variance. This variance has two consequences: (i) faster convergence per epoch (more updates), and (ii) noisier trajectories near the minimum where the true gradient is small but mini-batch gradients are dominated by noise. The asymptotic loss floor $J_\infty(b)$ satisfies $J_\infty(b) \approx J^\star + O(\alpha/b)$ for fixed step size $\alpha$, meaning smaller batches with fixed $\alpha$ cannot converge below a higher noise floor --- a bias-variance trade-off between batch size and step size. More precisely, near the minimum where $\nabla J(\theta) \approx 0$, the iterate satisfies $\mathbb{E}[\|\theta_k - \theta^{\star}\|^2] \to \frac{\alpha}{2\mu}\sigma_b^2$ where $\sigma_b^2 = \mathbb{V}[g_{\text{batch}}] \propto 1/b$: smaller batches require smaller $\alpha$ to achieve the same asymptotic accuracy. A \emph{learning rate schedule} (decaying $\alpha_k \to 0$ at rate $O(1/k)$) resolves this but requires careful tuning. An alternative is \textbf{Polyak--Ruppert averaging}: run SGD with fixed step $\alpha$ and output the \emph{running average} $\bar{\theta}_k = \frac{1}{k}\sum_{t=1}^k \theta_t$ rather than the last iterate. Ruppert (1988) and Polyak \& Juditsky (1992) showed that $\bar{\theta}_k$ achieves the optimal $O(1/k)$ asymptotic variance even with constant $\alpha$, matching the statistical efficiency of the MLE. This requires no step-size decay, making it practically convenient.
 
-A more recent approach is \textbf{variance reduction}: methods such as SVRG (Johnson \& Zhang, 2013) and SAGA (Defazio et al., 2014) achieve a gradient variance that \emph{decreases to zero} as iterates approach the minimum, combining the per-iteration cheap cost of SGD with the linear convergence of full-batch GD. SVRG achieves $O((m + \kappa) \log(1/\varepsilon))$ total gradient evaluations for $\mu$-strongly convex objectives --- faster than the $O(m\kappa\log(1/\varepsilon))$ cost of SGD and competitive with full-batch GD's $O(m + \kappa\log(1/\varepsilon))$ when $m \gg \kappa$. These methods represent the state-of-the-art for finite-sum optimisation problems common in machine learning.
+A more recent approach is \textbf{variance reduction}: methods such as SVRG (Johnson \& Zhang, 2013) and SAGA (Defazio et al., 2014) achieve a gradient variance that \emph{decreases to zero} as iterates approach the minimum, combining the per-iteration cheap cost of SGD with the linear convergence of full-batch GD.
+
+\textbf{Finite-sum structure.} The machine learning objective has the finite-sum form:
+\begin{equation}
+\min_\theta \frac{1}{m}\sum_{i=1}^m f_i(\theta), \qquad f_i(\theta) = \tfrac{1}{2}(x_i^T\theta - y_i)^2,
+\label{eq:finite_sum}
+\end{equation}
+where each $f_i$ corresponds to one data point. Full-batch GD evaluates all $m$ component gradients per step. SGD evaluates one at cost $O(1)$, but the critical obstacle to linear convergence is that the gradient variance $\mathbb{V}[g_i] = \mathbb{E}_{i}[\|\nabla f_i(\theta) - \nabla F(\theta)\|^2]$ does not vanish at the optimum: even when $\theta = \theta^\star$ and $\nabla F(\theta^\star) = 0$, individual gradients $\nabla f_i(\theta^\star) \neq 0$ due to data heterogeneity. This persistent variance forces SGD to use a decaying step to converge, sacrificing the $O(1)$ per-step cost advantage.
+
+\textbf{SVRG algorithm.} SVRG eliminates this obstacle by periodically computing a full-gradient \emph{anchor} $\tilde{\mu} = \nabla F(\tilde{\theta})$ at a snapshot $\tilde{\theta}$, used as a control variate to cancel most of the stochastic noise:
+
+\begin{algorithm}[H]
+\caption{SVRG (Stochastic Variance Reduced Gradient, Johnson \& Zhang, 2013)}
+\label{alg:svrg}
+\begin{algorithmic}[1]
+\Require Initial $\tilde{\theta}_0$, step $\alpha$, epoch length $m$, outer iterations $S$
+\For{$s = 0, 1, \ldots, S-1$}
+    \State $\tilde{\mu}^s \gets \frac{1}{m}\sum_{i=1}^m \nabla f_i(\tilde{\theta}^s)$ \Comment{Full gradient: cost $O(m)$ once per epoch}
+    \State $\theta_0 \gets \tilde{\theta}^s$
+    \For{$k = 0, 1, \ldots, m-1$}
+        \State Sample $i_k \sim \text{Uniform}(\{1,\ldots,m\})$
+        \State $v_k \gets \nabla f_{i_k}(\theta_k) - \nabla f_{i_k}(\tilde{\theta}^s) + \tilde{\mu}^s$ \Comment{Variance-reduced gradient estimate}
+        \State $\theta_{k+1} \gets \theta_k - \alpha\, v_k$
+    \EndFor
+    \State $\tilde{\theta}^{s+1} \gets \theta_m$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The estimator $v_k$ is unbiased: $\mathbb{E}_{i_k}[v_k] = \nabla F(\theta_k)$. Its variance obeys $\mathbb{V}[v_k] \leq 2L\|\theta_k - \tilde{\theta}^s\|^2$, which \emph{vanishes} as $\theta_k \to \tilde{\theta}^s \to \theta^\star$ across epochs --- unlike SGD whose variance is bounded below by the data heterogeneity even at $\theta^\star$. This is the mechanism behind linear convergence: the control variate $(\nabla f_{i_k}(\tilde{\theta}^s) - \tilde{\mu}^s)$ subtracts away the component of $\nabla f_{i_k}$ that is independent of the current iterate, leaving only the locally informative signal. The total gradient evaluation cost per epoch is $O(m)$ (full gradient) $+ O(m)$ (inner loop) $= O(2m)$. SVRG achieves $O((m + \kappa) \log(1/\varepsilon))$ total evaluations for $\mu$-strongly convex objectives --- faster than the $O(m\kappa\log(1/\varepsilon))$ cost of SGD and competitive with full-batch GD's $O(m\kappa\log(1/\varepsilon))$ when $m \gg \kappa$, since SVRG replaces the factor $m\kappa$ with $(m+\kappa)$. SAGA (Defazio et al., 2014) achieves the same rate with half the memory overhead by maintaining a table of stored gradients instead of a single snapshot. These methods represent the state-of-the-art for finite-sum optimisation problems common in machine learning, and form the foundation for variance-reduced Adam variants (e.g.\ AdaVAR, SpiderAdam) used in modern deep learning.
 
 \begin{figure}[H]
 \centering
