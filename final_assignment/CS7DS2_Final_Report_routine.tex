@@ -469,6 +469,41 @@ across all curvatures.  However, on non-quadratic functions the ``optimal'' para
 from the quadratic analysis may cause divergence, since the local curvature $\mu_i(x)$ varies
 with $x$ and can temporarily violate the stability condition $4\beta < (1+\beta-\alpha\mu_i)^2$.
 
+\noindent\textbf{Polyak step as proximal point approximation.}
+The \emph{proximal point algorithm} (PPA) defines the update
+\begin{equation}
+x_{k+1} = \mathrm{prox}_{\alpha f}(x_k) = \arg\min_{x}\left\{ f(x) + \frac{1}{2\alpha}\|x - x_k\|^2 \right\},
+\end{equation}
+whose first-order optimality condition is $\nabla f(x_{k+1}) + \frac{1}{\alpha}(x_{k+1} - x_k) = 0$,
+or equivalently $x_{k+1} = x_k - \alpha \nabla f(x_{k+1})$ (an \emph{implicit} gradient step evaluated
+at the \emph{new} point).
+The Polyak step, in contrast, evaluates the gradient at the \emph{current} point $x_k$ and selects
+\begin{equation}
+\alpha_k = \frac{f(x_k) - f^{\star}}{\|\nabla f(x_k)\|^2},
+\end{equation}
+which is the step size that exactly reaches the level set $\{f = f^{\star}\}$ if $f$ were linear near $x_k$.
+The connection between the two is clearest for a locally linear objective $f(x) \approx f(x_k) + \nabla f(x_k)^T(x - x_k)$:
+substituting into the PPA objective and minimising gives
+$x_{k+1} = x_k - \alpha \nabla f(x_k)$,
+and setting $f(x_{k+1}) = f^{\star}$ (i.e.\ requiring the linear approximation to reach $f^{\star}$) gives
+$f(x_k) + \nabla f(x_k)^T(-\alpha \nabla f(x_k)) = f^{\star}$, i.e.\
+$\alpha = (f(x_k)-f^{\star})/\|\nabla f(x_k)\|^2$ --- exactly the Polyak step.
+Thus the Polyak step is the \emph{linearised proximal point} step: the PPA with $f$ replaced by its
+first-order Taylor expansion.  This explains:
+\begin{enumerate}[nosep]
+\item \emph{Why Polyak is faster than GD when $f^{\star}$ is known}: the step is exactly calibrated
+  to the current objective gap, automatically choosing a large step far from $x^{\star}$ (large gap)
+  and a small step near $x^{\star}$ (small gap), adapting like a true line search.
+\item \emph{Why Polyak diverges on Benchmark~B ($f^{\star}$ misspecified as 0)}: the denominator
+  $\|\nabla f(x_k)\|^2$ can be small while $f(x_k) - f^{\star}_{\rm wrong}$ is large, inflating
+  the step size beyond stability.  For Benchmark~B with $f^{\star} = 0.7244$ (not 0), the
+  used misspecification gives $\alpha_k \approx (f(x_k) - 0) / \|\nabla f\|^2 > (f(x_k) - f^{\star})/\|\nabla f\|^2$,
+  producing an overshoot on each step.
+\item \emph{Connection to PL condition}: for PL functions, the gap $f(x) - f^{\star} \leq \|\nabla f\|^2/(2\mu)$,
+  so $\alpha_k = (f-f^{\star})/\|\nabla f\|^2 \leq 1/(2\mu)$, automatically staying within the
+  stability bound for GD ($\alpha < 1/L$ if $\mu \leq L$).
+\end{enumerate}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1268,6 +1303,65 @@ For the experiments here, the fixed damping $\alpha = 0.22$ on Rosenbrock plays 
 line search: it was selected empirically to pass the narrow valley without overshooting,
 but an adaptive line search would generalise better to other starting points.
 
+\noindent\textbf{Trust-region interpretation of Tikhonov regularisation.}
+The damped Newton direction $p_\lambda = -(H_k + \lambda I)^{-1}g_k$ has a precise
+geometric interpretation as the solution to a \emph{trust-region subproblem}:
+\begin{equation}
+p_\lambda = \arg\min_{\|p\| \leq \Delta_\lambda}\left\{ g_k^T p + \tfrac{1}{2} p^T H_k p \right\},
+\end{equation}
+where $\Delta_\lambda = \|p_\lambda\|$ is the trust-region radius implied by $\lambda$.
+This follows from the KKT conditions of the trust-region problem: the Lagrangian is
+$\mathcal{L}(p, \lambda) = g_k^T p + \frac{1}{2}p^T H_k p + \frac{\lambda}{2}(\|p\|^2 - \Delta^2)$,
+whose stationarity gives $(H_k + \lambda I)p = -g_k$.
+Thus regularising $H$ by $\lambda I$ is \emph{equivalent} to restricting the Newton step to a
+Euclidean ball of radius $\Delta_\lambda = \|(H_k + \lambda I)^{-1}g_k\|$.
+As $\lambda \to 0$, $\Delta_\lambda \to \infty$ (full Newton step, no restriction);
+as $\lambda \to \infty$, $\Delta_\lambda \to 0$ and $p_\lambda \to -(g_k/\lambda)$ (short gradient step).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_trust_region.pdf}
+\caption{Q3: Trust-region interpretation of Tikhonov-regularised Newton.
+\emph{Left}: For a $2\times 2$ quadratic with $\kappa = 10$, the damped Newton steps
+$p_\lambda = -(H+\lambda I)^{-1}g$ for varying $\lambda$ trace a path from the full Newton step
+($\lambda = 0$) towards the steepest-descent direction ($\lambda \to \infty$).
+The dashed circle shows the trust-region ball of radius $\Delta_\lambda = \|p_\lambda\|$
+for $\lambda = 2$: the damped step is the solution to minimising the quadratic model
+subject to $\|p\| \leq \Delta_\lambda$.
+\emph{Right}: Step norm $\|p_\lambda\|$ as a function of $\lambda$ (blue, left axis).
+Increasing $\lambda$ shrinks the step monotonically; the Tikhonov path traces out all
+feasible trust radii $\Delta \in [0, \|p_{\rm Newton}\|]$.}
+\label{fig:q3_trust_region}
+\end{figure}
+
+\noindent\textbf{Adaptive trust-region strategy.}
+Rather than fixing $\lambda$ in advance, adaptive trust-region methods update $\Delta_k$ based
+on the ratio of actual to predicted decrease:
+\begin{equation}
+\rho_k = \frac{f(x_k) - f(x_k + p_k)}{m_k(0) - m_k(p_k)},
+\end{equation}
+where $m_k(p) = f(x_k) + g_k^T p + \frac{1}{2}p^T H_k p$ is the quadratic model.
+If $\rho_k > \eta_2 > 0$ (model is very accurate): expand $\Delta_{k+1} \gets 2\Delta_k$.
+If $\rho_k < \eta_1 \approx 0.1$ (poor model): shrink $\Delta_{k+1} \gets \Delta_k / 4$ and reject the step.
+This guarantees global convergence while the quadratic model is valid and automatically
+transitions to the ``global phase'' when far from the optimum.
+For Benchmark~C (Rosenbrock), $\rho_k$ would be small in early iterations (rapidly changing Hessian)
+and approach 1 as $x_k$ enters the quadratic convergence ball, naturally reducing $\lambda$
+(increasing $\Delta$) as progress accelerates.
+
+\noindent\textbf{Cubic regularisation (Nesterov--Polyak 2006).}
+A more principled alternative to trust-region methods adds a cubic term directly to the model:
+\begin{equation}
+p_k^{\rm cubic} = \arg\min_{p}\left\{ g_k^T p + \tfrac{1}{2}p^T H_k p + \frac{M}{6}\|p\|^3 \right\},
+\end{equation}
+achieving the optimal $O(\varepsilon^{-3/2})$ oracle complexity for finding an $\varepsilon$-second-order
+stationary point (vs.\ Newton's $O(\varepsilon^{-3})$ in the non-convex setting, or requiring starting
+inside the quadratic convergence ball for superlinear rates).  The cubic term automatically adapts:
+far from $x^{\star}$ where $\|p\|$ is large, the cubic dominates and provides a gradient-like
+regularisation; near $x^{\star}$ where $\|p\| \to 0$, the cubic term vanishes and Newton's quadratic
+rate is recovered.  This unifies the ``global phase'' and ``local quadratic convergence phase''
+into a single algorithm --- a theoretical improvement over the damped Newton used in this assignment.
+
 \subsection{Convergence Comparison}
 
 \begin{figure}[H]
@@ -1963,6 +2057,85 @@ $\sim\!10$ iterations; $\lambda = 1.8$ takes $\sim\!20$ iterations; $\lambda = 0
 residual violation throughout, never fully entering the feasible region.}
 \label{fig:q5_violation}
 \end{figure}
+
+\subsection{Subgradient Methods for Non-Smooth Objectives}
+
+The constrained problems in Q5 involve smooth $f$ with polyhedral constraints, so projected GD
+applies.  However, many practical problems involve \emph{non-smooth} objectives --- the gradient
+$\nabla f$ does not exist everywhere.  Examples include:
+\begin{itemize}[nosep]
+\item \textbf{$\ell^1$ regression} (robust regression): $f(x) = \|Ax - b\|_1 = \sum_i |a_i^T x - b_i|$.
+\item \textbf{Lasso} (sparse linear regression): $f(x) = \tfrac{1}{2}\|Ax-b\|^2 + \mu\|x\|_1$.
+\item \textbf{Support Vector Machine}: $f(x) = \frac{1}{n}\sum_i \max(0, 1 - y_i a_i^T x) + \frac{\lambda}{2}\|x\|^2$.
+\end{itemize}
+
+\noindent\textbf{Subgradient definition.}
+For convex $f$, the \emph{subdifferential} $\partial f(x)$ is the set of all subgradients:
+$s \in \partial f(x)$ iff $f(y) \geq f(x) + s^T(y - x)$ for all $y$.
+For smooth $f$, $\partial f(x) = \{\nabla f(x)\}$ (singleton).
+For $f(x) = |x|$ (1D): $\partial |x| = \{\text{sign}(x)\}$ for $x \neq 0$ and $[-1, 1]$ for $x = 0$.
+For $f(x) = \|x\|_1$: $(\partial \|x\|_1)_i = \text{sign}(x_i)$ if $x_i \neq 0$, $[-1,1]$ if $x_i = 0$.
+
+\noindent\textbf{Subgradient method.}
+Choose any $s_k \in \partial f(x_k)$ and update:
+\begin{equation}
+x_{k+1} = x_k - \alpha_k s_k.
+\end{equation}
+Critical differences from smooth GD:
+\begin{enumerate}[nosep]
+\item \emph{No descent property}: $f(x_{k+1})$ can exceed $f(x_k)$.  The method must track the
+  \emph{best iterate}: $x_k^{\rm best} = \arg\min_{j \leq k} f(x_j)$.
+\item \emph{Convergence rate}: for convex $f$ with $\|s\|_2 \leq G$ and $\|x_0 - x^{\star}\| \leq R$,
+  using step $\alpha_k = R/(G\sqrt{k})$:
+  \begin{equation}
+  f(x_k^{\rm best}) - f^{\star} \leq \frac{RG}{\sqrt{k}},
+  \end{equation}
+  achieving $O(1/\sqrt{k})$ --- slower than GD's $O(1/k)$ for smooth problems.
+  This rate is \emph{tight}: the subgradient method achieves the information-theoretic lower bound
+  $\Omega(1/\sqrt{k})$ for non-smooth convex optimisation.
+\item \emph{Optimal step choice}: diminishing steps $\alpha_k \to 0$ with $\sum \alpha_k = \infty$
+  and $\sum \alpha_k^2 < \infty$ (e.g.\ $\alpha_k = c/\sqrt{k}$) are required for convergence.
+  A constant step does \emph{not} converge to $x^{\star}$ even for strongly convex $f$
+  (unlike gradient descent, which converges with constant step for smooth problems).
+\end{enumerate}
+
+\noindent\textbf{Proximal operator as subgradient step.}
+For composite objectives $h(x) = f(x) + g(x)$ with $f$ smooth and $g$ non-smooth but
+\emph{proximal-friendly} (the prox operator has a closed form), the \emph{proximal gradient}
+method is far superior to the subgradient method:
+\begin{equation}
+x_{k+1} = \mathrm{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)),
+\quad \mathrm{prox}_{\alpha g}(v) = \arg\min_x\left\{g(x) + \frac{1}{2\alpha}\|x-v\|^2\right\}.
+\end{equation}
+For the Lasso ($g = \mu\|\cdot\|_1$), $\mathrm{prox}_{\alpha\mu\|\cdot\|_1}(v)_i = \text{sign}(v_i)\max(|v_i| - \alpha\mu, 0)$
+--- the \emph{soft-thresholding} operator.  This allows ISTA/FISTA to achieve the $O(1/k)$ / $O(1/k^2)$
+convergence of smooth GD / Nesterov, bypassing the $O(1/\sqrt{k})$ barrier of the subgradient method.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_subgradient_prox.pdf}
+\caption{Q5: Subgradient and proximal operator theory.
+\emph{Left}: Convergence comparison of projected GD (smooth, $O(1/k)$) vs subgradient method
+(non-smooth best-iterate tracking, $O(1/\sqrt{k})$ theory) on a benchmark objective with
+$f^{\star} = 0.7244$.  The subgradient method's non-monotone iterates require tracking
+the best iterate, which converges at the slower $O(1/\sqrt{k})$ rate.
+\emph{Right}: Soft-thresholding operator $\mathrm{prox}_{\mu\|\cdot\|_1}(v) = \text{sign}(v)\max(|v|-\mu, 0)$
+for three values of $\mu$.  The ``dead zone'' $|v| \leq \mu$ maps to zero (sparsity-inducing
+property): small coefficients are set to exactly zero, producing the sparse solutions that
+make Lasso/ISTA methods effective for high-dimensional regression.}
+\label{fig:q5_subgrad}
+\end{figure}
+
+\noindent\textbf{Relevance to Q5 constraint.}
+The halfspace constraint $\{x_1 \geq 0.5\}$ has indicator $g(x) = \mathbf{1}_{x_1 < 0.5}\cdot\infty$,
+whose subdifferential at a feasible boundary point $(x_1 = 0.5, x_2)$ is
+$\partial g(x) \ni \{-\lambda e_1 : \lambda \geq 0\}$ (outward-pointing normal cone).
+The prox operator of $\alpha g$ is exactly the projection $\Pi_{\mathcal{X}}$, so projected GD
+\emph{is} the proximal gradient method for $h = f + g$ with $g = $ indicator.
+The subgradient alternative (using any $s \in \partial(f + g)(x_k)$) achieves only $O(1/\sqrt{k})$
+convergence, while projected GD (leveraging the prox structure) achieves the $O(1/k)$ rate of
+smooth gradient descent.  This is why proximal methods are strongly preferred over the subgradient
+method whenever $\mathrm{prox}_g$ is available in closed form.
 
 \subsection{Comparative Discussion}
 
