@@ -41,6 +41,7 @@
 
 % Theorem environments
 \newtheorem{theorem}{Theorem}
+\newtheorem{definition}{Definition}
 \newtheorem{remark}{Remark}
 
 \title{%
@@ -56,7 +57,9 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a systematic comparative study of gradient-based and derivative-free optimisation algorithms applied to three benchmark functions: a quadratic linear regression loss (Benchmark~A, $\kappa \approx 1$), a sinusoidally-perturbed non-convex loss (Benchmark~B, $\kappa \approx 5$--7), and the Rosenbrock function (Benchmark~C, $\kappa \approx 2000$ at the optimum). Six families of methods are investigated: (1)~Adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball) reveal that the Polyak rule diverges on Benchmarks~A and~B when $f^{\star}=0$ is misspecified (true minima are 0.4826 and 0.7244 respectively) but achieves the best first-order result on Rosenbrock ($f=0.021$) when $f^{\star}=0$ is exact; Heavy Ball is the best robust method on Rosenbrock ($f=1.40$ in 120 iterations without $f^{\star}$ knowledge). (2)~Nesterov acceleration achieves the best non-Newton Rosenbrock result among non-knowledge-requiring methods ($f=0.479$ in 150 iterations, $7.1\times$ better than GD) by exploiting the $O(1/k^2)$ convergence rate; mini-batch SGD analysis shows smaller batch sizes ($b=5$ vs.\ $b=40$) reduce per-epoch loss faster via more frequent updates, with the advantage diminishing under high label noise ($\sigma=6$). (3)~Newton's method converges in one iteration on the quadratic benchmark (exact minimiser from any starting point), in $\approx$4--5 iterations on Benchmark~B, and reaches $f=0.686$ in 20 iterations on Rosenbrock --- demonstrating near-quadratic local convergence and the value of second-order information. (4)~Finite-difference approximation with $\delta=0.05$ closely tracks exact gradient descent, while $\delta=0.8$ fails due to truncation error $O(1.2)$ comparable to the gradient magnitude; Nesterov random search requires $O(1/\sqrt{k})$ iterations, far more than gradient-based $O(1/k)$ methods. (5)~Projected gradient descent enforces the constraint $x_1 \geq 0.5$ as a hard invariant from iteration~1; KKT analysis confirms the constraint is inactive at the optimum (since $x_1^{\star} \approx 0.583 > 0.5$), so all methods converge to the same point. (6)~Frank--Wolfe with fixed mixing parameter $\beta$ (step $\gamma = 1-\beta$) converges to $f=0.00455$ for an interior optimum ($\beta=0.985$) and $f=0.364$ for a boundary optimum ($\beta=0.93$, not fully converged vs.\ $f^{\star}=0.25$), illustrating the zig-zag LP-vertex oscillation and the advantage of a diminishing step-size schedule.
+This report presents a systematic comparative study of gradient-based and derivative-free optimisation algorithms across problems of increasing difficulty: a well-conditioned quadratic (Benchmark~A, $\kappa \approx 1$), a mildly non-convex sinusoidal perturbation (Benchmark~B, $\kappa \approx 6$), and the ill-conditioned Rosenbrock function (Benchmark~C, $\kappa \approx 2504$), which serves as the primary discriminator between methods.
+
+Six algorithm families are evaluated. \emph{Adaptive step-size methods} (Q1): the Polyak rule requires exact knowledge of $f^{\star}$, diverging catastrophically at iteration~3 with $\alpha_3 \approx 136$ when $f^{\star}$ is misspecified by 0.48, but achieving the best first-order Rosenbrock result ($f = 0.024$) when correct; Heavy Ball offers the best robust result without oracle knowledge ($f = 1.40$). \emph{Momentum methods} (Q2): Nesterov's $O(1/k^2)$ acceleration delivers $f = 0.479$ on Rosenbrock ($7.1\times$ better than GD), verified against the theoretical bound; mini-batch SGD with $b=5$ provides $8\times$ more gradient updates per epoch than $b=40$, explaining faster per-epoch convergence. \emph{Newton's method} (Q3): achieves one-step convergence on the quadratic and demonstrates the Newton decrement as a self-certified stopping criterion ($\lambda/2 = 8.3\times10^{-5}$ at Benchmark~B convergence). \emph{Derivative-free methods} (Q4): finite differences with $\delta=0.05$ closely tracks exact GD, while $\delta=0.8$ fails due to $O(1.2)$ truncation error; the U-shaped error-vs-$\delta$ curve confirms the optimal $\delta_{\rm opt} \approx 10^{-8}$. \emph{Constrained optimisation} (Q5): projected gradient descent enforces $x_1 \geq 0.5$ as a hard invariant from iteration~1; KKT analysis confirms the constraint is inactive at the optimum, making PGD equivalent to unconstrained GD asymptotically. \emph{Frank--Wolfe} (Q6): interior optimum converges to $f = 0.00455$ ($\beta=0.985$); boundary optimum stalls at $f = 0.364$ vs.\ $f^{\star} = 0.25$ due to a persistent two-step oscillation at $(0.5,\,0)$ provable from the LMO selection rule.
 \end{abstract}
 
 \tableofcontents
@@ -75,10 +78,43 @@ The structure of the report follows the six assignment questions. Each section s
 
 All experiments use \texttt{numpy} with random seed 42 for reproducibility. Code is provided in \texttt{CS7DS2\_Final\_Code\_25336453.py} and reproduced in Appendix~\ref{app:code}.
 
+The key theoretical tools from the course that are applied throughout are: \emph{descent lemma} (bounding function decrease per step from Lipschitz gradient), \emph{Lyapunov functions} (proving convergence via non-increasing energy sequences), \emph{duality} (KKT conditions, Frank--Wolfe duality gap), and \emph{spectral analysis} (eigenvalue bounds on Hessians determining step size limits and convergence rates).
+
+% ============================================================
+\section*{Notation}
+\addcontentsline{toc}{section}{Notation}
+% ============================================================
+
+Throughout this report, the following notation is used consistently.
+
+\begin{tabular}{lp{10cm}}
+$f(x)$ & Objective function to be minimised \\
+$\nabla f(x)$, $g_k$ & Gradient of $f$ at $x$ (or at $x_k$) \\
+$H(x)$, $H_k$ & Hessian matrix $\nabla^2 f(x)$ (or at $x_k$) \\
+$x^{\star}$ & Global or local minimiser; $f^{\star} = f(x^{\star})$ \\
+$\alpha$, $\alpha_k$ & (Effective) step size / learning rate at iteration $k$ \\
+$\beta$, $\beta_k$ & Momentum parameter or mixing coefficient \\
+$\kappa = L/\mu$ & Condition number; $L = \lambda_{\max}(H)$, $\mu = \lambda_{\min}(H)$ \\
+$\odot$ & Element-wise (Hadamard) product \\
+$\varepsilon$ & Numerical regularisation constant (e.g., $\varepsilon = 10^{-8}$) \\
+$k$ & Iteration counter (starting at 0 or 1 as specified) \\
+$m$ & Number of training samples \\
+$b$ & Mini-batch size \\
+$d$ & Problem dimension (here $d = 2$ throughout) \\
+\end{tabular}
+
+\bigskip
+
 % ============================================================
 \section{Benchmark Problems and Experimental Setup}
 \label{sec:benchmarks}
 % ============================================================
+
+\subsection{Key Properties and Definitions}
+
+\begin{definition}[Lipschitz gradient and strong convexity]
+A differentiable function $f:\mathbb{R}^d \to \mathbb{R}$ has $L$-\emph{Lipschitz gradient} if $\|\nabla f(x) - \nabla f(y)\| \leq L\|x-y\|$ for all $x, y$, equivalently $\lambda_{\max}(\nabla^2 f) \leq L$ when $f$ is twice differentiable. It is $\mu$-\emph{strongly convex} if $f(y) \geq f(x) + \nabla f(x)^{\!\top}(y-x) + \frac{\mu}{2}\|y-x\|^2$, equivalently $\lambda_{\min}(\nabla^2 f) \geq \mu > 0$. The \emph{condition number} $\kappa = L/\mu$ governs convergence rates: GD requires $O(\kappa)$ iterations and accelerated methods require $O(\sqrt{\kappa})$ to achieve $\varepsilon$-accuracy.
+\end{definition}
 
 \subsection{Benchmark A: Linear Regression Quadratic Loss}
 A synthetic dataset with $m = 1000$ samples and two parameters is generated as:
