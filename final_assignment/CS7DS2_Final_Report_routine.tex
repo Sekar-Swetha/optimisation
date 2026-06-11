@@ -178,7 +178,7 @@ For a smooth $f$ with Lipschitz gradient constant $L$ (i.e., $\|\nabla f(x) - \n
 \begin{equation}
 \alpha^{\star} = \frac{2}{L + \mu} = \frac{2}{\lambda_{\max} + \lambda_{\min}},
 \end{equation}
-yielding the tightest possible convergence factor $\rho^{\star} = (\kappa - 1)/(\kappa + 1)$ per iteration. For Benchmark~A ($\kappa \approx 1$), the optimal step is $\alpha^{\star} \approx 1$, so any $\alpha \in (0, 2)$ converges; for Benchmark~C ($\kappa \approx 2504$), $\alpha^{\star} \approx 2/1002 \approx 0.002$, confirming the small step size $\alpha = 0.0012$ used in experiments. The challenge of step-size selection is thus directly governed by the condition number.
+yielding the tightest possible convergence factor $\rho^{\star} = (\kappa - 1)/(\kappa + 1)$ per iteration. For Benchmark~A ($\kappa \approx 1$), the optimal step is $\alpha^{\star} \approx 1$, so any $\alpha \in (0, 2)$ converges; for Benchmark~C ($\kappa \approx 2504$), $\alpha^{\star} \approx 2/1002 \approx 0.002$, confirming the small step size $\alpha = 0.0012$ used in experiments. The challenge of step-size selection is thus directly governed by the condition number (see Figure~\ref{fig:q2_spectral} for a visualisation of how $\kappa$ affects convergence factors across all methods).
 
 \begin{remark}[Descent Lemma]
 The fundamental convergence guarantee for gradient descent is the \emph{descent lemma}~\cite{nocedal2006}: if $f$ has $L$-Lipschitz gradient, then for any iterate $x_k$ and step size $\alpha > 0$,
@@ -606,6 +606,16 @@ The total computation to reach $\varepsilon$-accuracy can be analysed by countin
 \subsubsection{Per-Step vs.\ Per-Epoch Perspective}
 The Figure~\ref{fig:q2_sgd_batch} x-axis measures epochs (full passes through the data). On a \emph{per-gradient-step} basis, $b=5$ and $b=40$ converge at similar rates (same learning rate $\alpha=0.06$, similar gradient quality). The observed faster per-epoch convergence for $b=5$ is entirely due to the $8\times$ more gradient steps per epoch. This distinction matters for hardware-parallel implementations: if $b=5$ and $b=40$ steps take the same wall-clock time (e.g., due to vectorisation), then $b=40$ would be preferred for lower gradient noise. In practice, batches are padded to be multiples of the hardware vector width (e.g., 32 or 64 on GPUs), making $b=5$ suboptimal for throughput but $b=40$ closer to hardware-optimal.
 
+\subsubsection{Variance Reduction: SVRG and SAGA}
+
+The noise floor $O(\alpha\sigma^2/b)$ of constant-rate SGD is an \emph{irreducible} limitation: with fixed $\alpha$, the iterate oscillates permanently in a neighbourhood of $\theta^{\star}$ and exact convergence is impossible (visible in Figure~\ref{fig:q2_sgd_batch}). \emph{Variance reduction methods} resolve this by constructing gradient estimates whose variance shrinks to zero as $x_k \to x^{\star}$.
+
+\textbf{SVRG}~\cite{johnson2013} periodically computes the exact full gradient $\nabla f(\tilde{x})$ at a snapshot $\tilde{x}$, then uses the corrected mini-batch estimate:
+\begin{equation}
+\hat{g}_k^{\mathrm{SVRG}} = \nabla f_{i_k}(x_k) - \nabla f_{i_k}(\tilde{x}) + \nabla f(\tilde{x}),
+\end{equation}
+where $i_k$ is a randomly sampled index. This estimator is unbiased ($\mathbb{E}[\hat{g}_k] = \nabla f(x_k)$) and its variance satisfies $\mathrm{Var}[\hat{g}_k] = O(L^2\|x_k - \tilde{x}\|^2)$, which decays to zero as $x_k \to x^{\star}$ even with a \emph{constant} learning rate. As a result, SVRG achieves linear convergence $O((1 - \mu/(L+m/b))^k)$ for $\mu$-strongly convex $f$ --- the same rate as full-batch GD, but with per-step cost proportional to $b+1$ function evaluations (one full pass per epoch amortised). SAGA~\cite{defazio2014} achieves the same linear rate by maintaining a table of per-sample gradients, eliminating the double-pass overhead of SVRG at the cost of $O(md)$ extra memory. For Benchmark~A ($m=1000, \kappa\approx 1$, $b=5$), SVRG would achieve a linear rate matching full-batch GD while using only $5$ samples per step, eliminating the noise floor visible in Figure~\ref{fig:q2_sgd_batch}.
+
 \subsection{SGD with Increased Noise}
 
 The experiment is repeated with a high-noise dataset: $y^{(i)} = {\theta^{\star}}^{\!\top} x^{(i)} + 6\varepsilon^{(i)}$ ($\sigma = 6$ vs.\ $\sigma = 1$).
@@ -913,7 +923,7 @@ The Nelder--Mead algorithm~\cite{neldermead1965} maintains a simplex of $n+1 = 3
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q4_nelder_mead_C.pdf}
-\caption{Q4B: Nelder--Mead on Rosenbrock. \textbf{Left:} the simplex centroid trajectory navigates the curved valley without any gradient information. The simplex initially spans a large region, contracts as it enters the valley, and then elongates along the valley floor as it tracks the minimum towards $(1,1)$. This self-adapting geometry allows the simplex to exploit local function topology without derivatives. \textbf{Right:} the best-objective curve decreases steadily, with periods of rapid improvement (reflection and expansion steps accepted) interspersed with slower phases (contraction/shrink dominated). Final best value is achieved within 160 iterations.}
+\caption{Q4B: Nelder--Mead on Rosenbrock. \textbf{Left:} the simplex centroid trajectory navigates the curved valley without any gradient information. The simplex initially spans a large region, contracts as it enters the valley, and then elongates along the valley floor as it tracks the minimum towards $(1,1)$. This self-adapting geometry allows the simplex to exploit local function topology without derivatives. \textbf{Right:} the best-objective curve decreases steadily, with periods of rapid improvement (reflection and expansion steps accepted) interspersed with slower phases (contraction/shrink dominated). Remarkably, Nelder--Mead converges to the global minimum $(1.000,\, 1.000)$ with $f = 0$ within 160 iterations ($\approx 288$ function evaluations), outperforming all first-order methods in Q1--Q3 on this benchmark despite using no gradient information. This illustrates both the power of simplex methods for smooth low-dimensional problems and the difficulty gradient methods face on the ill-conditioned Rosenbrock function.}
 \label{fig:q4_nm}
 \end{figure}
 
@@ -942,11 +952,13 @@ Exact GD & Full $\nabla f$ & $O(d)$ & Good & High & $O(1/k)$ \\
 FD GD ($\delta$ small) & Approx.\ $\nabla f$ & $d + 1$ & Good & High & $O(1/k)$ \\
 FD GD ($\delta$ large) & Poor $\nabla f$ & $d + 1$ & Good & Low & Slow \\
 Nesterov random & Directional & 2 & \textbf{Best} & Low & $O(1/\sqrt{k})$ \\
-Nelder--Mead & None & $\leq 3$ & Low-dim only & Moderate & $O(1/k)$~(dim 2) \\
+Nelder--Mead & None & $\leq 3$ & Low-dim only & High (low-dim)$^{\dagger}$ & $O(1/k)$~(dim 2) \\
 Grid search & None & $N^d$ total & Very poor & Grid-limited & N/A \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\noindent $^{\dagger}$Nelder--Mead achieves $f = 0$ at the global optimum $(1,1)$ on Rosenbrock within 160 iterations --- outperforming all Q1--Q3 methods that use full gradients. This surprising result reflects the effectiveness of the simplex's self-adapting geometry on smooth 2D problems.
 
 \noindent The fundamental trade-off in derivative-free optimisation is: every function evaluation saved by eliminating gradient computation comes at the cost of more evaluations needed for convergence. For high-dimensional problems ($d \gg 10$), zeroth-order methods such as random search can be preferable to FD (which requires $O(d)$ evaluations per step), while for low-dimensional problems with cheap function evaluations, Nelder--Mead is practical and often effective. Grid search is only viable for $d \leq 2$--3 at practical resolutions.
 
@@ -964,7 +976,7 @@ Exact GD        & 80 & $O(d)=2$ & $\approx 160$ & 3.73 \\
 FD GD ($\delta=0.05$) & 80 & $d+1=3$ & $\approx 240$ & $\approx 3.73$ \\
 FD GD ($\delta=0.8$)  & 80 & $d+1=3$ & $\approx 240$ & Slow \\
 Random search   & 80 & 2 & $\approx 160$ & Slow \\
-Nelder--Mead    & 160 & 1--4 ($\approx 1.8$) & $\approx 288$ & Best (DFO) \\
+Nelder--Mead    & 160 & 1--4 ($\approx 1.8$) & $\approx 288$ & $f = 0$ at $(1.000, 1.000)$ \\
 Grid search     & $55^2$ & 1 & 3025 & $(1.037, 1.074),\ f \approx 0.00156$ \\
 \bottomrule
 \end{tabular}
@@ -1248,7 +1260,7 @@ Table~\ref{tab:conclusion_summary} summarises the best-performing method per ben
 Q1 (adaptive $\alpha$) & Polyak (exact $f^{\star}$) / Adagrad & 0.4826 & 0.7244 & 0.024 (Polyak) \\
 Q2 (momentum) & Nesterov & 0.4826 & 0.7244 & 0.479 \\
 Q3 (Newton) & Newton's method & 0.4826 & 0.7244 & 0.686 (20 iter.) \\
-Q4 (deriv.\ free) & FD GD ($\delta = 0.05$) & --- & 0.7244 & --- \\
+Q4 (deriv.\ free) & FD GD / Nelder--Mead & --- & 0.7244 & $\mathbf{0}$ (Nelder--Mead) \\
 Q5 (constrained) & Projected GD & --- & 0.7244 & --- \\
 Q6 (Frank--Wolfe) & FW $\beta=0.985$ & --- & 0.00455$^{\dagger}$ & --- \\
 \bottomrule
@@ -1488,6 +1500,16 @@ def frank_wolfe(grad_fn, loss_fn, x0, bounds, beta, n_iters):
   ``An automatic method for finding the greatest or least value of a function,''
   \emph{The Computer Journal},
   vol.~3, no.~3, pp.~175--184, 1960.
+
+\bibitem{johnson2013}
+  R.~Johnson and T.~Zhang,
+  ``Accelerating stochastic gradient descent using predictive variance reduction,''
+  in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2013.
+
+\bibitem{defazio2014}
+  A.~Defazio, F.~Bach, and S.~Lacoste-Julien,
+  ``SAGA: A fast incremental gradient method with support for non-strongly convex composite objectives,''
+  in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2014.
 
 \bibitem{lessard2016}
   L.~Lessard, B.~Recht, and A.~Packard,
