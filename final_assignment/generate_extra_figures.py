@@ -496,7 +496,7 @@ fig, ax = plt.subplots(figsize=(8, 5))
 ax.loglog(deltas, fd_errors, 'b-', lw=2, label='FD gradient error $\\|\\hat{g} - g\\|$')
 ax.axvline(0.05, color='g', linestyle='--', lw=1.5, label='$\\delta = 0.05$ (used, good)')
 ax.axvline(0.8, color='r', linestyle='--', lw=1.5, label='$\\delta = 0.8$ (used, poor)')
-ax.axvline(1e-5, color='orange', linestyle=':', lw=1.5, label='Near-optimal $\\delta \\approx 10^{-5}$')
+ax.axvline(1.26e-8, color='orange', linestyle=':', lw=1.5, label='Near-optimal $\\delta \\approx 1.3\\times 10^{-8}$')
 
 # Mark optimal delta region
 opt_idx = np.argmin(fd_errors)
