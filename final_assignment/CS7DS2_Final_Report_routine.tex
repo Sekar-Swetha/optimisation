@@ -55,7 +55,7 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a systematic comparative study of gradient-based and derivative-free optimisation algorithms applied to three benchmark functions: a quadratic linear regression loss (Benchmark~A), a non-convex toy neural network loss (Benchmark~B), and the highly ill-conditioned Rosenbrock function (Benchmark~C). Six families of methods are investigated across six questions: (1)~adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball), demonstrating how $f^{\star}$ misspecification causes Polyak divergence and how adaptive coordinate scaling aids convergence on anisotropic problems; (2)~momentum and stochastic methods (Nesterov acceleration, Adam, mini-batch SGD), where Nesterov achieves the best Rosenbrock convergence ($f=0.479$ vs.\ GD's $f=3.388$) and smaller batches reduce per-epoch loss faster at the cost of greater oscillation; (3)~Newton's method, which converges in one iteration on the quadratic benchmark and dramatically outpaces gradient descent on Rosenbrock using local curvature; (4)~derivative-free methods (finite differences, Nesterov random search, Nelder--Mead, grid search), illustrating how $\delta$-selection governs finite-difference accuracy and why zeroth-order methods sacrifice convergence speed for gradient-free operation; (5)~constrained optimisation via projected gradient descent and penalty methods, showing that projection enforces hard feasibility immediately while penalty methods require careful $\lambda$ tuning; and (6)~the Frank--Wolfe algorithm for box-constrained problems, which eliminates the need for explicit projection by replacing gradient steps with linear-programme subproblems. Experimental results confirm theoretical convergence predictions: Newton's method exhibits near-quadratic convergence, Nesterov achieves $O(1/k^2)$ rates on convex problems, and Frank--Wolfe converges at $O(1/k)$ for the interior-optimum case.
+This report presents a systematic comparative study of gradient-based and derivative-free optimisation algorithms applied to three benchmark functions: a quadratic linear regression loss (Benchmark~A, $\kappa \approx 1$), a sinusoidally-perturbed non-convex loss (Benchmark~B, $\kappa \approx 5$--7), and the Rosenbrock function (Benchmark~C, $\kappa \approx 2000$ at the optimum). Six families of methods are investigated: (1)~Adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball) reveal that the Polyak rule diverges on Benchmarks~A and~B when $f^{\star}=0$ is misspecified (true minima are 0.4826 and 0.7244 respectively) but achieves the best first-order result on Rosenbrock ($f=0.021$) when $f^{\star}=0$ is exact; Heavy Ball is the best robust method on Rosenbrock ($f=1.40$ in 120 iterations without $f^{\star}$ knowledge). (2)~Nesterov acceleration achieves the best non-Newton Rosenbrock result among non-knowledge-requiring methods ($f=0.479$ in 150 iterations, $7.1\times$ better than GD) by exploiting the $O(1/k^2)$ convergence rate; mini-batch SGD analysis shows smaller batch sizes ($b=5$ vs.\ $b=40$) reduce per-epoch loss faster via more frequent updates, with the advantage diminishing under high label noise ($\sigma=6$). (3)~Newton's method converges in one iteration on the quadratic benchmark (exact minimiser from any starting point), in $\approx$4--5 iterations on Benchmark~B, and reaches $f=0.686$ in 20 iterations on Rosenbrock --- demonstrating near-quadratic local convergence and the value of second-order information. (4)~Finite-difference approximation with $\delta=0.05$ closely tracks exact gradient descent, while $\delta=0.8$ fails due to truncation error $O(1.2)$ comparable to the gradient magnitude; Nesterov random search requires $O(1/\sqrt{k})$ iterations, far more than gradient-based $O(1/k)$ methods. (5)~Projected gradient descent enforces the constraint $x_1 \geq 0.5$ as a hard invariant from iteration~1; KKT analysis confirms the constraint is inactive at the optimum (since $x_1^{\star} \approx 0.583 > 0.5$), so all methods converge to the same point. (6)~Frank--Wolfe with fixed mixing parameter $\beta$ (step $\gamma = 1-\beta$) converges to $f=0.00455$ for an interior optimum ($\beta=0.985$) and $f=0.364$ for a boundary optimum ($\beta=0.93$, not fully converged vs.\ $f^{\star}=0.25$), illustrating the zig-zag LP-vertex oscillation and the advantage of a diminishing step-size schedule.
 \end{abstract}
 
 \tableofcontents
@@ -167,7 +167,7 @@ Four adaptive methods are compared against a constant-step gradient descent base
 \end{algorithmic}
 \end{algorithm}
 
-\noindent\textbf{Theory:} Adagrad adapts the learning rate per coordinate: dimensions with large historical gradients receive smaller effective rates, and vice versa. For coordinates $i$ with accumulated gradient $G_{k,i}$, the effective step decays as $\alpha_{k,i} = \alpha_0/\sqrt{G_{k,i}}$. This monotonic decay is beneficial for sparse data but can prematurely reduce the effective rate on dense problems, preventing convergence to a sharp minimum.
+\noindent\textbf{Theory:} Adagrad adapts the learning rate per coordinate: dimensions with large historical gradients receive smaller effective rates, and vice versa. For coordinates $i$ with accumulated gradient $G_{k,i} = \sum_{j=0}^{k} g_{j,i}^2$, the effective step decays as $\alpha_{k,i} = \alpha_0/\sqrt{G_{k,i}}$. For a constant gradient with $\|g\| = c$, $G_{k,i} = kc_i^2$, so $\alpha_{k,i} = \alpha_0/(c_i\sqrt{k}) = O(k^{-1/2})$. This monotonic $O(1/\sqrt{k})$ decay is beneficial for sparse data where later gradients are small, but can prematurely reduce the effective rate on dense problems with persistent gradients, preventing convergence to a sharp minimum (see Figure~\ref{fig:q1_stepsize_theory}).
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -183,7 +183,14 @@ Four adaptive methods are compared against a constant-step gradient descent base
 \end{algorithmic}
 \end{algorithm}
 
-\noindent\textbf{Theory:} RMSprop addresses Adagrad's monotonic step-decay by replacing the cumulative sum with an exponential moving average. With discount factor $\beta = 0.9$, the effective window captures approximately the last $1/(1-\beta) = 10$ gradient observations. This allows the effective step size to \emph{increase} if recent gradients are small, making RMSprop better suited to non-stationary loss landscapes.
+\noindent\textbf{Theory:} RMSprop addresses Adagrad's monotonic step-decay by replacing the cumulative sum with an exponential moving average. With discount factor $\beta = 0.9$, the effective window captures approximately the last $1/(1-\beta) = 10$ gradient observations. For a constant gradient with magnitude $c$, $v_k = (1-\beta^k)c^2/(1-(1/1)) \to c^2$, so $\alpha_k \to \alpha_0/c$: RMSprop's effective step \emph{plateaus} at a constant value rather than decaying to zero (see Figure~\ref{fig:q1_stepsize_theory}). This allows the effective step size to remain bounded away from zero, making RMSprop better suited to non-stationary loss landscapes and long-horizon optimisation.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/q1_adaptive_stepsize_theory.pdf}
+\caption{Q1: Theoretical effective step-size decay for Adagrad and RMSprop under constant unit gradient, using Benchmark~A hyperparameters ($\alpha_0^{\rm Ada}=1.8$, $\alpha_0^{\rm RMS}=0.22$, $\beta=0.9$). \textbf{Left} (linear scale): Adagrad decays monotonically as $O(k^{-1/2})$, while RMSprop quickly plateaus at $\approx \alpha_0$. \textbf{Right} (log-log scale): the $k^{-1/2}$ slope of Adagrad is clearly visible; RMSprop's asymptote confirms it does not vanish. In practice, gradients change with each step, so the actual effective rates differ, but the qualitative asymptotic behaviour persists.}
+\label{fig:q1_stepsize_theory}
+\end{figure}
 
 \begin{algorithm}[H]
 \caption{Heavy Ball (Polyak Momentum)}
@@ -486,9 +493,9 @@ Mini-batch SGD on Benchmark~A uses learning rate $\alpha = 0.06$ and batch sizes
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
-\caption{Q2: Mini-batch SGD with $b=5$ vs.\ $b=40$. With $b=5$, each epoch performs 200 gradient updates, leading to faster per-epoch loss reduction but higher oscillation near the minimum (higher gradient variance). With $b=40$, 25 updates per epoch provides smoother but slower descent per epoch. The smaller batch size reaches lower loss faster per epoch because the 8$\times$ more gradient updates per epoch more than compensate for the higher per-step noise.}
+\caption{Q2: Mini-batch SGD with $b=5$ vs.\ $b=40$. With $b=5$, each epoch performs 200 gradient updates, leading to faster per-epoch loss reduction but higher oscillation near the minimum (gradient variance $\propto \sigma^2/b$). With $b=40$, 25 updates per epoch provides smoother but slower descent per epoch. The $b=5$ curve reaches lower loss faster \emph{per epoch} because 200 gradient steps provide more information than 25, more than compensating for the $8\times$ higher per-step noise. Near the minimum, the oscillation for $b=5$ is clearly visible as a ``noise floor'' above which the trajectory cannot converge without decaying the step size.}
 \label{fig:q2_sgd_batch}
-\end{figure}
+\end{figure>
 
 \subsection{SGD with Increased Noise}
 
@@ -652,7 +659,7 @@ C (Rosenbrock) & 3.7319 & 0.6864 & $5.4\times$ lower $f$ & $(0.183,\, 0.020)$ \\
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q3_update_magnitude.pdf}
-\caption{Q3: Update magnitude $\|x_{k+1} - x_k\|$ vs.\ iteration. On Benchmark~A, Newton's update drops to near-machine-precision after one step, confirming exact one-shot convergence on the quadratic. On Benchmark~B, Newton's update rapidly decreases as quadratic convergence kicks in within the basin of attraction. On Benchmark~C, Newton maintains larger updates than GD, taking aggressive strides enabled by Hessian information. GD's magnitude decreases slowly and linearly, reflecting its linear convergence rate of $(1 - 2\alpha\lambda_{\min}/(\lambda_{\max}+\lambda_{\min}))$ per iteration.}
+\caption{Q3: Update magnitude $\|x_{k+1} - x_k\|$ vs.\ iteration. On Benchmark~A, Newton's update drops to near-machine-precision after one step, confirming exact one-shot convergence on the quadratic. On Benchmark~B, Newton's update rapidly decreases as quadratic convergence kicks in within the basin of attraction. On Benchmark~C, Newton maintains larger updates than GD, taking aggressive strides enabled by Hessian information. GD's magnitude $\|\alpha g_k\| = \alpha\|\nabla f(x_k)\|$ decreases slowly, reflecting the gradient norm approaching a slowly decaying limit as the iterate progresses along the Rosenbrock valley floor.}
 \label{fig:q3_update}
 \end{figure}
 
@@ -776,6 +783,8 @@ Grid search & None & $N^d$ total & Very poor & Grid-limited & N/A \\
 \end{table}
 
 \noindent The fundamental trade-off in derivative-free optimisation is: every function evaluation saved by eliminating gradient computation comes at the cost of more evaluations needed for convergence. For high-dimensional problems ($d \gg 10$), zeroth-order methods such as random search can be preferable to FD (which requires $O(d)$ evaluations per step), while for low-dimensional problems with cheap function evaluations, Nelder--Mead is practical and often effective. Grid search is only viable for $d \leq 2$--3 at practical resolutions.
+
+Nelder--Mead has no general convergence guarantee in $d \geq 2$ (counterexamples exist for non-smooth functions), but performs well in practice for smooth low-dimensional problems. Its $O(1/k)$ convergence rate in $d=2$ reflects the geometric contraction of the simplex diameter under regular iterations. The method is \emph{not} scale-invariant: the initial simplex step size ($=0.35$ here) controls the initial search region and must be chosen relative to the expected solution scale.
 
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
@@ -983,7 +992,11 @@ This gives the bound $f(x_k) - f^{\star} \leq 980/(k+1)$, which is loose but cor
 
 \textbf{Boundary optimum:} Frank--Wolfe is well-suited to boundary optima because the LMO selects the vertex that minimises the linearised objective, which naturally points towards the constraint boundary when the true optimum is there. With $f(x) = \|x\|^2$, gradient $\nabla f = 2x > 0$ elementwise for $x \in \mathcal{X}$, so $z_k = (0.5, -5)$ at nearly every iteration, driving the iterate towards the lower-left corner. However, the fixed $\gamma = 0.07$ schedule does not decay to zero, resulting in residual oscillation near the constrained optimum ($f=0.364$ vs.\ $f^{\star}=0.25$). Using the standard $\gamma_k = 2/(k+2)$ schedule would eliminate this gap.
 
-\textbf{Comparison with projected gradient descent:} Frank--Wolfe avoids projections entirely, replacing them with LMO calls. For simple sets like boxes, projections are as cheap as the LMO ($O(d)$), so the advantage is mainly structural (sparse iterates preserved in sparse problems). For complex constraint sets (e.g., nuclear-norm balls, spectrahedra), the LMO can be much cheaper than projection, making Frank--Wolfe preferred.
+\textbf{Frank--Wolfe duality gap as a stopping criterion.} Define the \emph{FW gap} $g_k = \langle \nabla f(x_k), x_k - z_k \rangle$. This quantity is non-negative (since $z_k$ minimises the linearisation) and equals zero at optimality ($\nabla f(x^{\star}) = 0$ for interior optima). The FW gap provides a computable certificate of optimality: if $g_k \leq \epsilon$, then $f(x_k) - f^{\star} \leq \epsilon$ (for convex $f$), making it a practical stopping criterion that does not require knowing $f^{\star}$.
+
+\textbf{Away-steps variant.} The standard Frank--Wolfe suffers from the zig-zag phenomenon because it can only move \emph{towards} vertices of $\mathcal{X}$, never away from them. The \emph{away-steps} extension also considers moving away from the active vertex most responsible for the current position, enabling the algorithm to escape these oscillatory traps and achieve a linear convergence rate on strongly convex problems. This would significantly improve the interior-optimum convergence shown in Figure~\ref{fig:q6_fw_conv}.
+
+\textbf{Comparison with projected gradient descent:} Frank--Wolfe avoids projections entirely, replacing them with LMO calls. For simple sets like boxes, projections are as cheap as the LMO ($O(d)$), so the advantage is mainly structural (sparse iterates preserved in sparse problems, e.g., $\ell_1$-norm balls naturally produce sparse solutions via Frank--Wolfe). For complex constraint sets (e.g., nuclear-norm balls requiring SVD, spectrahedra requiring eigendecomposition), the LMO can be orders of magnitude cheaper than projection, making Frank--Wolfe the preferred algorithm in structured machine learning problems such as matrix completion and semidefinite programming relaxations.
 
 % ============================================================
 \section{Conclusion}
