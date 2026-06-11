@@ -455,7 +455,11 @@ This is optimal: no first-order method can achieve a better worst-case rate on t
 \end{algorithmic}
 \end{algorithm}
 
-Adam combines momentum (via $m_t$, analogous to Heavy Ball) with per-coordinate adaptive scaling (via $v_t$, analogous to RMSprop). The bias correction terms $(1 - \beta_1^t)^{-1}$ and $(1 - \beta_2^t)^{-1}$ correct for the initialisation bias that arises because $m_0 = v_0 = 0$: without correction, early iterates would be biased towards zero. With $\beta_2 = 0.999$, the correction is significant for the first few hundred iterations.
+Adam combines momentum (via $m_t$, analogous to Heavy Ball) with per-coordinate adaptive scaling (via $v_t$, analogous to RMSprop). The bias correction terms $(1 - \beta_1^t)^{-1}$ and $(1 - \beta_2^t)^{-1}$ correct for the initialisation bias that arises because $m_0 = v_0 = 0$: without correction, early iterates would be biased towards zero.
+
+\begin{remark}[Importance of bias correction]
+With $\beta_2 = 0.999$, at iteration $t = 10$: $(1 - 0.999^{10})^{-1} \approx 100$. The second moment estimate $v_{10}$ is only $1\%$ of its steady-state value, so the effective step size without bias correction would be $10\times$ too small. Bias correction ensures Adam takes appropriate step sizes from the first iteration. By $t = 1000$, $(1 - 0.999^{1000})^{-1} \approx 1.58$---the correction becomes minor. This analysis justifies keeping $\beta_2$ close to 1.0 (long memory) while using bias correction.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -829,14 +833,24 @@ which has truncation error $O(\delta^2)$ rather than $O(\delta)$ (higher-order a
 \end{algorithmic}
 \end{algorithm}
 
-This zeroth-order method uses only two function evaluations per iteration regardless of dimension $d$, making its per-iteration cost dimension-\emph{independent}. The estimate $\hat{g}_k$ is an unbiased estimator of a smoothed version of the gradient: $\mathbb{E}[\hat{g}_k] = \nabla f_\delta(x_k)$ where $f_\delta$ is the Gaussian-smoothed function. For smooth functions, the expected quality of the gradient estimate improves as $\delta \to 0$. The trade-off is that each iterate step size $\alpha$ must be reduced compared to gradient descent to account for the high variance of directional estimates. For a $d$-dimensional problem, the effective convergence rate per function evaluation is $O(d/k)$ rather than $O(1/k)$ for standard gradient descent.
+This zeroth-order method uses only two function evaluations per iteration regardless of dimension $d$, making its per-iteration cost dimension-\emph{independent}. The random direction estimate relates to the Gaussian-smoothed function:
+\begin{equation}
+\mathbb{E}_u\!\left[\frac{f(x + \delta u) - f(x)}{\delta} u\right] = \nabla f_\delta(x), \quad f_\delta(x) = \mathbb{E}_{u \sim \mathcal{N}(0, I)}[f(x + \delta u)],
+\end{equation}
+where $f_\delta$ is a ``smoothed'' version of $f$ with $\|\nabla f_\delta(x) - \nabla f(x)\| = O(\delta)$. For smooth $f$, the estimate is thus approximately unbiased. The trade-off is the high variance of directional estimates: each step effectively uses a rank-1 gradient approximation in a random direction, compared to the full rank-$d$ gradient used by exact GD. For a $d$-dimensional problem, roughly $d$ NRS steps are needed to accumulate the same gradient information as one exact GD step, explaining the $O(d/k)$ effective rate per function evaluation (vs $O(1/k)$ for GD). In $d = 2$ dimensions, this is only a factor of 2 slower per evaluation, which is consistent with the observed performance.
 
 \subsubsection{Results on Benchmark B}
+
+\textbf{Why $\delta = 0.8$ fails on Benchmark B.} At the starting point $x_0 = (-1, 4)$, the Hessian spectral norm is $\|H(x_0)\| \approx 10$ (largest eigenvalue). The truncation error for forward FD is:
+\begin{equation}
+\|\hat{g}(\delta = 0.8) - \nabla f\| \approx \frac{\delta}{2}\|H\| = \frac{0.8}{2} \times 10 = 4.0, \quad \text{vs} \quad \|\hat{g}(\delta = 0.05) - \nabla f\| \approx \frac{0.05}{2} \times 10 = 0.25.
+\end{equation}
+With $\|\nabla f(x_0)\| \approx 4.5$, the relative error for $\delta = 0.8$ is $4.0/4.5 \approx 89\%$---the FD gradient is almost entirely dominated by truncation error and is useless for optimisation. For $\delta = 0.05$, the relative error is $0.25/4.5 \approx 5.6\%$---acceptable for optimisation purposes. This quantitative analysis confirms the figure observations.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q4_fval_B.pdf}
-\caption{Q4A: Convergence on Benchmark B. Exact GD converges fastest ($f \to 0.7244$). FD GD with $\delta = 0.05$ closely tracks exact GD---the gradient error is small enough that convergence is essentially undisturbed. FD GD with $\delta = 0.8$ converges poorly: the large truncation error corrupts the gradient direction. Nesterov random search converges slowest: each step provides only a single random directional projection of the gradient, equivalent to one-dimensional information in a two-dimensional problem.}
+\caption{Q4A: Convergence on Benchmark B. Exact GD converges fastest ($f \to 0.7244$). FD GD with $\delta = 0.05$ closely tracks exact GD---the gradient error is small enough (relative error $\approx 5.6\%$) that convergence is essentially undisturbed. FD GD with $\delta = 0.8$ converges poorly: truncation error $\approx 4.0$ is $89\%$ of the initial gradient norm, completely corrupting the gradient direction. Nesterov random search converges slowest: each step provides only a single random directional projection of the gradient, equivalent to one-dimensional information in a two-dimensional problem.}
 \label{fig:q4_fval_B}
 \end{figure}
 
@@ -923,6 +937,12 @@ Grid search & None & $N^d$ total & None & Very poor & Grid-limited \\
 \subsection{Problem Setup and Optimality Conditions}
 
 Minimise $f(x_1, x_2) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1)$ subject to $x_1 \geq 0.5$, starting from the infeasible point $x_0 = (0.2, 4.0)$.
+
+\textbf{Lagrangian and Dual Problem.} The Lagrangian of the constrained problem is:
+\begin{equation}
+\mathcal{L}(x, \mu) = f(x) + \mu\,(0.5 - x_1), \quad \mu \geq 0.
+\end{equation}
+The dual function is $d(\mu) = \min_{x \in \mathbb{R}^2} \mathcal{L}(x, \mu)$ and the Lagrange dual problem is $\max_{\mu \geq 0} d(\mu)$. Strong duality holds here (Slater's condition is satisfied since the unconstrained minimum $x^\star = (0.582, 2.0)$ satisfies $x_1 > 0.5$, giving a strictly feasible point).
 
 \textbf{KKT Conditions.} The constrained problem can be written as $\min f(x)\ \text{s.t.}\ g(x) \leq 0$ where $g(x) = 0.5 - x_1$. The Karush--Kuhn--Tucker (KKT) conditions require, at a constrained minimum $x^\star$:
 \begin{align}
@@ -1138,6 +1158,8 @@ f(x_k) - f^\star \leq \frac{2L\,\text{diam}(\mathcal{X})^2}{k + 2},
 where $\text{diam}(\mathcal{X}) = \sqrt{(5-0.5)^2 + (10-(-5))^2} \approx 15.7$ for our box constraint.
 
 \textbf{Comparison with Projected GD.} Projected GD with Nesterov acceleration achieves $O(1/k^2)$ convergence and exact feasibility at each step. The advantage of FW is that it replaces projection with an LP oracle, which is computationally cheaper for complex polytopes where projection requires solving a non-trivial optimisation sub-problem. For the box constraint studied here, projection is trivial ($O(d)$), so projected GD is preferable. FW becomes advantageous for atomic norm constraints (e.g., nuclear norm for matrix completion), totally unimodular polytopes (e.g., flow networks), or $\ell_1$-norm balls, where LP oracles have efficient closed-form solutions.
+
+\textbf{FW on non-convex problems.} For non-convex $f$, the FW gap $h_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ remains a valid first-order stationarity certificate: $h_k = 0$ implies $x_k$ is a local minimum over $\mathcal{X}$ (the gradient has no descent direction within $\mathcal{X}$). This makes FW applicable to non-convex constrained problems (e.g., low-rank matrix optimisation over the spectahedron), where it converges to stationary points at the same $O(1/k)$ rate. The experiments here use convex functions, so the FW gap also certifies global optimality.
 
 \textbf{Sparsity and Frank-Wolfe.} An important property of FW is that iterates $x_k$ are \emph{sparse} combinations of extreme points (vertices) of $\mathcal{X}$ by construction. For the $\ell_1$ ball $\mathcal{X} = \{x : \|x\|_1 \leq c\}$, the LP oracle selects $z_k = c \cdot e_{i^\star}$ where $i^\star = \arg\max_i |(\nabla f)_i|$---a sparse vertex. The iterate $x_k$ is then a convex combination of at most $k$ such vertices, guaranteeing at most $k$-sparse solutions. This makes FW a natural choice for \emph{sparse learning} problems (e.g., LASSO, Group LASSO) without requiring the proximal step that projected methods need \cite{jaggi2013}.
 
