@@ -290,6 +290,8 @@ But the Rosenbrock Hessian at $(1,1)$ has maximum eigenvalue $L \approx 1001.6$,
 
 \textbf{Key finding 2 (RMSprop vs Adagrad):} On Benchmark A, Adagrad achieves the noise floor ($f = 0.4826$) while RMSprop settles slightly above it ($f = 0.5027$). This is because Adagrad's \emph{monotonically decreasing} step size $\alpha_0/\sqrt{G_k}$ ultimately shrinks to zero, causing the iterates to stop moving (i.e., the method converges to a fixed point). RMSprop's step size $\alpha_0/\sqrt{v_k + \varepsilon}$ does not necessarily shrink to zero --- in steady state, $v_k \approx (1-\beta)^{-1}\mathbb{E}[g_k^2]$ which remains bounded away from zero as long as the gradient is nonzero. This means RMSprop may continue taking small steps near the minimum, oscillating rather than converging to an exact fixed point.
 
+\textbf{Adaptive methods as diagonal preconditioning:} Adagrad, RMSprop, and Adam can all be interpreted as applying a diagonal preconditioner $P_k$ to the gradient before the update: $x_{k+1} = x_k - P_k g_k$, where $P_k = \text{diag}\!\bigl(\alpha_0/(\sqrt{G_{k+1,i}} + \varepsilon)\bigr)$ for Adagrad. The ideal preconditioner is $H^{-1}$ (Newton direction); diagonal adaptive methods approximate this cheaply. For a quadratic $f(x) = \frac{1}{2}x^T H x$ with diagonal $H = \text{diag}(h_1, \ldots, h_d)$, the Adagrad accumulator satisfies $G_{k,i} = \sum_j g_{j,i}^2 \approx k \cdot h_i^2 \|x_0 - x^\star\|_i^2$ asymptotically (since $g_{j,i} \approx h_i (x_{j,i} - x^\star_i)$ for a quadratic). Hence $P_{k,ii} \approx \alpha_0 / (|h_i|\sqrt{k} \cdot c)$: the effective step per coordinate is inversely proportional to the Hessian diagonal magnitude, providing equal convergence speed in each coordinate even under extreme anisotropy. This is why Adagrad outperforms GD on problems with disparate curvatures (e.g., NLP embeddings with $h_i \in [10^{-3}, 10^3]$) and why it was originally motivated for \emph{sparse} high-dimensional settings. However, all diagonal preconditioners miss off-diagonal Hessian structure: for Rosenbrock, whose Hessian has a large off-diagonal entry $-400x_1$ coupling $x_1$ and $x_2$, even the ideal diagonal preconditioner cannot reduce the condition number below $\kappa_{\text{diag}} = \max(h_{ii})/\min(h_{ii}) \approx 1002/2 = 501$ (from the diagonal alone at $(1,1)$), versus Newton's $H^{-1}$ which reduces $\kappa$ to $1$ exactly. This explains why Adam and Adagrad achieve $f \approx 1.6$--$2.2$ on Rosenbrock, while damped Newton (which captures off-diagonal coupling) reaches $f = 0.017$ in only 40 iterations.
+
 \subsection{Contour Plots with Optimisation Trajectories}
 
 \begin{figure}[H]
@@ -624,6 +626,12 @@ f\!\left(x_k - \alpha\, p_k\right) \leq f(x_k) - c_1\, \alpha\, \nabla f(x_k)^T 
 \end{equation}
 Since the Newton direction $p_k = H_k^{-1} g_k$ is a descent direction whenever $H_k \succ 0$ (i.e.\ $g_k^T p_k = g_k^T H_k^{-1} g_k > 0$), the Armijo condition is always satisfiable by shrinking $\alpha$. The \emph{strong Wolfe curvature condition} $|\nabla f(x_k - \alpha_k p_k)^T p_k| \leq c_2|\nabla f(x_k)^T p_k|$ (with $c_2 \in (c_1, 1)$, typically $0.9$ for Newton) additionally prevents excessively short steps. The key advantage of line search over fixed $\alpha$: far from $x^\star$, the step shrinks automatically to prevent overshooting; near $x^\star$, the unit step $\alpha_k = 1$ is accepted (since the quadratic model is accurate there), automatically restoring quadratic convergence. For Rosenbrock, a line-search Newton would take increasingly large accepted steps as the iterate approaches $(1,1)$, whereas the fixed $\alpha = 0.22$ permanently limits per-iteration progress. The inner loop adds only $O(\log_2(1/\alpha_{\min}))$ function evaluations per outer step and is the standard practice in production Newton solvers.
 
+\textbf{Trust region methods:} A complementary globalisation strategy restricts the Newton step to a \emph{trust region} ball $\|p_k\| \leq \Delta_k$ rather than performing a line search. The local subproblem is:
+\begin{equation}
+p_k^\star = \arg\min_{\|p\| \leq \Delta_k}\; m_k(p) = f(x_k) + g_k^T p + \tfrac{1}{2}\, p^T H_k\, p.
+\end{equation}
+The radius $\Delta_k$ is adapted by comparing actual decrease $\rho_k^{\text{act}} = f(x_k) - f(x_k + p_k)$ to predicted decrease $\rho_k^{\text{pred}} = m_k(0) - m_k(p_k^\star)$. If $\rho_k = \rho_k^{\text{act}}/\rho_k^{\text{pred}} \approx 1$, the model is accurate and $\Delta_{k+1}$ is expanded; if $\rho_k < 0.1$, the step is rejected and $\Delta_{k+1}$ is shrunk. Key advantages over line search: (i)~trust region methods are globally convergent to a first-order stationary point for any smooth $f$ (including non-convex) even when $H_k$ is indefinite; (ii)~when the constraint $\|p\| \leq \Delta_k$ is active, the solution moves to the boundary and can escape saddle points, whereas pure Newton can be attracted to saddle points if $H_k$ has negative eigenvalues. For $d = 2$, the subproblem is solved exactly in $O(1)$; for large $d$, the Steihaug truncated conjugate gradient solves it in $O(d)$ Hessian-vector products (the dominant cost for large-scale Newton). Trust region and line search methods are largely equivalent in theory; trust region is more robust when Hessians are frequently indefinite (non-convex deep learning training) or poorly scaled.
+
 \textbf{Comparison with gradient descent:} GD's linear convergence rate $O\!\left((1-\mu/L)^k\right)$ depends on the condition number $\kappa = L/\mu$. For Benchmark~C with $\kappa \approx 2508$, GD converges at rate $\approx (1 - 1/2508)^k \approx 0.9996^k$ --- reaching $\varepsilon$-accuracy requires $O(\kappa \log(1/\varepsilon))$ iterations. Newton's quadratic convergence requires only $O(\log\log(1/\varepsilon))$ iterations in the local regime, independent of $\kappa$.
 
 \textbf{Settings:} GD uses 80 iterations; Newton uses only 20 iterations, reflecting the superior per-iteration progress. Tikhonov damping $\lambda = 10^{-8}$ ensures $H_k + \lambda I \succ 0$ (positive definite) without materially affecting the Newton direction when $H_k$ is itself well-conditioned.
@@ -754,6 +762,28 @@ Balancing truncation and rounding gives: forward FD optimal $\delta_{\text{opt}}
 \caption{Q4A: Numerical finite difference gradient error on Benchmark B at $x = (0.5, 2.0)$ for $\partial f/\partial x_1$. The U-shaped curves confirm the competing truncation and floating-point contributions. Forward FD (blue solid) has its minimum error near $\delta \approx 10^{-8}$ where $O(\delta)$ truncation matches $O(\varepsilon_{\text{mach}}/\delta)$ rounding. Centered FD (red dashed) has $O(\delta^2)$ truncation, shifting its optimal $\delta$ to $\approx 10^{-5.3}$ and achieving roughly $4$ orders of magnitude lower minimum error. The tested values $\delta = 0.05$ (green dashed) and $\delta = 0.8$ (orange dashed) lie in the truncation-dominated regime: $\delta = 0.8$ produces a gradient error of $\approx 0.3$, explaining the slower convergence of the coarse FD method (Figure~\ref{fig:q4_fval_B}).}
 \label{fig:q4_fd_error}
 \end{figure}
+
+\textbf{Complex step method --- avoiding cancellation entirely:} A superior alternative to finite differences for gradient computation is the \emph{complex step} method. Perturbing $x_i$ by a purely imaginary step $ih$:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{\mathrm{Im}\bigl[f(x + ih\, e_i)\bigr]}{h}.
+\end{equation}
+By the Taylor expansion $f(x + ihe_i) = f(x) + ih f'(x) - \frac{h^2}{2}f''(x) + O(h^3)$, taking the imaginary part gives $\mathrm{Im}[f(x+ihe_i)] = h f'(x) + O(h^3)$, so the error is $O(h^2)$ --- \emph{without any subtractive cancellation}, since the imaginary and real parts of $f$ live in separate channels and never cancel. This means $h$ can be set as small as $10^{-50}$ (or even machine epsilon $\varepsilon_{\text{mach}} \approx 10^{-16}$) without any precision loss, yielding near-exact gradients. The forward FD, centered FD, complex step, and automatic differentiation methods are compared in Table~\ref{tab:grad_methods}. The complex step requires the function to accept complex-valued inputs (satisfied automatically by NumPy operations but not by compiled C/Fortran code or external simulation solvers); when applicable, it is the preferred method for derivative validation and gradient checking, having replaced finite differences in many scientific computing workflows.
+
+\begin{table}[H]
+\centering
+\caption{Comparison of gradient approximation methods. FE = function evaluations per gradient; ``exact'' means to floating-point precision.}
+\label{tab:grad_methods}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{FE/gradient} & \textbf{Truncation error} & \textbf{Cancellation} & \textbf{Requires} \\
+\midrule
+Forward FD & $d+1$ & $O(\delta)$ & Yes & real $f$ \\
+Centered FD & $2d$ & $O(\delta^2)$ & Yes & real $f$ \\
+Complex step & $d$ & $O(h^2)$ & No & complex $f$ \\
+Automatic diff (AD) & $1$ backward pass & Exact & No & diff.\ code \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsubsection{Nesterov Random Search}
 
