@@ -148,7 +148,11 @@ On Benchmark A ($\kappa = L/\mu \approx 1.12$, $\alpha = 0.08 < 1/L \approx 0.97
 \end{algorithmic}
 \end{algorithm}
 
-The Polyak step size is theoretically optimal for convex functions when $f^\star$ is known exactly: it guarantees convergence in $O(1/k)$ without requiring knowledge of the Lipschitz constant $L$. However, it is highly sensitive to errors in $f^\star$. A related but distinct method is the \emph{Barzilai--Borwein} (BB) step, which estimates the local Lipschitz constant as $\alpha_k^{\text{BB}} = \|s_k\|^2 / (s_k^T y_k)$ where $s_k = x_k - x_{k-1}$ and $y_k = \nabla f(x_k) - \nabla f(x_{k-1})$. Unlike Polyak, BB does not require $f^\star$ and is widely used in practice.
+The Polyak step size is theoretically optimal for convex functions when $f^\star$ is known exactly: it guarantees convergence in $O(1/k)$ without requiring knowledge of the Lipschitz constant $L$. However, it is highly sensitive to errors in $f^\star$. A related but distinct method is the \emph{Barzilai--Borwein} (BB) step, which estimates the local curvature from consecutive iterates without requiring $f^\star$. Using $s_k = x_k - x_{k-1}$ and $y_k = \nabla f(x_k) - \nabla f(x_{k-1})$, the two BB variants are:
+\begin{equation}
+\alpha_k^{\text{BB1}} = \frac{s_k^T s_k}{s_k^T y_k}, \qquad \alpha_k^{\text{BB2}} = \frac{s_k^T y_k}{y_k^T y_k}.
+\end{equation}
+Both satisfy the secant equation $\alpha_k^{-1} I \cdot s_k \approx y_k$ (a scaled-identity approximation to the Hessian): BB1 is the Rayleigh quotient $s_k^T H s_k / s_k^T s_k$ along the most recent step direction; BB2 is its harmonic counterpart. BB does not reduce the objective monotonically but paired with a non-monotone line search (Grippo et al.\ 1986 condition $f(x_{k+1}) \leq \max_{j \leq M}f(x_{k-j}) - \sigma\alpha_k\|g_k\|^2$), it achieves superlinear practical convergence. For Benchmark~A, BB1 would estimate $\alpha \approx s_k^T s_k / (s_k^T y_k) \approx 1/\lambda_{\text{mid}} \approx 0.978^{-1} \approx 1.02$ after a few steps --- very close to the optimal $\alpha = 1/L \approx 0.97$, without any knowledge of $L$ or $f^\star$.
 
 \begin{algorithm}[H]
 \caption{Adagrad}
@@ -659,6 +663,16 @@ The radius $\Delta_k$ is adapted by comparing actual decrease $\rho_k^{\text{act
 For the 2-dimensional benchmarks here ($d = 2$), Newton's $O(d^3) = O(8)$ per-iteration overhead is completely negligible --- the bottleneck is the number of iterations and gradient evaluations. This is why Newton's 20 iterations with $\alpha = 0.22$ easily outperforms GD's 80 iterations. L-BFGS is motivated only by large $d$.
 
 For a neural network with $d = 10^8$ parameters, Newton would require $10^{24}$ flops to form and factor the Hessian --- completely infeasible. L-BFGS at $m=20$, $d=10^8$ requires $20 \times 10^8 = 2 \times 10^9$ flops per iteration, feasible on a GPU.
+
+\textbf{Gauss--Newton for least squares (Benchmark A):} For residual-based objectives $J(\theta) = \frac{1}{2m}\|r(\theta)\|^2$ where $r(\theta) = X\theta - y$ is the residual vector, Newton's Hessian decomposes as:
+\begin{equation}
+\nabla^2 J(\theta) = \frac{1}{m}J_r^T J_r + \frac{1}{m}\sum_{i=1}^m r_i(\theta)\, \nabla^2 r_i(\theta),
+\end{equation}
+where $J_r$ is the Jacobian of $r$. The \emph{Gauss--Newton} (GN) approximation drops the second term (weighted by residuals $r_i$, which are small near the optimum) to obtain:
+\begin{equation}
+H_{\text{GN}} = \frac{1}{m}J_r^T J_r \approx \nabla^2 J(\theta).
+\end{equation}
+The GN step is $p_k = H_{\text{GN}}^{-1}\nabla J(\theta_k)$. For Benchmark~A, the model is \emph{linear} in $\theta$ (i.e., $r(\theta) = X\theta - y$), so $J_r = X$ (constant) and $\nabla^2 r_i = 0$ for all $i$: \textbf{Gauss--Newton is exactly Newton} for linear regression, and the GN step gives $\theta_{\text{OLS}} = (X^T X)^{-1}X^T y$ in one iteration. For nonlinear models (e.g., a neural network with sigmoid activations), GN drops the second-derivative term at the cost of a biased Hessian approximation, but remains positive semi-definite $H_{\text{GN}} = J_r^T J_r / m \succeq 0$ even when the true Hessian is indefinite, making it more numerically stable. GN is also the basis of the \emph{Levenberg--Marquardt} algorithm for nonlinear least squares: $p_k = (H_{\text{GN}} + \lambda I)^{-1}\nabla J(\theta_k)$, which interpolates between GN ($\lambda \to 0$) and steepest descent ($\lambda \to \infty$), adjusting $\lambda$ via a trust-region-like update.
 
 \begin{table}[H]
 \centering
@@ -1343,7 +1357,18 @@ This report has investigated six families of optimisation algorithms across thre
 
 \textbf{Frank--Wolfe (Q6):} The LP oracle maintains feasibility automatically via convexity; the FW gap $G_k$ provides a computable near-optimality certificate without knowing $f^\star$. The fixed-$\beta$ schedule causes vertex oscillation near the interior optimum; the decaying schedule $\gamma_k = 2/(k+2)$ provides the certified $O(1/k)$ rate. Frank--Wolfe is preferred over projected GD when the LP oracle is cheaper than projection (nuclear norm ball, spectrahedra, flow polytopes, sparse recovery with $\ell^1$ constraints).
 
-\textbf{Overall recommendation:} For well-conditioned smooth problems (Benchmark A, B), Adam or Nesterov momentum are practical first choices offering marginal improvements over GD with minimal hyperparameter sensitivity. For very ill-conditioned problems (Benchmark C, $\kappa \approx 2508$), damped Newton provides $O(\log\log(1/\varepsilon))$ quadratic convergence once in the local regime, dramatically outperforming all first-order methods; L-BFGS is the practical medium-scale alternative. When gradients are unavailable, use Nelder--Mead for $d \leq 10$ (achieves machine precision on Rosenbrock) or Nesterov random search for $d \gg 1$ (2 function evaluations per step). For constrained problems, use projected GD when projection is cheap (box, simplex) or Frank--Wolfe when the LP oracle dominates (nuclear norm, spectrahedra). Avoid the pure penalty method when $\lambda \to \infty$ is needed; use the augmented Lagrangian instead for exact constraint satisfaction at finite $\rho$.
+\textbf{Overall recommendation:} Algorithm selection depends critically on the condition number $\kappa$, problem dimension $d$, and gradient availability. Based on the experiments in this report:
+
+\begin{itemize}[nosep]
+  \item \textbf{$\kappa < 10$, any $d$:} Plain GD converges in $O(\kappa \log(1/\varepsilon))$ iterations, which is fast. Nesterov or Adam offer modest gains. This covers Benchmarks A and B.
+  \item \textbf{$\kappa \in [10, 10^3]$, $d \leq 10^4$:} Use Nesterov (theoretical $\sqrt{\kappa}$ speedup) or L-BFGS (superlinear rate, $O(md)$ per iter). Heavy Ball with optimal parameters is $50\times$ faster than GD at $\kappa = 2508$ for quadratics. Avoid plain SGD unless the dataset is very large.
+  \item \textbf{$\kappa > 10^3$, $d$ small:} Use Newton with line search or trust region (Benchmark C: Newton reaches $f = 0.017$ in 40 iters vs GD's $f = 3.39$ in 150 iters). Alternatively, for derivative-free access, Nelder--Mead achieves machine precision for $d \leq 10$.
+  \item \textbf{$d > 10^6$ (large-scale):} Use mini-batch SGD, Adam, or SVRG. Newton and L-BFGS become impractical ($O(d^3)$ and $O(md)$ respectively). SVRG achieves GD-quality convergence at $O(m + \kappa)$ per epoch for strongly convex losses.
+  \item \textbf{Constrained problems:} Use projected GD when projection is $O(d)$ (box, halfspace, $\ell^2$ ball). Use Frank--Wolfe when the LP oracle is cheaper than projection (nuclear norm ball, spectrahedra, sparse recovery). Use augmented Lagrangian / ADMM for distributed or equality-constrained settings. Avoid pure penalty method when the unconstrained minimum is infeasible (violation $O(1/\lambda)$, requires $\lambda \to \infty$).
+  \item \textbf{No gradients available:} Nelder--Mead for $d \leq 10$ (machine-precision accuracy possible, as demonstrated on Rosenbrock). Nesterov random search for $d \gg 1$ (2 FE per step, dimension-independent). Grid search only for $d \leq 3$ (exponential cost $O(N^d)$).
+\end{itemize}
+
+The most surprising finding in this report is that \textbf{Nelder--Mead outperforms every gradient-based method on Rosenbrock} ($f \approx 10^{-29}$ in 160 iterations, using only $\leq 800$ function evaluations with no gradient information). This highlights that problem-specific geometry can dominate theoretical rate guarantees: Rosenbrock's 2D curved valley is well-matched to the simplex geometry, while gradient methods are handicapped by the extreme condition number $\kappa \approx 2508$.
 
 % ============================================================
 \newpage
