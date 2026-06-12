@@ -354,7 +354,15 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \end{algorithmic}
 \end{algorithm}
 
-The critical distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$. This ``look before you step'' correction allows Nesterov to anticipate the momentum's direction and correct trajectory before overshooting. The schedule $\beta_k = (k-1)/(k+2)$ gradually increases momentum from 0, avoiding early-iteration instability. Nesterov's method achieves an \textbf{optimal} $O(1/k^2)$ convergence rate for smooth convex functions, compared to $O(1/k)$ for gradient descent. For a convex function with $L$-Lipschitz gradient, the guarantee is:
+The critical distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$. This ``look before you step'' correction allows Nesterov to anticipate the momentum's direction and correct trajectory before overshooting. The schedule $\beta_k = (k-1)/(k+2)$ gradually increases momentum from 0, avoiding early-iteration instability.
+
+\textbf{Alternative interpretation:} Substituting $\tilde{x}_k = x_k + \beta_k z_k$ into the update $x_{k+1} = x_k + z_{k+1} = x_k + \beta_k z_k - \alpha \nabla f(\tilde{x}_k)$ gives:
+\begin{equation}
+x_{k+1} = \tilde{x}_k - \alpha \nabla f(\tilde{x}_k).
+\end{equation}
+This is exactly one step of gradient descent \emph{applied at the lookahead point} $\tilde{x}_k$! The ``Nesterov magic'' is that the lookahead point is a better approximation of where the iterate will end up than $x_k$ itself, so gradient information from $\tilde{x}_k$ is more predictive of the right descent direction.
+
+Nesterov's method achieves an \textbf{optimal} $O(1/k^2)$ convergence rate for smooth convex functions, compared to $O(1/k)$ for gradient descent. For a convex function with $L$-Lipschitz gradient:
 \begin{equation}
 f(x_k) - f^\star \leq \frac{2L\|x_0 - x^\star\|^2}{k^2}.
 \end{equation}
@@ -588,7 +596,15 @@ For non-convex problems (e.g., Rosenbrock away from the optimum) or problems wit
 
 \textbf{Settings:} GD uses 80 iterations; Newton uses only 20 iterations, reflecting the superior per-iteration progress. Tikhonov damping $\lambda = 10^{-8}$ ensures $H_k + \lambda I \succ 0$ (positive definite) without materially affecting the Newton direction when $H_k$ is itself well-conditioned.
 
-\textbf{Scalability limitation:} Newton's per-iteration cost is $O(d^2)$ for computing the Hessian and $O(d^3)$ for solving the linear system $H_k p_k = g_k$ (Cholesky factorisation). For the 2-dimensional benchmarks here, this is negligible. However, for a neural network with $d = 10^8$ parameters, the Hessian alone would require $10^{16}$ floating-point numbers --- completely infeasible. This motivates quasi-Newton methods such as \textbf{L-BFGS} (Limited-memory BFGS), which approximate $H_k^{-1}$ using only the $m$ most recent gradient difference vectors $\{s_i, y_i\}_{i=k-m}^{k-1}$ (with $m \approx 10$--$20$). L-BFGS achieves a superlinear (but not quadratic) convergence rate with $O(md)$ storage and $O(md)$ per-iteration cost, making it the standard choice for medium-to-large scale smooth unconstrained optimisation.
+\textbf{Scalability and per-evaluation cost:} Newton's per-iteration cost is $O(d^2)$ for computing the Hessian and $O(d^3)$ for solving the linear system $H_k p_k = g_k$ (Cholesky factorisation). To compare methods fairly, one should consider \emph{total flops to reach $\varepsilon$-accuracy}, not just iteration count:
+\begin{itemize}[nosep]
+  \item \textbf{GD} (Benchmark~C, $\kappa \approx 2508$): rate $(1-\mu/L)^k \approx 0.9992^k$, cost per iter $O(d)$. Iterations needed: $\ln(1/\varepsilon)/\ln(1/0.9992) \approx 1250 \ln(1/\varepsilon)$. Total: $O(d \cdot \kappa \ln(1/\varepsilon))$.
+  \item \textbf{Newton} (local quadratic regime): iterations $O(\log\log(1/\varepsilon))$, cost $O(d^3)$. Total: $O(d^3)$ (essentially independent of $\varepsilon$). For $d = 2$: $O(8)$ flops; for $d = 1000$: $O(10^9)$ flops --- impractical.
+  \item \textbf{L-BFGS} ($m = 10$ vectors): superlinear rate, cost $O(md)$ per iter $\approx O(10d)$. Total: $O(md \cdot \text{few iterations})$ --- the practical sweet spot for $d \in [10^3, 10^7]$.
+\end{itemize}
+For the 2-dimensional benchmarks here ($d = 2$), Newton's $O(d^3) = O(8)$ per-iteration overhead is completely negligible --- the bottleneck is the number of iterations and gradient evaluations. This is why Newton's 20 iterations with $\alpha = 0.22$ easily outperforms GD's 80 iterations. L-BFGS is motivated only by large $d$.
+
+For a neural network with $d = 10^8$ parameters, Newton would require $10^{24}$ flops to form and factor the Hessian --- completely infeasible. L-BFGS at $m=20$, $d=10^8$ requires $20 \times 10^8 = 2 \times 10^9$ flops per iteration, feasible on a GPU.
 
 \begin{table}[H]
 \centering
@@ -644,7 +660,9 @@ C & 3.7319 & 0.6864 & $(0.183,\; 0.020)$ \\
 \end{tabular}
 \end{table}
 
-The Newton result for Benchmark~A ($3.028, 4.017$) is close to the true OLS solution $\hat{\theta} \approx (3.0, 4.0)$ (the deviation from $\theta^\star = (3, 4)$ is due to finite-sample noise). For Benchmark~C, the final position $(0.183, 0.020)$ is still far from $(1,1)$ because 20 heavily damped steps are insufficient to traverse the full valley, but the objective has improved dramatically.
+The Newton result for Benchmark~A ($3.028, 4.017$) is close to the true OLS solution $\hat{\theta} \approx (3.0, 4.0)$ (the deviation from $\theta^\star = (3, 4)$ is due to finite-sample noise in the $m=1000$ generated samples). For Benchmark~C, the final position $(0.183, 0.020)$ is still far from $(1,1)$ because 20 heavily damped steps are insufficient to traverse the full valley.
+
+\textbf{Per-evaluation efficiency:} Newton uses $\alpha = 0.22$ and 20 iterations to reach $f = 0.686$ on Rosenbrock; GD uses $\alpha = 0.001$ and 80 iterations to reach $f = 3.73$. Accounting for the $O(d^3)$ Hessian solve: for $d = 2$, Newton's per-iteration overhead is negligible (6 extra arithmetic operations) versus GD's pure vector multiply. In terms of function evaluations (which dominate for $d \gg 1$): Newton uses 20 gradient and Hessian evaluations vs GD's 80 gradient evaluations. On Rosenbrock, one Newton iteration provides more than $5 \times$ the objective improvement of one GD iteration, making Newton far more sample-efficient despite the Hessian cost.
 
 \subsection{Contour Trajectories}
 
@@ -979,6 +997,8 @@ The Frank--Wolfe algorithm (1956) maintains feasibility automatically: since $x_
 f(x_k) - f^\star \leq \frac{2L\,\mathrm{diam}(\mathcal{X})^2}{k+2},
 \end{equation}
 where $L$ is the Lipschitz constant of $\nabla f$ and $\mathrm{diam}(\mathcal{X}) = \|u - l\|$ for box bounds. With fixed $\gamma = 1 - \beta$, convergence is guaranteed as long as $z_k$ converges to a fixed point, but the oscillatory behaviour of $z_k$ (which jumps between vertices) can prevent exact convergence at a fixed step.
+
+\textbf{Sparsity-inducing property:} After $k$ iterations, the Frank--Wolfe iterate is a convex combination of \emph{at most $k+1$ vertices} of $\mathcal{X}$ (since each step adds at most one vertex $z_k$ to the representation). For the $\ell^1$ ball $\mathcal{X} = \{x : \|x\|_1 \leq \tau\}$, the vertices are $\pm \tau e_i$ (coordinate vectors), so FW naturally produces \emph{sparse} solutions: $x_k = \sum_{i \leq k} \gamma_i \cdot (\pm \tau e_{j_i})$ has at most $k+1$ nonzero components. This structural property makes FW a natural choice for compressed sensing, sparse signal recovery, and matrix completion problems where sparse or low-rank solutions are desired.
 
 \textbf{Frank--Wolfe gap} as a convergence certificate:
 \begin{equation}
