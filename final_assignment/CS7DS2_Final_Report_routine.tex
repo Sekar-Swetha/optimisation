@@ -593,6 +593,10 @@ All methods in Q1--Q2 require hand-tuned step sizes. The \emph{Armijo sufficient
 starting from $\alpha_k = 1$ and halving until \eqref{eq:armijo} is satisfied (backtracking). This removes the need to know $L$ while guaranteeing descent at every step. Combined with the Wolfe curvature condition, it ensures the step is neither too small (sufficient decrease) nor too large (curvature condition). The Polyak step can be interpreted as a special Armijo condition where $c = 0$ and the step is set to the exact minimisation value along the gradient direction.
 \end{remark}
 
+\begin{remark}[Role of $\varepsilon$ in Adam and Adaptive Methods]
+The parameter $\varepsilon$ in Adam (and Adagrad, RMSprop) prevents division by zero when $v_t \to 0$, but its choice affects the early-training behaviour significantly. At $t=1$, $v_1 = (1-\beta_2)g_1^2 \approx 0.001\,g_1^2$; with $\varepsilon = 10^{-8}$ and $\|g_1\| \approx 20$ (Benchmark B), $\sqrt{v_1} \approx 0.63 \gg \varepsilon$, so $\varepsilon$ has no effect. But for sparse features where some coordinates have $g_t^{(i)} = 0$ for many steps: $\sqrt{v_t^{(i)}} \ll \varepsilon$, and the effective step for coordinate $i$ is $\alpha/\varepsilon = 0.08/10^{-8} = 8 \times 10^6$, causing explosive updates. Setting $\varepsilon = 10^{-7}$ or $10^{-6}$ (larger $\varepsilon$) prevents this. Conversely, too large $\varepsilon$ (e.g.\ $\varepsilon = 1$) effectively disables adaptive scaling: the denominator is dominated by $\varepsilon$, reverting to SGD with learning rate $\alpha$. The choice $\varepsilon = 10^{-8}$ in our experiments is standard for dense gradients; for NLP/embedding problems with sparse features, larger $\varepsilon = 10^{-6}$ to $10^{-4}$ is common.
+\end{remark}
+
 \begin{remark}[Adam Convergence and Non-Convergence]
 Despite empirical success, Adam can fail to converge on simple convex problems. Reddi et al.\ showed a counterexample where the exponential moving average of squared gradients can oscillate; their \emph{AMSGrad} variant fixes this by using $\hat{v}_t = \max(\hat{v}_{t-1}, v_t)$ (non-decreasing denominator). The theoretical $O(1/\sqrt{T})$ regret guarantee for Adam is established in the online learning setting; for offline optimisation, only $O(1/\sqrt{T})$ convergence of $\min_{k \leq T}\|\nabla f(x_k)\|^2$ has been proved \cite{kingma2015adam}. On Benchmark C, Adam achieves $f = 0.09$ (300 iterations), slightly worse than Nesterov's $f = 0.07$, consistent with Adam's adaptive scaling being less suited to the consistent ill-conditioning of Rosenbrock.
 \end{remark}
@@ -1061,6 +1065,14 @@ By Taylor expansion, the truncation error is:
 \end{equation}
 Thus the approximation error is $O(\delta)$: larger $\delta$ gives larger truncation error. Combined with floating-point round-off error $O(\varepsilon_{\mathrm{mach}}/\delta)$, the optimal step size is $\delta^{\star} = \sqrt{\varepsilon_{\mathrm{mach}}} \approx 10^{-8}$. In these experiments, $\delta = 0.05$ is near-optimal while $\delta = 0.8$ introduces large truncation error because the function curvature changes significantly over a step of that size.
 
+\begin{remark}[Finite Differences at the Optimal Step $\delta^{\star}$]
+At the theoretically optimal step $\delta^{\star} = \sqrt{\varepsilon_{\mathrm{mach}}} \approx 1.5 \times 10^{-8}$ (for forward differences), the approximation error is:
+\begin{equation}
+  \left|\frac{f(x + \delta^{\star} e_i) - f(x)}{\delta^{\star}} - \frac{\partial f}{\partial x_i}\right| \approx \frac{\delta^{\star}}{2}|f''| + \frac{\varepsilon_{\mathrm{mach}}}{\delta^{\star}}|f| \approx 2\sqrt{\varepsilon_{\mathrm{mach}}}\,\max(|f''|/2, |f|).
+\end{equation}
+For Benchmark B at $x = (0, 2)$: $f'' \approx 2$ and $f \approx 5$, giving error $\approx 2\sqrt{10^{-16}} \times 5 = 10^{-7}$. Compared to the gradient magnitude $\|\nabla f\| \approx 22$, this represents a \emph{relative} error of $\approx 5 \times 10^{-9}$, essentially machine precision. Our experimental $\delta = 0.05$ gives truncation error $\approx 0.05 \times 1 = 0.05$ (relative $\approx 0.002$), still adequate for convergence. The experimental $\delta = 0.8$ gives truncation error $\approx 0.8 \times 1 = 0.8$ (relative $\approx 0.036$), enough to bias the gradient direction significantly.
+\end{remark}
+
 \begin{remark}[Central vs.\ Forward Finite Differences]
 The \emph{central} finite-difference approximation,
 \begin{equation}
@@ -1401,7 +1413,11 @@ The penalty method can be understood through Lagrangian duality. The Lagrangian 
 \begin{equation}
   L(x, \mu) = f(x) - \mu(x_1 - 0.5), \quad \mu \geq 0.
 \end{equation}
-The dual function is $d(\mu) = \min_x L(x, \mu)$, and strong duality holds (Slater's condition is satisfied since the constraint set is convex and the problem has a strictly feasible point). The penalty objective $F_\lambda(x) = f(x) + \lambda \max(0, 0.5 - x_1)$ can be interpreted as augmenting the Lagrangian: as $\lambda \to \infty$, the unconstrained minimum of $F_\lambda$ approaches the constrained minimum, recovering the primal solution. The penalty weight $\lambda$ approximates the optimal dual multiplier $\mu^{\star} = 0$ (since the constraint is inactive); the fact that $\lambda$ must be nonzero to steer from the infeasible initial point reflects the need to navigate through the infeasible region before the constraint becomes inactive.
+The dual function is $d(\mu) = \min_x L(x, \mu)$, and strong duality holds (Slater's condition is satisfied since the constraint set is convex and the problem has a strictly feasible point, e.g.\ $x = (1, 2) \in \{x : x_1 \geq 0.5\}$ with $f(1,2) < \infty$).
+
+\begin{remark}[Strong Duality and Complementary Slackness: Geometric Interpretation]
+Strong duality ($d^{\star} = p^{\star}$, the dual and primal optima coincide) means the minimax theorem applies: $\max_{\mu \geq 0}\min_x L(x,\mu) = \min_x\max_{\mu \geq 0} L(x,\mu) = p^{\star}$. The dual function $d(\mu) = \min_x [f(x) - \mu(x_1 - 0.5)]$ can be computed explicitly: at fixed $\mu$, the minimiser satisfies $\nabla f(x^{\star}(\mu)) = \mu e_1$, giving $d(\mu) = f(x^{\star}(\mu)) - \mu(x^{\star}_1(\mu) - 0.5)$. The optimal dual variable $\mu^{\star} = 0$ (constraint inactive) means the dual problem's maximum is achieved at $\mu = 0$, where the penalty for violating the constraint is exactly zero. Complementary slackness $\mu^{\star}(x^{\star}_1 - 0.5) = 0$ is satisfied: either $\mu^{\star} = 0$ (constraint inactive, as here) or $x^{\star}_1 = 0.5$ (constraint active). The geometry is: the contour of $f$ at $f^{\star}$ is tangent to the boundary $x_1 = 0.5$ only when $\mu^{\star} = \|\nabla f\|$ in the constraint direction --- which is zero here since the unconstrained minimum is strictly inside the feasible set.
+\end{remark} The penalty objective $F_\lambda(x) = f(x) + \lambda \max(0, 0.5 - x_1)$ can be interpreted as augmenting the Lagrangian: as $\lambda \to \infty$, the unconstrained minimum of $F_\lambda$ approaches the constrained minimum, recovering the primal solution. The penalty weight $\lambda$ approximates the optimal dual multiplier $\mu^{\star} = 0$ (since the constraint is inactive); the fact that $\lambda$ must be nonzero to steer from the infeasible initial point reflects the need to navigate through the infeasible region before the constraint becomes inactive.
 
 \textbf{Projected GD} enforces feasibility exactly at every iteration via the projection oracle. This is the fundamental advantage: feasibility is a hard constraint, never traded off against objective improvement. The cost is requiring a projection oracle $\Pi_{\mathcal{X}}$, which is trivial ($O(1)$) for half-spaces but can be expensive ($O(d^3)$ or worse) for general convex sets.
 
