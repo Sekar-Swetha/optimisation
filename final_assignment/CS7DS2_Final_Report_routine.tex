@@ -205,7 +205,7 @@ The Polyak step size minimises the distance to $x^\star$ at each iteration (unde
 \end{algorithmic}
 \end{algorithm}
 
-Adagrad \cite{duchi2011} scales each coordinate's learning rate inversely by the root of its gradient history, effectively giving larger steps to rarely-updated parameters. For convex functions, Adagrad achieves a regret bound of $O(\sqrt{T})$ over $T$ rounds, implying convergence at $O(\log T/\sqrt{T})$. Its principal limitation is that the accumulated sum $G_k$ grows without bound, causing the effective step size to decay to zero and stalling convergence in later iterations.
+Adagrad \cite{duchi2011} scales each coordinate's learning rate inversely by the root of its gradient history, effectively giving larger steps to rarely-updated parameters. For convex functions, Adagrad achieves a regret bound of $O(\sqrt{T})$ over $T$ rounds, implying convergence at $O(\log T/\sqrt{T})$. Its principal limitation is that the accumulated sum $G_k = \sum_{j\leq k} g_{j}^2$ grows without bound: at iteration $k$, the effective step size satisfies $({\rm eff.\ }\alpha)_k \leq \alpha_0/\sqrt{k \cdot \min_j g_{j,i}^2}$, which decays as $1/\sqrt{k} \to 0$. This prevents Adagrad from making progress in later iterations on stationary (non-diminishing) problems --- an issue that RMSprop resolves through exponential forgetting of old gradients.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -713,6 +713,10 @@ Newton's method requires computing and inverting the $d \times d$ Hessian at eac
 
 The Rosenbrock results demonstrate Newton's strength precisely where gradient methods struggle most: extreme ill-conditioning ($\kappa \approx 2000$). While GD achieves $f = 3.73$ in 80 iterations (barely leaving the starting valley), Newton reaches $f = 0.69$ in 20 iterations --- a $5.4\times$ improvement with $4\times$ fewer iterations. This remarkable efficiency gain is a direct consequence of Newton's iteration complexity being \emph{independent} of the condition number near the minimum: the quadratic convergence rate $\|x_{k+1} - x^\star\|^2 \leq C\|x_k - x^\star\|^4$ means the method does not ``feel'' ill-conditioning once it enters the quadratic convergence regime.
 
+\begin{remark}[Quasi-Newton Methods]
+When the Hessian $\nabla^2 f$ is expensive or unavailable, quasi-Newton methods (BFGS, L-BFGS) approximate $H_k \approx \nabla^2 f(x_k)$ using secant equations from gradient differences: $H_{k+1}(x_{k+1} - x_k) = \nabla f(x_{k+1}) - \nabla f(x_k)$. L-BFGS stores only the last $m$ pairs $(s_k, y_k) = (x_{k+1}-x_k, \nabla f_{k+1} - \nabla f_k)$, requiring $O(md)$ storage vs $O(d^2)$ for full BFGS. Quasi-Newton achieves \emph{superlinear} convergence (between linear and quadratic) and is the standard choice for medium-scale unconstrained optimisation ($10^2 \leq d \leq 10^5$) in scientific computing \cite{nocedal2006}.
+\end{remark}
+
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
 \label{sec:q4}
@@ -744,7 +748,11 @@ The bias (truncation error) is $O(\delta)$; rounding errors add $O(\varepsilon_{
 \end{algorithmic}
 \end{algorithm}
 
-\textbf{Theoretical properties:} The estimator $\hat{g}_k$ is an unbiased estimate of $\frac{1}{d}\nabla f(x_k)$ in expectation (after normalisation): $\mathbb{E}[u(u^T\nabla f)] = \frac{1}{d}\nabla f$ for $u \sim \text{Uniform}(\mathbb{S}^{d-1})$. The noise variance scales as $O(\|\nabla f\|^2/d)$, so convergence rate degrades with dimension $d$ --- this is the fundamental curse of dimensionality for zeroth-order methods. For fixed $d=2$, the method requires $\sim 3\times$ more iterations than exact GD (empirically), but uses only 2 function evaluations per step.
+\textbf{Theoretical properties:} For $u$ uniformly distributed on the unit sphere $\mathbb{S}^{d-1}$, the estimator satisfies:
+\begin{equation}
+\mathbb{E}\!\left[\frac{f(x+\delta u) - f(x)}{\delta}\, u\right] = \frac{1}{d}\nabla f(x) + O(\delta^2),
+\end{equation}
+i.e.\ it is a biased estimate of $\frac{1}{d}\nabla f(x)$, requiring an effective learning rate of $\alpha_{\rm eff} = d \cdot \alpha$ to match gradient descent. The noise variance scales as $O(\|\nabla f\|^2)$, and the convergence rate for smooth convex functions is $O(d/k)$ expected suboptimality --- a factor of $d$ worse than gradient descent's $O(1/k)$. For $d = 2$, this additional factor is manageable (empirically $\sim 2$--$3\times$ more iterations), but for $d = 100$ the method would require $100\times$ more iterations than exact GD for the same accuracy. Despite this, Nesterov random search requires only 2 function evaluations per step (regardless of $d$), making it compelling when function evaluations are cheap but gradients are unavailable.
 
 \subsubsection{Finite Difference Error Analysis}
 
@@ -1147,9 +1155,42 @@ Table~\ref{tab:final_summary} summarises the final objective values achieved by 
 \item \textbf{Polyak sensitivity.} The Polyak step size achieves the fastest convergence when $f^\star$ is precisely known (Rosenbrock: $f = 0.009$ in 120 iterations), but diverges catastrophically when $f^\star$ is misspecified, as characterised in Proposition~\ref{prop:polyak_diverge}. This fundamental sensitivity limits its practical applicability to problems with known optimal values (e.g.\ certain convex programs where $f^\star$ can be computed by duality).
 \end{enumerate}
 
+\subsection{Practical Algorithm Selection Guide}
+
+Based on the experimental evidence and theoretical analysis, the following guidelines emerge for algorithm selection in practice:
+
+\begin{table}[H]
+\centering
+\caption{Practical algorithm selection guidelines.}
+\label{tab:guide}
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Scenario} & \textbf{Recommended Method} & \textbf{Rationale} \\
+\midrule
+$f^\star$ known, strongly convex & Polyak step & Fastest convergence, parameter-free \\
+Smooth, low-dim., any $\kappa$ & Newton (damped) & Quadratic rate, ignores $\kappa$ locally \\
+Smooth, high-dim.\ ($d > 100$) & L-BFGS / Nesterov & Quasi-Newton avoids $O(d^3)$ \\
+Neural network training & Adam & Robust to heterogeneous scales \\
+Sparse features / NLP & Adagrad & Large steps on rare features \\
+No gradient available & Nelder--Mead ($d\leq10$) & Simple, reliable for low $d$ \\
+No gradient, high-dim & Nesterov random search & $O(2)$ evaluations per step \\
+Simple constraints, exact & Projected GD & Hard feasibility at every step \\
+Complex constraints & Frank--Wolfe & No projection oracle needed \\
+Global optimum required & Grid search ($d \leq 3$) & Exhaustive, guaranteed global \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Limitations and Future Work}
 
-All experiments are limited to $d = 2$ dimensions. Several phenomena would change at scale: Newton's $O(d^3)$ cost becomes prohibitive for $d > 10^3$; gradient noise in SGD dominates at large $m$; Nesterov's acceleration advantage over GD persists but the absolute convergence rate depends on $L$, which grows with $d$. Future work could extend to $d \geq 100$ using quasi-Newton (L-BFGS), stochastic Nesterov, or second-order-free adaptive methods (Adam, AdaFactor). The penalty method experiments could be extended to augmented Lagrangian and ADMM, which overcome the ill-conditioning introduced by large $\lambda$.
+All experiments are limited to $d = 2$ dimensions and run for at most 200 iterations. Several phenomena would change at scale:
+\begin{itemize}[nosep]
+\item \textbf{High dimension ($d \geq 100$):} Newton's $O(d^3)$ cost becomes prohibitive; quasi-Newton methods (L-BFGS) approximate $H^{-1}$ in $O(md)$ where $m \approx 10$--$20$ is the history length. Nesterov's $O(\sqrt{\kappa})$ advantage over GD persists.
+\item \textbf{Large data ($m \geq 10^6$):} Full-batch GD and Newton become expensive per step. Mini-batch SGD and Adam become dominant, with the batch size $b$ controlling the variance-cost tradeoff.
+\item \textbf{Non-convex problems:} All convergence guarantees are for convex $f$. In practice (deep learning), methods find local minima or saddle-free regions; empirically Adam and Nesterov variants work well despite lacking global convergence guarantees.
+\item \textbf{Constraint handling:} Augmented Lagrangian (multiplier method) and ADMM overcome the ill-conditioning introduced by large $\lambda$ in penalty methods by simultaneously updating dual variables, achieving exact constraint satisfaction without requiring $\lambda \to \infty$.
+\end{itemize}
 
 % ============================================================
 \newpage
