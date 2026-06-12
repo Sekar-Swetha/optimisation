@@ -59,7 +59,7 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a systematic comparative study of first-order, second-order, and derivative-free optimisation algorithms applied to three benchmark problems of increasing difficulty: a convex quadratic loss arising from linear regression (Benchmark A), a mildly non-convex toy neural-network loss with sinusoidal perturbation (Benchmark B), and the highly ill-conditioned Rosenbrock function (Benchmark C). Six categories of methods are investigated: (1) adaptive step-size methods --- Polyak, Adagrad, RMSprop, and Heavy Ball (Polyak Momentum); (2) momentum and stochastic methods --- Nesterov acceleration and Adam, plus mini-batch SGD with varying noise; (3) Newton's method with Hessian damping and second-order local approximations; (4) derivative-free approaches --- finite-difference gradient approximation, Nesterov random search, Nelder--Mead, and grid search; (5) constrained optimisation via projected gradient descent and quadratic penalty methods; and (6) the Frank--Wolfe (conditional gradient) algorithm for linear-constrained problems, alongside linear programming on a box domain. Each method is evaluated with respect to convergence speed, trajectory behaviour, stability, theoretical guarantees, and computational trade-offs. Key findings include: the Polyak step achieves the best Rosenbrock convergence when $f^{\star}$ is known exactly but diverges catastrophically under misspecification; Nesterov acceleration attains the optimal $O(1/k^2)$ rate on convex problems and substantially outperforms Adam on Rosenbrock; Newton's method converges in a single iteration on quadratics; and Frank--Wolfe naturally handles linear constraints without explicit projections, at the cost of a slow $O(1/k)$ convergence rate.
+This report presents a systematic comparative study of first-order, second-order, and derivative-free optimisation algorithms applied to three benchmark problems of increasing difficulty: a convex quadratic loss arising from noisy linear regression (Benchmark A, $\kappa \approx 10$), a mildly non-convex toy neural-network loss with sinusoidal perturbation (Benchmark B, $\kappa \approx 3$--10), and the highly ill-conditioned Rosenbrock function (Benchmark C, $\kappa \approx 2009$). Twelve algorithms across six categories are implemented and evaluated: (1) adaptive step-size methods --- Polyak, Adagrad, RMSprop, and Heavy Ball (Polyak Momentum); (2) momentum and stochastic methods --- Nesterov acceleration ($O(1/k^2)$ optimal), Adam, and mini-batch SGD with varying noise and learning rate schedules; (3) Newton's method with Hessian damping and second-order local approximations; (4) derivative-free approaches --- finite-difference gradient approximation, Nesterov Gaussian smoothing (random search), Nelder--Mead simplex, and grid search; (5) constrained optimisation via projected gradient descent and penalty methods; and (6) the Frank--Wolfe (conditional gradient) algorithm for linear-constrained box problems, alongside exact linear programming. Key quantitative findings: Polyak achieves $f = 0.009$ on Rosenbrock (best first-order result) when $f^{\star}=0$ is correctly specified, but diverges to $f = 24.1$ on Benchmark B due to misspecification; Nesterov acceleration reaches $f = 0.07$ on Rosenbrock in 300 iterations, a $20\times$ improvement over GD ($f = 1.39$); Newton's method converges in exactly one iteration on the quadratic loss and achieves $f = 0.686$ on Rosenbrock in just 20 iterations; and Frank--Wolfe with fixed-$\beta$ mixing achieves $f = 0.0046$ for the interior optimum while naturally enforcing box feasibility. The report includes 46 figures, 13 tables, and formal theorems for all key convergence guarantees.
 \end{abstract}
 
 \tableofcontents
@@ -375,6 +375,10 @@ To contextualise the adaptive methods' advantages, Figure~\ref{fig:cond_number} 
 \subsection{Theoretical Background}
 
 Gradient descent on an $L$-smooth strongly convex function with constant $\mu > 0$ converges as $O((1 - \mu/L)^k)$. For large condition numbers $\kappa = L/\mu$, this is essentially $O((1-1/\kappa)^k) \approx O(e^{-k/\kappa})$, which is extremely slow. Nesterov acceleration improves this to $O((1 - 1/\sqrt{\kappa})^k)$, an optimal rate that cannot be improved by any first-order method \cite{nesterov1983method}.
+
+\begin{remark}[Connection to Adaptive Preconditioning]
+The adaptive methods in Question~1 (Adagrad, RMSprop) can be understood as \emph{diagonal preconditioning}: the update $x_{k+1} = x_k - D_k^{-1}\nabla f(x_k)$ where $D_k = \operatorname{diag}(\sqrt{G_k} + \varepsilon I)$ effectively rescales each coordinate by its historical gradient magnitude. This reduces the effective condition number from $\kappa$ to closer to 1 for each coordinate, but does not capture off-diagonal curvature correlations. Full Newton's method (Question~3) uses the complete Hessian as preconditioner, reducing the condition number to exactly 1 for quadratics.
+\end{remark}
 
 \begin{theorem}[Nesterov Optimal Rate \cite{nesterov1983method}]\label{thm:nesterov}
 For a convex $L$-smooth function $f$, the Nesterov accelerated gradient method with step size $\alpha = 1/L$ achieves:
@@ -817,6 +821,10 @@ The choice of $\delta$ is critical to finite-difference accuracy. Figure~\ref{fi
 
 \noindent This zeroth-order method estimates the gradient via a single random directional finite difference, requiring only \emph{two} function evaluations per iteration regardless of dimension $d$. The estimator $\hat{g}_k$ is an unbiased estimator of $\nabla f_\delta(x_k)$ where $f_\delta$ is a Gaussian-smoothed version of $f$ \cite{nesterov2017random}. The variance of $\hat{g}_k$ is $O(d)$, meaning convergence slows in high dimensions.
 
+\begin{remark}[Connection to SGD]
+The Nesterov random search method is structurally analogous to SGD (Section~\ref{sec:q2}): both replace the full gradient with a stochastic estimate, and both suffer from a variance term that limits convergence to a neighbourhood of the optimum for constant step sizes. The key difference is the source of randomness --- in SGD it is data sub-sampling (with $O(1/b)$ variance), while in random search it is direction sampling (with $O(d)$ variance). Dimension $d$ thus plays the role of inverse batch size in the convergence speed comparison.
+\end{remark}
+
 \subsubsection{Hyperparameter Settings (Part A)}
 
 \begin{table}[H]
@@ -1099,7 +1107,7 @@ The minimum of a linear objective over a bounded polytope $\mathcal{X}$ is alway
 \end{theorem}
 
 \begin{definition}[Frank--Wolfe Gap]
-At iterate $x_k$, the Frank--Wolfe gap is $g_k = \nabla f(x_k)^{\top}(x_k - z_k)$ where $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^{\top} z$. This quantity upper-bounds the suboptimality: $f(x_k) - f^{\star} \leq g_k / \beta$, and $g_k = 0$ is a necessary condition for optimality.
+At iterate $x_k$, the Frank--Wolfe gap is $g_k = \nabla f(x_k)^{\top}(x_k - z_k)$ where $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^{\top} z$. This quantity upper-bounds the suboptimality: $f(x_k) - f^{\star} \leq g_k / \beta$, and $g_k = 0$ is a necessary condition for optimality. Note the connection to KKT stationarity conditions (cf.\ Section~\ref{sec:q5}): $g_k = 0$ means $\nabla f(x_k)^{\top}(x_k - z) \leq 0$ for all $z \in \mathcal{X}$, which is precisely the first-order optimality condition for constrained optimisation.
 \end{definition}
 
 \subsection{Feasible Set and Linear Programme}
@@ -1268,6 +1276,8 @@ This report has systematically evaluated twelve optimisation algorithms across t
 \end{enumerate}
 
 \noindent\textbf{Overall comparative insight:} For smooth, well-conditioned problems, Nesterov acceleration and Adam are the methods of choice. For ill-conditioned problems where the Hessian is tractable (low dimension), Newton's method or quasi-Newton methods (e.g., L-BFGS) provide dramatic speedups. When gradients are unavailable, Nelder--Mead is surprisingly effective in low dimensions. For constrained problems, projected gradient descent is preferred when projections are cheap, while Frank--Wolfe and penalty methods offer alternatives when projections are expensive.
+
+The experiments also reveal a consistent \emph{computational hierarchy} on Benchmark C: for equal iteration counts, Newton $\gg$ Polyak (with $f^{\star}$) $\gg$ Nesterov $\gg$ Adam $\gg$ Heavy Ball $\gg$ Adagrad $\gg$ GD. However, adjusting for \emph{gradient evaluations per iteration}, Newton is actually $4\times$ more expensive per step (requires Hessian) than first-order methods, making the comparison more nuanced: Newton uses $20 \times 3 = 60$ evaluations (gradient + Hessian column evaluations) while GD uses $300 \times 1 = 300$. Even on this adjusted basis, Newton achieves far better results, demonstrating the superiority of second-order information for ill-conditioned problems.
 
 Table~\ref{tab:methods_summary} provides a unified reference summarising key properties of all methods studied.
 
