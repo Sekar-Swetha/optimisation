@@ -619,6 +619,10 @@ Adam & $\alpha$ & 0.12 & 0.08 & 0.006 \\
 \label{fig:q2_fval_C}
 \end{figure}
 
+\begin{remark}[Adam vs.\ Nesterov: When to Use Which]
+The experimental results show Nesterov outperforms Adam on Benchmark C (ill-conditioned Rosenbrock): Nesterov achieves $f = 0.479$ vs.\ Adam's $f = 1.578$ after 150 iterations. This ordering is explained by the problem structure: Rosenbrock has \emph{consistent} ill-conditioning (the narrow valley floor has $\kappa \approx 2009$ throughout), and Nesterov's deterministic momentum builds consistent acceleration along the valley direction. Adam's per-coordinate scaling estimates the curvature from $v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2$, but on Rosenbrock the gradient direction varies significantly along the valley, causing $v_t$ to be a poor estimate of the true local curvature. In contrast, for \emph{well-conditioned} problems (Benchmarks A and B) or problems with coordinate-wise heterogeneity (different features have very different scale), Adam's adaptive scaling provides advantages that Nesterov's uniform momentum cannot. The practical rule: choose Nesterov for ill-conditioned deterministic problems; choose Adam for stochastic or anisotropic problems.
+\end{remark}
+
 \begin{table}[H]
 \centering
 \caption{Q2: Final objective values after 150 iterations. Bold indicates best per benchmark.}
@@ -774,6 +778,10 @@ A key limitation of SGD is the $O(\sigma_b^2)$ variance floor that prevents conv
 \begin{remark}[SVRG: Stochastic Variance Reduced Gradient]
 The SVRG algorithm \cite{bottou2018optimization} alternates between: (1) computing the full gradient $\mu_s = \nabla J(\tilde\theta_s)$ at a snapshot point $\tilde\theta_s$ every $m$ iterations, and (2) taking stochastic steps with the variance-corrected gradient $\hat{g}_k = \nabla J_{\mathcal{B}}(\theta_k) - \nabla J_{\mathcal{B}}(\tilde\theta_s) + \mu_s$. The correction $-\nabla J_{\mathcal{B}}(\tilde\theta_s) + \mu_s$ has mean zero (unbiased) but \emph{reduced variance} when $\theta_k \approx \tilde\theta_s$, because the stochastic and full gradients cancel. SVRG achieves linear convergence $O(\rho^k)$ for strongly convex $J$ without requiring $\alpha \to 0$, at the cost of one full-gradient computation every $m$ stochastic steps. For Benchmark A ($m = 1000$ samples), SVRG with $m_{\mathrm{epoch}} = 1000$ would achieve the same $O((1-\mu/L)^k)$ rate as GD while processing only $\sim 2 \times$ more samples than standard SGD.
 \end{remark}
+
+\subsection{Momentum Warm-Up and Nesterov Schedule Interpretation}
+
+The Nesterov momentum schedule $\beta_k = (k-1)/(k+2)$ (capped at $\beta_{\max}$) starts at $\beta_1 = 0$ and gradually increases toward $\beta_{\max}$. This \emph{momentum warm-up} has two benefits: (1) it avoids the large initial oscillations of fixed-$\beta$ momentum methods (which would set $\beta = 0.9$ immediately, causing large momentum-driven overshoots near the start when gradients are large); (2) the schedule satisfies a Lyapunov condition that guarantees $O(1/k^2)$ convergence. The warm-up concept has been rediscovered in deep learning (transformer models use a linear warm-up of the learning rate for the first few thousand steps), where starting with large momentum immediately causes instability due to noisy mini-batch gradients. Figure~\ref{fig:sgd_schedule} shows the effect of different learning rate schedules on SGD convergence; the same principles apply to momentum schedules.
 
 \subsection{Learning Rate Schedules for SGD}
 
@@ -998,6 +1006,8 @@ While Newton's method is superior in iteration count, it has important practical
 \item \textbf{Single iteration on quadratics:} This remarkable property (Proposition~\ref{prop:newton_quad}) holds only for exact quadratics. Even a slight non-quadratic perturbation (like the $\sin(x_1)$ term in Benchmark B) means Newton requires multiple iterations, though far fewer than GD.
 
 \item \textbf{Quasi-Newton approximation:} The \emph{Broyden--Fletcher--Goldfarb--Shanno} (BFGS) and \emph{limited-memory BFGS} (L-BFGS) methods approximate $[\nabla^2 f(x_k)]^{-1}$ using $m$ recent gradient-iterate pairs $\{(s_j, y_j)\}_{j=k-m}^{k-1}$ where $s_j = x_{j+1} - x_j$ and $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$ \cite{nocedal2006numerical}. The approximation satisfies the secant condition $B_{k+1} s_k = y_k$ and preserves positive definiteness via the Sherman--Morrison--Woodbury formula. L-BFGS requires $O(m d)$ storage and $O(m d)$ per iteration (vs.\ Newton's $O(d^2)$/$O(d^3)$), making it the method of choice for large $d$ when second-order information is beneficial.
+
+\item \textbf{Batch normalisation as implicit preconditioning:} Batch normalisation (BN) normalises layer activations to zero mean and unit variance, effectively \emph{reparameterising} the loss surface to have more uniform curvature. This reduces the effective condition number of the loss Hessian, making first-order methods like Adam perform similarly to second-order methods. Formally, BN makes the loss approximately invariant to scale changes in the weights, which corresponds to the gradient being approximately in the range of the Hessian (i.e., the Hessian has no very small eigenvalues that would require large corrections). This is why deep networks with BN can be trained with large learning rates and simple SGD, whereas networks without BN require more careful tuning.
 
 \item \textbf{K-FAC for deep learning:} Kronecker-factored Approximate Curvature (K-FAC) approximates the Fisher information matrix $F = \mathbb{E}[\nabla\log p \nabla\log p^{\top}]$ as a Kronecker product of two smaller matrices per layer. For a layer with weight matrix $W \in \mathbb{R}^{m \times n}$, $F \approx A \otimes G$ where $A$ and $G$ are $n \times n$ and $m \times m$ matrices computed from layer inputs and output gradients respectively. K-FAC requires $O(m^2 + n^2)$ storage per layer (vs.\ $O(m^2 n^2)$ for the full Fisher), making second-order optimisation tractable for neural networks with millions of parameters.
 \end{enumerate}
@@ -1244,6 +1254,10 @@ Since the constraint $x_1 \geq 0.5$ is \emph{inactive} at $x^{\star} = (0.582, 2
 \end{algorithm}
 
 \noindent For the half-space $\mathcal{X} = \{x : x_1 \geq 0.5\}$, the projection is simply $\Pi_{\mathcal{X}}(z) = (\max(0.5, z_1), z_2)$, a $O(1)$ operation. Projected GD maintains \emph{exact feasibility} at every iteration by construction.
+
+\begin{remark}[Boundary Hugging Phenomenon]
+Starting from the infeasible point $x_0 = (0.2, 4.0)$, projected GD immediately clips to the boundary $(0.5, 4.0)$ on the first step. The subsequent trajectory hugs the constraint boundary $x_1 = 0.5$ for several iterations before moving to the interior. This occurs because the gradient $\nabla f = [2(x_1-1)+\cos(x_1),\, 10(x_2-2)]$ at $(0.5, 4.0)$ has $x_1$-component $\approx 2(0.5-1)+\cos(0.5) \approx -0.12 < 0$, pointing \emph{toward} the infeasible region ($x_1 < 0.5$). The projection clips this component to zero, effectively following the projected gradient $\Pi_{\mathcal{T}_{\mathcal{X}}}(-\nabla f)$ where $\mathcal{T}_{\mathcal{X}}$ is the tangent cone at the active constraint. Once the $x_2$ coordinate has decreased sufficiently (after $\approx 5$ iterations) the unconstrained gradient component in $x_1$ becomes positive, and the iterate naturally moves to the interior. This boundary-hugging period is precisely where the constraint is active ($\mu^{\star}_k > 0$); the transition to the interior corresponds to the constraint becoming inactive.
+\end{remark}
 
 \begin{proposition}[Projected GD Convergence \cite{boyd2004convex}]\label{prop:pgd_conv}
 For a convex $L$-smooth function $f$ and closed convex set $\mathcal{X}$, projected gradient descent with step $\alpha = 1/L$ achieves:
