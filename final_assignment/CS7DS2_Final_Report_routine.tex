@@ -485,7 +485,11 @@ Adam unifies momentum ($m_t$, like Heavy Ball) with per-coordinate adaptive scal
 \textbf{Adam as approximate diagonal Newton:} The update $x_{t+1} = x_t - \alpha \hat{m}_t / (\sqrt{\hat{v}_t} + \varepsilon)$ can be interpreted as a diagonal preconditioning: $\sqrt{\hat{v}_{t,i}} \approx \sqrt{\mathbb{E}[g_{t,i}^2]} \approx |g_{t,i}|$ approximates the root-mean-square gradient magnitude, which (for a quadratic objective) approximates $\sqrt{H_{ii}}$ (the square root of the diagonal Hessian entry). Thus Adam's per-coordinate scaling approximately mimics $\text{diag}(H)^{-1/2}$, which is a diagonal preconditioner. A full Newton step uses $H^{-1}$; Adam's diagonal approximation explains both its effectiveness (handles anisotropy like Newton) and its limitations (ignores off-diagonal curvature interactions like the Rosenbrock valley).
 
 \begin{remark}[Adam Convergence]
-The original Adam paper (Kingma \& Ba, 2015) claimed an $O(1/\sqrt{T})$ regret bound, but Reddi et al.\ (2018) identified a flaw: Adam can \emph{diverge} on simple convex problems due to non-monotone effective step sizes. The fix (AMSGrad) uses a running maximum of $\hat{v}_t$ in the denominator. In practice, Adam with tuned $\beta_1, \beta_2, \alpha$ is highly effective in deep learning, but its convergence on general convex problems remains an open area. Our results confirm this empirically: Adam performs well on smooth, well-conditioned benchmarks (A, B) but lags behind Nesterov on the highly non-quadratic Rosenbrock function (C), where the second-moment estimate adapts slowly.
+The original Adam paper (Kingma \& Ba, 2015) claimed an $O(1/\sqrt{T})$ regret bound, but Reddi et al.\ (2018) identified a flaw: Adam can \emph{diverge} on simple convex problems due to non-monotone effective step sizes. The fix (AMSGrad) uses a running maximum $\hat{v}_t^{\max} = \max(\hat{v}_{t-1}^{\max}, \hat{v}_t)$ in the denominator, guaranteeing monotone step-size decay. In practice, Adam with tuned $\beta_1, \beta_2, \alpha$ is highly effective in deep learning, but its convergence on general convex problems remains an open area. Our results confirm this empirically: Adam performs well on smooth, well-conditioned benchmarks (A, B) but lags behind Nesterov on the highly non-quadratic Rosenbrock function (C), where the second-moment estimate $v_t$ (with $\beta_2 = 0.999$, memory window $\sim$1000 iterations) adapts too slowly to the rapidly varying Rosenbrock Hessian.
+\end{remark}
+
+\begin{remark}[Adam and the Natural Gradient]
+The \emph{natural gradient} (Amari, 1998) preconditions updates by the inverse Fisher information matrix $F(\theta)^{-1}\nabla f(\theta)$, where $F(\theta) = \mathbb{E}[\nabla \log p(y|x;\theta)\, \nabla \log p(y|x;\theta)^T]$ is the expected outer product of score functions. For objectives arising as negative log-likelihoods, $F(\theta) \approx \mathbb{E}[g_t g_t^T]$, the empirical second moment of gradients. Adam's diagonal $\sqrt{\hat{v}_{t,i}} \approx \sqrt{\mathbb{E}[g_{t,i}^2]} \approx \sqrt{F_{ii}(\theta)}$ approximates the diagonal entries of $\sqrt{F(\theta)}$, making Adam a \emph{diagonal natural gradient} with exponential forgetting. Full natural gradient (K-FAC: Kronecker-Factored Approximate Curvature) uses block-diagonal approximations to $F$ and achieves faster convergence at $O(d^2)$ cost --- still cheaper than full Newton ($O(d^3)$). This interpretation explains why Adam excels in practice: it corrects for the diagonal curvature of the parameter manifold while ignoring off-diagonal interactions, which is precisely what a full Hessian-based method would capture.
 \end{remark}
 
 \subsection{Hyperparameter Settings}
@@ -866,10 +870,25 @@ For $d = 2$ (as here), the per-iteration cost difference is negligible. However,
 L-BFGS maintains the $m$ most recent curvature pairs $\{(s_j, y_j)\}_{j=k-m}^{k-1}$ where $s_j = x_{j+1} - x_j$ and $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$. The approximate Newton direction $d_k = -H_k^{-1}\nabla f(x_k)$ is computed via the \emph{two-loop recursion} in $O(md)$ operations: (i) \textbf{Backward pass} ($j = k{-}1, \ldots, k{-}m$): set $\rho_j = 1/(y_j^T s_j)$, $\alpha_j \leftarrow \rho_j s_j^T q$, $q \leftarrow q - \alpha_j y_j$; (ii) \textbf{Initialise} $r \leftarrow H_0^{(k)} q$ with the Barzilai--Borwein scaling $H_0^{(k)} = \frac{s_{k-1}^T y_{k-1}}{y_{k-1}^T y_{k-1}} I$; (iii) \textbf{Forward pass} ($j = k{-}m, \ldots, k{-}1$): $\beta_j \leftarrow \rho_j y_j^T r$, $r \leftarrow r + s_j(\alpha_j - \beta_j)$. The Wolfe conditions (sufficient decrease + curvature condition $y_j^T s_j > 0$) are enforced by line search to preserve positive definiteness of $H_k^{-1}$. For $\kappa = 2508$ on Rosenbrock, L-BFGS with $m = 5$ history pairs would achieve superlinear convergence --- qualitatively confirmed by our Newton results where even a crude $2{\times}2$ Hessian inverse reduces $f$ to $0.686$ in 20 iterations. In high-dimensional settings ($d \sim 10^6$, e.g.\ large language model fine-tuning), L-BFGS with $m = 5$--$20$ is the standard choice for second-order-informed optimisation.
 \end{remark}
 
+\begin{remark}[Conjugate Gradient: Exact-Quadratic Optimality in $d$ Steps]
+The \emph{conjugate gradient} method (Hestenes \& Stiefel, 1952) generates directions $\{d_k\}$ that are $H$-conjugate ($d_k^T H d_j = 0$ for $k \neq j$), expanding the Krylov subspace $\mathcal{K}_k = \text{span}\{g_0, Hg_0, H^2g_0, \ldots, H^{k-1}g_0\}$ at each iteration. For an exact quadratic, CG converges in $\leq d$ steps without ever forming $H$ explicitly --- each step requires only a single Hessian-vector product $Hd_k$ ($O(d)$ if $H$ is available as an operator). Convergence for CG on a quadratic satisfies:
+\begin{equation}
+\frac{\|e_k\|_H}{\|e_0\|_H} \leq 2\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k,
+\end{equation}
+the same rate as Heavy Ball's optimal setting and Nesterov on strongly convex problems, achieved \emph{without knowledge of $\kappa$}. Truncated Newton-CG methods use $T_k < d$ CG steps to approximately solve the Newton system at each outer Newton iteration, achieving second-order convergence rates with $O(T_k d)$ cost per step and making it the method of choice for smooth large-scale nonlinear optimisation.
+\end{remark}
+
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
 \label{sec:q4}
 % ============================================================
+
+\subsection{Theoretical Background: When Are Derivatives Unavailable?}
+\label{ssec:q4_theory}
+
+Gradient-based methods assume access to $\nabla f(x)$, but this is unavailable in three important practical settings: (1) \emph{black-box functions} where $f$ is evaluated as a simulation (aerodynamic drag, drug dosage response, compiler optimisation) with no analytic form; (2) \emph{non-differentiable objectives} such as $f(x) = \|Ax - b\|_1$ or objectives with discontinuities; and (3) \emph{hardware accelerators} where backward-mode automatic differentiation is unavailable (FPGA, TPU with custom kernels). In these settings, gradient information must be \emph{approximated} from function values alone, incurring additional cost and estimation error.
+
+The fundamental cost of zeroth-order optimisation is captured by the \emph{oracle complexity}: the number of function evaluations needed to reach $\varepsilon$-accuracy. For $d$-dimensional smooth strongly convex problems, first-order methods achieve $O(d \kappa \log(1/\varepsilon))$ evaluations (computing gradient $\nabla f$ costs $O(d)$ FE in the finite-difference setting), while zeroth-order methods require at least $\Omega(d^2/\varepsilon)$ evaluations --- a \emph{dimension-dependent gap} that makes gradient-free methods progressively less competitive as $d$ grows. For the 2D benchmarks in this assignment, this gap is negligible; for $d = 10^6$ problems in deep learning, the $d^2$ factor is prohibitive.
 
 \subsection{Part A: Finite Difference and Nesterov Random Search (Benchmark B)}
 \label{ssec:q4_partA}
@@ -1198,6 +1217,20 @@ For a convex objective $f$ with Lipschitz gradient (constant $L$) minimised over
 f(x_k) - f^{\star} \leq \frac{\|x_0 - x^{\star}\|^2}{2\alpha k}.
 \end{equation}
 For strongly convex $f$ with modulus $\mu$, the rate improves to linear: $\|x_k - x^{\star}\|^2 \leq (1 - \alpha\mu)^k\|x_0 - x^{\star}\|^2$. In our experiment, the constraint is a half-space, which is convex and admits trivial projection, so the projected GD analysis applies directly.
+\end{remark}
+
+\begin{remark}[Proximal Gradient: Unifying Projected GD and Non-Smooth Optimisation]
+Projected gradient descent is a special case of the \emph{proximal gradient method} for composite objectives $\min_x [f(x) + h(x)]$, where $f$ is smooth and $h$ is non-smooth (but proximable). The proximal operator of $h$ is:
+\begin{equation}
+\operatorname{prox}_{\alpha h}(y) = \arg\min_{x}\left[h(x) + \frac{1}{2\alpha}\|x - y\|^2\right],
+\end{equation}
+and the proximal gradient update is $x_{k+1} = \operatorname{prox}_{\alpha h}(x_k - \alpha \nabla f(x_k))$. Three key instances unify the methods studied in this report:
+\begin{itemize}[nosep]
+\item $h = \delta_{\mathcal{X}}$ (indicator: $0$ if $x \in \mathcal{X}$, $+\infty$ otherwise): $\operatorname{prox}_{\alpha \delta_\mathcal{X}}(y) = \Pi_{\mathcal{X}}(y)$ $\Rightarrow$ \textbf{projected GD}.
+\item $h(x) = \lambda\|x\|_1$: $\operatorname{prox}_{\alpha h}(y)_i = \operatorname{sign}(y_i)\max(|y_i| - \alpha\lambda, 0)$ $\Rightarrow$ \textbf{ISTA} (soft-thresholding for LASSO/sparsity).
+\item $h = 0$: $\operatorname{prox}_0(y) = y$ $\Rightarrow$ standard \textbf{gradient descent}.
+\end{itemize}
+The accelerated proximal gradient method (FISTA, Beck \& Teboulle, 2009) applies Nesterov momentum to the proximal gradient update, achieving $O(1/k^2)$ convergence for composite objectives. This generalisation shows that the $O(1/k^2)$ Nesterov rate extends beyond smooth objectives to any problem with a tractable proximal operator, covering regularised regression, total variation denoising, and structured sparsity problems.
 \end{remark}
 
 \begin{remark}[Augmented Lagrangian]
