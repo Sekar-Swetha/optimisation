@@ -165,6 +165,14 @@ The per-iteration contraction factor $\left(\frac{\kappa-1}{\kappa+1}\right)^2$ 
 Nesterov proved that for any first-order method applied to an $L$-smooth $\mu$-strongly convex function, at least $k = \Omega(\sqrt{\kappa}\log(1/\epsilon))$ gradient evaluations are necessary to achieve $\epsilon$-accuracy. Gradient descent requires $O(\kappa \log(1/\epsilon))$ evaluations, while Nesterov's accelerated gradient achieves the optimal $O(\sqrt{\kappa}\log(1/\epsilon))$. For $\kappa = 2508$, this is the difference between $2508T$ and $50T$ effective iterations --- a $50\times$ theoretical speedup that motivates acceleration on ill-conditioned problems.
 \end{remark}
 
+\begin{remark}[Polyak--\L{}ojasiewicz Condition]
+A useful relaxation of strong convexity is the \emph{Polyak--\L{}ojasiewicz (PL) condition}: $f$ satisfies PL with constant $\mu > 0$ if
+\begin{equation}
+\frac{1}{2}\|\nabla f(x)\|^2 \geq \mu\bigl(f(x) - f^{\star}\bigr) \quad \forall x.
+\end{equation}
+Every $\mu$-strongly convex function satisfies PL with the same constant, but PL is strictly weaker: a function can satisfy PL while having a non-unique set of minimisers (e.g.\ $f(x_1, x_2) = x_1^2 + (e^{x_1} - 1 - x_1)^2$ has a connected ridge of minima). Under PL, gradient descent with step size $\alpha \leq 1/L$ achieves the \emph{same} linear convergence bound as the strongly convex case: $f(x_k) - f^{\star} \leq (1 - \alpha\mu)^k (f(x_0) - f^{\star})$. This is significant in practice: overparameterised neural networks often satisfy the PL condition in a neighbourhood of initialisation along the training trajectory, explaining why gradient descent converges linearly to a global minimum despite the non-convexity of the objective landscape.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/condition_number_impact.pdf}
@@ -586,6 +594,10 @@ A crucial theoretical distinction separates Nesterov (Section~\ref{ssec:q2_algor
 \end{itemize}
 On Rosenbrock ($\kappa \approx 2508$), Nesterov reaches $f = 0.479$ after 150 iterations while Heavy Ball (Q1, 120 iterations) reaches $f = 1.400$. The Nesterov advantage ($3\times$ better) stems from the lookahead correctly navigating the curved valley rather than oscillating across it.
 
+\begin{remark}[Momentum Restart]
+A practical technique to suppress Nesterov's occasional oscillations is \emph{adaptive momentum restart}: reset the momentum sequence (set $k \leftarrow 1$, $z \leftarrow 0$) whenever a restart criterion is triggered. Two standard criteria are: (1) \emph{function restart} --- restart if $f(x_{k+1}) > f(x_k)$ (the objective increased, indicating overshoot); (2) \emph{gradient restart} --- restart if $\langle \nabla f(\tilde{x}_k), z_k \rangle > 0$ (gradient and velocity are misaligned, indicating the iterate is ``climbing''). O'Donoghue \& Cand\`{e}s (2015) proved that with adaptive restarts, Nesterov's method achieves linear convergence for strongly convex functions at the optimal rate $O\!\left(\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k\right)$, without requiring knowledge of the strong convexity constant $\mu$. In our experiments, the $\beta_{\max}$ cap serves a similar stabilising role: by preventing $\beta_k$ from growing too close to 1, it avoids the large overshoot steps that would otherwise trigger restarts on the non-quadratic Benchmark B and Rosenbrock problems.
+\end{remark}
+
 \subsection{Mini-Batch Stochastic Gradient Descent}
 \label{ssec:q2_sgd}
 
@@ -636,6 +648,20 @@ The observation noise is scaled by a factor of 6: $\varepsilon^{(i)} \sim \mathc
 \caption{Q2: Effect of noise on mini-batch SGD. Left: original noise ($\sigma = 1$, $J^{\star} \approx 0.483$, $b=5$ achieves $0.485$, $b=40$ achieves $0.483$). Right: high noise ($\sigma = 6$, $J^{\star} \approx 17.37$--$17.47$, ratio $\approx 36\times$). Under high noise, both batch sizes converge to approximately the same elevated noise floor --- the exact ratio is $36\times$ because $J^{\star} \propto \sigma^2$ and $\sigma$ increased by $6\times$. The observation noise ($\varepsilon$) contributes an irreducible component to the loss: even with the exact OLS solution, $J(\theta_{\text{OLS}}) = \frac{1}{2m}\|\varepsilon\|^2 \approx \sigma^2/2$ (by the law of large numbers), which grows quadratically with $\sigma$. Formally, $J(\theta_{\text{OLS}}) = \frac{1}{2m}\sum_{i=1}^m \varepsilon_i^2 \to \frac{\sigma^2}{2}$ almost surely as $m \to \infty$. The mini-batch sampling variance ($\propto \sigma^2_{\text{grad}}/b$) becomes negligible compared to the $36\times$ larger observation noise, explaining why batch size differences disappear under high noise.}
 \label{fig:q2_sgd_noisy}
 \end{figure}
+
+\subsection{Variance Reduction: Beyond the SGD Noise Floor}
+\label{ssec:q2_svrg}
+
+A fundamental limitation of mini-batch SGD with a fixed step size is the \emph{irreducible noise floor} $\alpha L \sigma^2_{\text{grad}}/(2\mu b)$ (Remark above): to reach $\epsilon$-accuracy, one must reduce $\alpha$ at the cost of slowing convergence. \emph{Stochastic Variance Reduced Gradient} (SVRG, Johnson \& Zhang, 2013) eliminates this floor while retaining $O(m)$ per-epoch cost. At the start of each epoch, SVRG computes a full gradient $\tilde{g} = \nabla f(\tilde{x})$ at a \emph{snapshot point} $\tilde{x}$. Within the epoch, each stochastic update uses the \emph{variance-corrected} gradient:
+\begin{equation}
+g^{\text{SVRG}}_{t} = \nabla f_{\mathcal{B}_t}(x_t) - \nabla f_{\mathcal{B}_t}(\tilde{x}) + \tilde{g}.
+\label{eq:svrg_grad}
+\end{equation}
+The correction term $\nabla f_{\mathcal{B}_t}(\tilde{x}) - \tilde{g}$ has \emph{zero mean} (since $\mathbb{E}_{\mathcal{B}_t}[\nabla f_{\mathcal{B}_t}(\tilde{x})] = \nabla f(\tilde{x}) = \tilde{g}$) but cancels much of the stochastic noise when $x_t \approx \tilde{x}$: the variance $\text{Var}[g^{\text{SVRG}}_t] \propto \|x_t - \tilde{x}\|^2 \to 0$ as both points approach the solution, compared to $\text{Var}[\nabla f_{\mathcal{B}}(x)] = O(\sigma^2_{\text{grad}}/b)$ (bounded away from zero for SGD). This variance reduction yields \emph{linear convergence} for strongly convex functions:
+\begin{equation}
+\mathbb{E}[f(\theta_{s+1}) - f^{\star}] \leq \rho \cdot (f(\theta_s) - f^{\star}), \quad \rho = \frac{1}{1 - 4\eta L^2/(\mu(1 - 2\eta L))},
+\end{equation}
+where $\theta_s$ is the iterate after the $s$-th full pass (epoch). With step size $\eta = 1/(20L)$ and $m$ inner iterations, $\rho \leq 0.9$ is achievable, matching full-gradient GD's linear rate at $O(m + b^{-1}m)$ gradient evaluations per epoch amortised (one full gradient plus $m/b$ mini-batch gradients). The key practical advantage is that no learning-rate decay schedule is required: SVRG converges to the \emph{exact} optimum with a fixed step size, whereas SGD requires $\alpha_t \to 0$ for exact convergence. Extensions include SARAH (Nguyen et al., 2017) for non-convex problems and SPIDER (Fang et al., 2018) which achieves near-optimal $O(\min(n^{1/2}\varepsilon^{-2}, \varepsilon^{-3}))$ oracle complexity.
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -830,6 +856,10 @@ For a $d$-dimensional problem:
 \item Newton: $O(d^3)$ operations per iteration (Hessian construction $O(d^2)$ + linear solve $O(d^3)$).
 \end{itemize}
 For $d = 2$ (as here), the per-iteration cost difference is negligible. However, for large-scale problems ($d \gg 100$), Newton becomes computationally infeasible, motivating quasi-Newton methods (e.g., L-BFGS) that approximate $H^{-1}$ using gradient history without explicit Hessian computation. L-BFGS achieves superlinear convergence with $O(md)$ cost per iteration (where $m$ is the history length, typically $3$--$20$), bridging the gap between GD and Newton.
+\end{remark}
+
+\begin{remark}[L-BFGS Two-Loop Recursion]
+L-BFGS maintains the $m$ most recent curvature pairs $\{(s_j, y_j)\}_{j=k-m}^{k-1}$ where $s_j = x_{j+1} - x_j$ and $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$. The approximate Newton direction $d_k = -H_k^{-1}\nabla f(x_k)$ is computed via the \emph{two-loop recursion} in $O(md)$ operations: (i) \textbf{Backward pass} ($j = k{-}1, \ldots, k{-}m$): set $\rho_j = 1/(y_j^T s_j)$, $\alpha_j \leftarrow \rho_j s_j^T q$, $q \leftarrow q - \alpha_j y_j$; (ii) \textbf{Initialise} $r \leftarrow H_0^{(k)} q$ with the Barzilai--Borwein scaling $H_0^{(k)} = \frac{s_{k-1}^T y_{k-1}}{y_{k-1}^T y_{k-1}} I$; (iii) \textbf{Forward pass} ($j = k{-}m, \ldots, k{-}1$): $\beta_j \leftarrow \rho_j y_j^T r$, $r \leftarrow r + s_j(\alpha_j - \beta_j)$. The Wolfe conditions (sufficient decrease + curvature condition $y_j^T s_j > 0$) are enforced by line search to preserve positive definiteness of $H_k^{-1}$. For $\kappa = 2508$ on Rosenbrock, L-BFGS with $m = 5$ history pairs would achieve superlinear convergence --- qualitatively confirmed by our Newton results where even a crude $2{\times}2$ Hessian inverse reduces $f$ to $0.686$ in 20 iterations. In high-dimensional settings ($d \sim 10^6$, e.g.\ large language model fine-tuning), L-BFGS with $m = 5$--$20$ is the standard choice for second-order-informed optimisation.
 \end{remark}
 
 % ============================================================
@@ -1127,6 +1157,14 @@ Unconstrained GD & $(0.582, 2.000)$ & 0.7244 & 0.0000 & Yes (by chance) \\
 \item Small $\lambda$ ($= 0.15$) results in a weak feasibility force: the penalty gradient ($-\lambda e_1 = -0.15 e_1$ when $x_1 < 0.5$) is much smaller than the objective gradient ($\nabla_1 f \approx -2.3$ at $x = (0.2, 4.0)$), providing insufficient force to drive the iterate toward $x_1 = 0.5$.
 \end{enumerate}
 
+\begin{remark}[Condition Number Growth Under Smooth Quadratic Penalty]
+For the \emph{smooth quadratic penalty} variant $\tilde{F}_\lambda(x) = f(x) + \frac{\lambda}{2}\max(0,\, 0.5 - x_1)^2$, the penalised Hessian in the infeasible region ($x_1 < 0.5$) is $\nabla^2 \tilde{F}_\lambda = \nabla^2 f + \lambda e_1 e_1^T$, adding $\lambda$ to the $x_1$-direction curvature. Near the Benchmark B minimum, $\nabla^2 f \approx \text{diag}(1.45,\, 10)$, so the penalised eigenvalues become $\{1.45 + \lambda,\; 10\}$ and the condition number is:
+\begin{equation}
+\kappa(\tilde{F}_\lambda) \approx \frac{\max(1.45 + \lambda,\; 10)}{\min(1.45 + \lambda,\; 10)}.
+\end{equation}
+For small $\lambda$ ($\leq 8.55$): $\kappa = 10/(1.45 + \lambda)$, which \emph{decreases} (penalty raises the small eigenvalue). For large $\lambda$ ($> 8.55$): $\kappa = (1.45 + \lambda)/10$, growing linearly with $\lambda$. The implemented \emph{linear} (non-smooth) penalty shares this qualitative behaviour: large $\lambda$ introduces a large gradient discontinuity of magnitude $\lambda$ at the constraint boundary, requiring $\alpha \leq 2/(\lambda + L)$ for stable gradient steps. This condition number growth is the principal motivation for the \emph{augmented Lagrangian} method, which maintains $\lambda$ at a moderate, fixed value while achieving exact feasibility through multiplier updates $\mu \leftarrow \mu + \lambda c(x^*)$, avoiding the ill-conditioning that plagues the pure penalty approach as $\lambda \to \infty$.
+\end{remark}
+
 \begin{remark}[Convergence of Projected GD]
 For a convex objective $f$ with Lipschitz gradient (constant $L$) minimised over a convex set $\mathcal{X}$, projected gradient descent with step size $\alpha \leq 1/L$ satisfies:
 \begin{equation}
@@ -1277,7 +1315,33 @@ Boundary, $\beta = 0.93$ & $(0.500, -0.337)$ & 0.3637 & 0.25 & 0.1137 \\
 \subsection{Interior vs Boundary Behaviour: Theoretical Analysis}
 \label{ssec:q6_analysis}
 
-\textbf{Interior optimum:} The FW gap decreases as $h_k = O(1/k)$, as guaranteed for $L$-smooth convex functions. The ``zig-zag'' oscillation of $z_k$ between vertices is characteristic of Frank--Wolfe on interior optima: since $x_k$ is close to $(1, 5)$, the gradient $\nabla f(x_k) \approx 2(x_k - [1,5]^T)$ is small and alternates direction, causing $z_k$ to jump between adjacent vertices of $\mathcal{X}$. This zig-zagging is a fundamental limitation of the standard FW algorithm, leading to the $O(1/k)$ rate rather than linear convergence. The \emph{Away-Step Frank--Wolfe} and \emph{Pairwise Frank--Wolfe} variants avoid this by also allowing steps away from the current active set, achieving linear convergence rates for strongly convex objectives over polytopes while maintaining the projection-free property.
+\textbf{Interior optimum:} The FW gap decreases as $h_k = O(1/k)$, as guaranteed for $L$-smooth convex functions. The ``zig-zag'' oscillation of $z_k$ between vertices is characteristic of Frank--Wolfe on interior optima: since $x_k$ is close to $(1, 5)$, the gradient $\nabla f(x_k) \approx 2(x_k - [1,5]^T)$ is small and alternates direction, causing $z_k$ to jump between adjacent vertices of $\mathcal{X}$. This zig-zagging is a fundamental limitation of the standard FW algorithm, leading to the $O(1/k)$ rate rather than linear convergence.
+
+\textbf{Away-Step Frank--Wolfe} (Guélat \& Marcotte, 1986; Lacoste-Julien \& Jaggi, 2015) addresses this limitation by maintaining an \emph{active set} $S_k$ of vertices and at each iteration choosing the better of two directions: a standard FW step toward $z_k^{\text{FW}} = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$, or an \emph{away step} that reduces the weight of the worst active vertex $v_k^{\text{away}} = \arg\max_{v \in S_k} \nabla f(x_k)^T v$:
+
+\begin{algorithm}[H]
+\caption{Away-Step Frank--Wolfe}
+\label{alg:away_fw}
+\begin{algorithmic}[1]
+\Require $x_0 \in \mathcal{X}$ (represented as convex combination over $S_0$), iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+  \State $z_k \gets \arg\min_{z \in \mathcal{X}}\; \nabla f(x_k)^T z$ \Comment{FW vertex (approach direction)}
+  \State $v_k \gets \arg\max_{v \in S_k}\; \nabla f(x_k)^T v$ \Comment{Away vertex (most harmful)}
+  \State $d_k^{\text{FW}} \gets z_k - x_k$, \quad $d_k^{\text{AW}} \gets x_k - v_k$
+  \If{$-\nabla f(x_k)^T d_k^{\text{FW}} \geq -\nabla f(x_k)^T d_k^{\text{AW}}$} \Comment{FW direction better}
+    \State $x_{k+1} \gets x_k + \gamma_k d_k^{\text{FW}}$; update $S_{k+1}$ by adding $z_k$
+  \Else \Comment{Away direction better}
+    \State $x_{k+1} \gets x_k + \gamma_k d_k^{\text{AW}}$; update $S_{k+1}$ by reducing weight on $v_k$
+  \EndIf
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+For $\mu$-strongly convex objectives over a polytope with diameter $D$ and pyramidal width $\delta_{\mathcal{X}}$, Away-Step FW achieves \emph{linear convergence}:
+\begin{equation}
+f(x_k) - f^{\star} \leq \left(1 - \frac{\mu\,\delta_{\mathcal{X}}}{8 L D^2}\right)^k (f(x_0) - f^{\star}),
+\end{equation}
+where the pyramidal width $\delta_{\mathcal{X}}$ measures the ``spread'' of the polytope's vertices. The key mechanism: away steps remove weight from bad active-set vertices, preventing $x_k$ from being ``pulled back'' toward the wrong vertex on the next FW step --- eliminating the zig-zag oscillation while remaining projection-free.
 
 \textbf{Boundary optimum:} Frank--Wolfe is particularly well-suited to boundary optima because $z_k$ frequently selects the vertex closest to the constrained optimum. For $f(x) = x_1^2 + x_2^2$, the gradient is $2x_k$, so $z_{k,1} = 0.5$ (always, since $x_{k,1} > 0$) and $z_{k,2} = -5$ if $x_{k,2} > 0$ or $z_{k,2} = 10$ if $x_{k,2} < 0$. This drives $x_2 \to 0$ and $x_1 \to 0.5$, naturally reaching the constrained minimum without projection.
 
@@ -1397,6 +1461,43 @@ Box/simplex constraints & Projected GD & $O(d)$ projection \\
 Complex constraints, expensive proj & Frank--Wolfe & Projection-free, $O(1/k)$ \\
 Constraints + strong duality & Augmented Lagrangian & Exact constraint satisfaction \\
 \bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Comprehensive final objective values for all methods studied across all benchmarks (where applicable). Best values per benchmark in bold, excluding Polyak on A and B (misspecified $f^{\star}$). GD iteration counts vary by question (Q1: 120, Q2: 150, Q3: 80). All results from the Python implementation with \texttt{np.random.seed(42)}.}
+\label{tab:comprehensive_results}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Method} & \textbf{Question} & \textbf{Bench.\ A ($\kappa=1.12$)} & \textbf{Bench.\ B ($\kappa=6.90$)} & \textbf{Bench.\ C ($\kappa=2508$)} \\
+\midrule
+GD (baseline) & Q1--Q3 & 0.4826 & 0.7244 & 3.51 \\
+\midrule
+Polyak & Q1 & 4.7670$^*$ & 0.9819$^\dagger$ & \textbf{0.0239} \\
+Adagrad & Q1 & \textbf{0.4826} & \textbf{0.7244} & 2.20 \\
+RMSprop & Q1 & 0.5064 & 0.7276 & 3.12 \\
+Heavy Ball & Q1 & \textbf{0.4826} & \textbf{0.7244} & 1.40 \\
+\midrule
+Nesterov & Q2 & \textbf{0.4826} & \textbf{0.7244} & \textbf{0.479} \\
+Adam & Q2 & \textbf{0.4826} & \textbf{0.7244} & 1.578 \\
+\midrule
+Newton (20 iters) & Q3 & \textbf{0.4826} & \textbf{0.7244} & \textbf{0.686} \\
+\midrule
+FD GD ($\delta=0.05$) & Q4 & --- & \textbf{0.7244} & --- \\
+FD GD ($\delta=0.8$) & Q4 & --- & $> 0.724$ & --- \\
+Nesterov random search & Q4 & --- & $\approx 0.724$ & --- \\
+Nelder--Mead (160 iters) & Q4 & --- & --- & $\leq 3.51$ \\
+Grid search ($55{\times}55$) & Q4 & --- & --- & $\approx 0.001$ \\
+\midrule
+Projected GD & Q5 & --- & \textbf{0.7244} (constr.) & --- \\
+Penalty $\lambda=4.5$ & Q5 & --- & 0.7244 & --- \\
+\midrule
+Frank--Wolfe interior & Q6 & --- & $0.0046$ (interior $f$) & --- \\
+Frank--Wolfe boundary & Q6 & --- & $0.3637$ (boundary $f$) & --- \\
+\bottomrule
+\multicolumn{5}{l}{\small $^*$Diverges (above noise floor $0.4826$). $^\dagger$Oscillates above true minimum ($0.7244$).}\\
+\multicolumn{5}{l}{\small Q6 objective is $(x_1{-}1)^2{+}(x_2{-}5)^2$ (interior) and $x_1^2{+}x_2^2$ (boundary), not the Q1--Q5 benchmarks.}
 \end{tabular}
 \end{table}
 
