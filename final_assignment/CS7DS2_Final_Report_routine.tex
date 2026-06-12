@@ -301,10 +301,10 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \subsection{Comparative Analysis}
 
 \begin{itemize}[nosep]
-\item \textbf{Convergence speed:} When $f^\star$ is known exactly, Polyak converges fastest (Rosenbrock: $f = 0.009$, a $374\times$ improvement over GD). Otherwise, Adagrad and Heavy Ball match or exceed GD baseline performance.
-\item \textbf{Step-size behaviour:} Adagrad's step decays at $O(1/\sqrt{k})$, guaranteeing stability but slowing late-stage convergence. RMSprop's exponential moving average prevents premature step decay. The Polyak step is adaptive in a fundamentally different sense: it scales to the \emph{remaining suboptimality} rather than to accumulated gradients.
-\item \textbf{Stability:} GD baseline is the most stable but slowest. Polyak is unstable when $f^\star$ is misspecified. Heavy Ball can oscillate on ill-conditioned problems but is more stable than Polyak under misspecification.
-\item \textbf{Practical implication:} In practice, exact $f^\star$ is rarely known, limiting Polyak to problems where a lower bound on the optimal value is available (e.g., $f^\star = 0$ for a non-negative loss). RMSprop is a more robust adaptive choice for general applications.
+\item \textbf{Convergence speed:} When $f^\star$ is known exactly, Polyak converges fastest (Rosenbrock: $f = 0.009$, a $374\times$ improvement over GD). Otherwise, Adagrad and Heavy Ball match or exceed GD baseline performance. Heavy Ball's $f = 1.40$ vs.\ GD's $f = 3.51$ on Rosenbrock demonstrates the momentum benefit even for non-convex problems, where the formal quadratic-convergence guarantee does not apply but the practical benefit is still realised.
+\item \textbf{Step-size behaviour:} Adagrad's step decays at $O(1/\sqrt{k})$ asymptotically (since $G_k = \sum_{i=1}^k g_i^2 \sim O(k)$ for bounded gradients), guaranteeing stability but slowing late-stage convergence. RMSprop's exponential moving average with $\beta = 0.9$ maintains $v_k \approx (1-\beta)^{-1} \cdot \mathbb{E}[g_k^2]$ in steady state, so the effective step stabilises rather than decaying to zero. The Polyak step is adaptive in a fundamentally different sense: it scales to the \emph{remaining suboptimality} rather than to accumulated gradients.
+\item \textbf{Stability:} GD baseline is the most stable but slowest. Polyak is unstable when $f^\star$ is misspecified. Heavy Ball can oscillate on ill-conditioned non-quadratic problems (no theoretical guarantee beyond quadratics), but is empirically stable here.
+\item \textbf{Practical implication:} In practice, exact $f^\star$ is rarely known, limiting Polyak to problems where a lower bound on the optimal value is available (e.g., $f^\star = 0$ for a non-negative loss like cross-entropy with label smoothing). RMSprop and Adam are more robust adaptive choices for general deep learning applications.
 \end{itemize}
 
 % ============================================================
@@ -352,7 +352,12 @@ This $O(1/k^2)$ rate matches the lower bound for first-order methods on smooth c
 \end{algorithmic}
 \end{algorithm}
 
-Adam (Kingma \& Ba, 2015) combines first-moment momentum (analogous to Heavy Ball) with per-coordinate adaptive scaling (analogous to RMSprop). The bias-correction terms $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ compensate for the initialisation of $m_0 = v_0 = 0$, ensuring the effective step size remains bounded in early iterations. Adam's per-coordinate step size is approximately $\alpha$ (bounded by $[\alpha\varepsilon^{-1}, \alpha(1-\beta_1)/\sqrt{1-\beta_2}/\varepsilon]$), providing inherent stability.
+Adam (Kingma \& Ba, 2015) combines first-moment momentum (analogous to Heavy Ball) with per-coordinate adaptive scaling (analogous to RMSprop). The bias-correction terms $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ compensate for the zero-initialisation of $m_0 = v_0 = 0$: without correction, early estimates are biased towards zero, artificially reducing the effective step size in the first few iterations. After bias correction, the magnitude of the Adam update per coordinate is:
+\begin{equation}
+\left|\Delta x_{t,i}\right| = \alpha\,\frac{|\hat{m}_{t,i}|}{\sqrt{\hat{v}_{t,i}} + \varepsilon}
+\leq \frac{\alpha}{\varepsilon},
+\end{equation}
+since $|\hat{m}_{t,i}| \leq \sqrt{\hat{v}_{t,i}}$ (by the Cauchy--Schwarz inequality applied to the EMA weights). This provides an inherent step-size upper bound of $\alpha/\varepsilon$ per coordinate, regardless of gradient magnitude.
 
 \subsection{Hyperparameter Settings}
 
@@ -527,9 +532,11 @@ For a smooth function, Newton's method solves a linear system at each iteration 
 \end{equation}
 for some constant $C > 0$ once the iterate enters a neighbourhood of $x^\star$ (the quadratic convergence region). This \emph{quadratic} rate means the number of correct digits doubles each iteration, compared to GD's linear rate of $O((1-\mu/L)^k)$.
 
-For non-convex problems (e.g., Rosenbrock away from the optimum) or problems with rapidly changing Hessians, a damped step ($\alpha < 1$) prevents overshooting into regions where the quadratic model is inaccurate.
+For non-convex problems (e.g., Rosenbrock away from the optimum) or problems with rapidly changing Hessians, a damped step ($\alpha < 1$) prevents overshooting into regions where the quadratic model is inaccurate. The quadratic convergence region (``basin of attraction'' for Newton) is entered only when $x_k$ is sufficiently close to $x^\star$; outside this region, a damped or globalised Newton step is needed.
 
-\textbf{Settings:} GD uses 80 iterations; Newton uses only 20 iterations, reflecting the superior per-iteration progress. Tikhonov damping $\lambda = 10^{-8}$ ensures numerical stability without materially affecting the Newton direction.
+\textbf{Comparison with gradient descent:} GD's linear convergence rate $O\!\left((1-\mu/L)^k\right)$ depends on the condition number $\kappa = L/\mu$. For Benchmark~C with $\kappa \approx 2508$, GD converges at rate $\approx (1 - 1/2508)^k \approx 0.9996^k$ --- reaching $\varepsilon$-accuracy requires $O(\kappa \log(1/\varepsilon))$ iterations. Newton's quadratic convergence requires only $O(\log\log(1/\varepsilon))$ iterations in the local regime, independent of $\kappa$.
+
+\textbf{Settings:} GD uses 80 iterations; Newton uses only 20 iterations, reflecting the superior per-iteration progress. Tikhonov damping $\lambda = 10^{-8}$ ensures $H_k + \lambda I \succ 0$ (positive definite) without materially affecting the Newton direction when $H_k$ is itself well-conditioned.
 
 \begin{table}[H]
 \centering
@@ -723,9 +730,10 @@ Grid search & None (exhaustive) & $N^d$ total & None & Very poor & Grid-limited 
 
 \textbf{Key observations:}
 \begin{itemize}[nosep]
-\item For high-dimensional problems ($d \gg 1$), FD requires $d + 1$ evaluations per step versus 2 for Nesterov random search, which is dimension-independent.
-\item Nelder--Mead and grid search do not scale: Nelder--Mead is typically reliable only for $d \leq 10$--$20$, and grid search is intractable beyond $d \approx 3$.
-\item When analytical gradients are available, the cost of gradient computation is typically $O(d)$ --- the same order as one function evaluation --- so the per-iteration cost of exact GD is comparable to a single function evaluation.
+\item For high-dimensional problems ($d \gg 1$), FD requires $d + 1$ evaluations per step versus 2 for Nesterov random search, which is dimension-independent. However, FD provides a biased gradient estimate with $O(\delta)$ error per component, whereas Nesterov random search's estimate has zero bias in expectation (it estimates a directional derivative, not the full gradient) but high variance.
+\item Nelder--Mead and grid search do not scale: Nelder--Mead is typically reliable only for $d \leq 10$--$20$, and grid search is intractable beyond $d \approx 3$ due to the curse of dimensionality ($55^{10} \approx 2.5 \times 10^{17}$ evaluations for $d=10$).
+\item When analytical gradients are available, the cost of gradient computation is typically $O(nd)$ for loss functions summing over $n$ data points --- the same order as one function evaluation --- so the per-iteration cost of exact GD is comparable to FD GD but without the approximation error.
+\item \textbf{Finite difference vs.\ automatic differentiation:} In modern machine learning, automatic differentiation (backpropagation) computes \emph{exact} gradients at cost $O(d)$ forward passes, completely superseding finite differences. FD remains relevant only when code is black-box or not differentiable.
 \end{itemize}
 
 % ============================================================
@@ -932,11 +940,71 @@ Boundary, $\beta = 0.93$ & 140 & $(0.500,\; -0.337)$ & 0.3637 & 0.25 \\
 
 \subsection{Interior vs.\ Boundary Behaviour --- Analysis}
 
-\textbf{Interior optimum:} Frank--Wolfe converges to the interior minimum, but via a zig-zag path: at each step, the LP oracle selects a vertex of $\mathcal{X}$ based on the current gradient, and the convex combination slowly moves the iterate towards that vertex. Near the interior minimum, the gradient is small and the LP oracle may select different vertices at consecutive iterations, causing the observed oscillation. The $O(1/k)$ rate is confirmed by the gradual decrease in the convergence curves.
+\textbf{Interior optimum:} Frank--Wolfe converges to the interior minimum, but via a zig-zag path: at each step, the LP oracle selects a vertex of $\mathcal{X}$ based on the current gradient, and the convex combination slowly moves the iterate towards that vertex. Near the interior minimum $(1, 5)$, the gradient $\nabla f(x_k) \approx 2(x_k - (1, 5))$ is small and may alternate sign in individual components, causing the LP oracle to select alternating vertices. The fixed mixing parameter $\gamma = 1-\beta$ prevents these oscillations from being averaged away. The $O(1/k)$ rate is confirmed by the approximate power-law decrease visible in the convergence plots.
 
-\textbf{Boundary optimum:} Frank--Wolfe is particularly suited to boundary optima. When the unconstrained minimum is outside $\mathcal{X}$, the gradient at points near the boundary consistently points toward the infeasible region, so the LP oracle consistently selects a nearby vertex. The iterate naturally approaches and stays on the boundary. However, the final objective ($0.364$) is above $f^\star = 0.25$ after 140 iterations, indicating that the fixed step schedule is too slow for tight convergence; using $\gamma_k = 2/(k+2)$ would improve the rate.
+The \textbf{Frank--Wolfe gap} at the final iterate can be computed as:
+\begin{equation}
+G_k = \nabla f(x_k)^T(x_k - z_k) = \sum_i (\nabla f(x_k))_i \cdot [(x_k)_i - (z_k)_i] \geq f(x_k) - f^\star,
+\end{equation}
+providing a certificate of near-optimality without knowing $f^\star$.
 
-\textbf{Comparison with Projected GD:} Frank--Wolfe avoids the projection operation (which can be expensive for complex constraint sets) at the cost of a slower $O(1/k)$ convergence rate compared to Projected GD's $O((1-\mu/L)^k)$ linear rate. For problems with expensive projections but cheap LP subproblems (e.g., nuclear norm balls, flow polytopes), Frank--Wolfe is preferred.
+\textbf{Boundary optimum:} Frank--Wolfe is particularly suited to boundary optima. When the unconstrained minimum $(0, 0)$ lies outside $\mathcal{X}$ (violating $x_1 \geq 0.5$), the gradient at $x_k$ near the $x_1 = 0.5$ boundary has $(\nabla f(x_k))_1 = 2(x_k)_1 \approx 1 > 0$, so the LP oracle \emph{consistently} selects $z_1 = 0.5$ (lower bound). This drives $x_k$ towards the boundary naturally, without projection. However, the $x_2$ component oscillates: the LP oracle selects $z_2 = 10$ when $x_2 < 0$ (since $(\nabla f)_2 = 2x_2 < 0$) and $z_2 = -5$ when $x_2 > 0$, causing zigzagging in the $x_2$ direction. The final $x_2 = -0.337$ (below $x_2^\star = 0$) reflects this oscillation. Using $\gamma_k = 2/(k+2)$ would provide the proven $O(1/k)$ convergence certificate.
+
+\textbf{Comparison with Projected GD:} Frank--Wolfe avoids the projection operation at the cost of a slower $O(1/k)$ convergence rate compared to Projected GD's linear rate $O\!\left((1-\mu/L)^k\right)$. Projected GD with $\mu = 1$ (strong convexity of $f(x) = x_1^2 + x_2^2$) and $L = 2$ would converge at rate $0.5^k$, reaching $\varepsilon = 0.01$ in $\log_{0.5}(0.01) \approx 7$ iterations --- far faster than Frank--Wolfe's $O(1/k)$ rate. For problems with expensive projections but cheap LP subproblems (e.g., nuclear norm balls, flow polytopes, spectrahedra in semidefinite programming), Frank--Wolfe is preferred.
+
+% ============================================================
+\section{Grand Summary: All Methods Across All Benchmarks}
+\label{sec:summary}
+% ============================================================
+
+Table~\ref{tab:grand_summary} consolidates the final objective values achieved by all methods tested in the report, enabling a direct cross-method, cross-benchmark comparison.
+
+\begin{table}[H]
+\centering
+\caption{Grand summary: final objective values (lower is better). Iterations shown in parentheses. All runs use the hyperparameters specified in the respective section tables. Bold = best per benchmark column.}
+\label{tab:grand_summary}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Question} & \textbf{Method} & \textbf{Bench.\ A ($J^\star{\approx}0.4826$)} & \textbf{Bench.\ B ($f^\star{\approx}0.7244$)} & \textbf{Bench.\ C ($f^\star{=}0$)} \\
+\midrule
+\multirow{5}{*}{Q1 (120 it.)}
+  & GD (baseline)  & 0.4826 & 0.7244 & 3.5142 \\
+  & Polyak         & 2.7189\textsuperscript{*} & 24.0659\textsuperscript{*} & 0.0094 \\
+  & Adagrad        & 0.4826 & 0.7244 & 2.2034 \\
+  & RMSprop        & 0.5027 & 0.7271 & 3.1204 \\
+  & Heavy Ball     & 0.4826 & 0.7244 & 1.4003 \\
+\midrule
+\multirow{3}{*}{Q2 (150 it.)}
+  & GD (baseline)  & 0.4826 & 0.7244 & 3.3880 \\
+  & Nesterov       & 0.4826 & 0.7244 & 0.4788 \\
+  & Adam           & 0.4826 & 0.7244 & 1.5785 \\
+\midrule
+\multirow{2}{*}{Q3}
+  & GD (80 it.)    & 0.4827 & 0.7244 & 3.7319 \\
+  & Newton (20 it.) & 0.4826 & 0.7244 & 0.6864 \\
+\midrule
+\multirow{4}{*}{Q4 (Bench.\ B/C)}
+  & Exact GD       & --- & 0.7244 (220) & --- \\
+  & FD GD ($\delta=0.05$) & --- & $\approx$0.7244 (120) & --- \\
+  & FD GD ($\delta=0.8$)  & --- & $>$0.7244 (120) & --- \\
+  & Nelder--Mead    & --- & --- & see Fig.~\ref{fig:q4_nm} (160) \\
+\midrule
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item \textsuperscript{*} Polyak diverges on A and B due to misspecified $f^\star = 0$.
+\item Q5 (constrained) and Q6 (Frank--Wolfe with custom objectives) use different problem setups;
+  see Tables~\ref{tab:q5_final} and~\ref{tab:q6_final} for their respective results.
+\end{tablenotes}
+\end{table}
+
+\textbf{Key cross-cutting insights:}
+\begin{enumerate}[nosep]
+\item \textbf{Benchmark A} ($\kappa \approx 1.12$): The problem is so well-conditioned that virtually all methods (except Polyak) converge to the noise floor in 120--150 iterations. Differentiation between methods is minimal.
+\item \textbf{Benchmark B} ($\kappa \in [3.5, 6.9]$): Similarly easy; most methods converge to $f^\star$. The main discriminating factor is early-iteration efficiency, not final accuracy.
+\item \textbf{Benchmark C} (Rosenbrock, $\kappa \approx 2508$): The strongly ill-conditioned, non-convex landscape exposes the full range of method capabilities. Best result in 120 iterations: Polyak ($f = 0.009$, requires known $f^\star = 0$). Best first-order method without $f^\star$: Nesterov ($f = 0.479$, 150 iterations). Best with second-order information: Newton ($f = 0.686$, only 20 iterations; significantly more progress per iteration than any first-order method). Nelder--Mead (160 iterations, no gradient) can navigate the valley through simplex adaptation, demonstrating that derivative-free methods can be competitive for low-dimensional problems.
+\end{enumerate}
 
 % ============================================================
 \section{Conclusion}
@@ -945,11 +1013,11 @@ Boundary, $\beta = 0.93$ & 140 & $(0.500,\; -0.337)$ & 0.3637 & 0.25 \\
 
 This report has investigated six families of optimisation algorithms across three canonical benchmarks. The key findings are summarised below, ordered by the problem insight each method illuminates.
 
-\textbf{Adaptive step-size methods (Q1):} The Polyak step is theoretically optimal ($O(1/k)$ convergence) when the optimal value $f^\star$ is known exactly (Rosenbrock: $f = 0.0094$), but diverges catastrophically when $f^\star$ is misspecified (Benchmark A: $f = 2.72$ vs.\ $f^\star = 0.4826$). Adagrad's monotone decaying step size provides stability at the cost of slowing late convergence; RMSprop's exponential forgetting factor ($\beta = 0.9$) prevents this premature decay but lacks rigorous convergence guarantees. Heavy Ball benefits from momentum acceleration proportional to $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$.
+\textbf{Adaptive step-size methods (Q1):} The Polyak step is theoretically optimal ($O(1/k)$ convergence) when the optimal value $f^\star$ is known exactly (Rosenbrock: $f = 0.0094$, a $374\times$ improvement over GD in the same 120 iterations), but diverges catastrophically when $f^\star$ is misspecified (Benchmark A: $f = 2.72$ vs.\ $f^\star = 0.4826$). The failure mode is analytically clear: $\alpha_k = (f(x_k) - f^\star_{\text{wrong}})/\|\nabla f(x_k)\|^2 \to \infty$ as $\|\nabla f\| \to 0$ with $f(x_k) \not\to f^\star_{\text{wrong}}$. Adagrad's monotone decaying step size provides stability at the cost of slowing late convergence ($O(1/\sqrt{k})$ decay); RMSprop's exponential forgetting factor ($\beta = 0.9$) prevents this premature decay but lacks Adagrad's rigorous convergence guarantee for sparse gradient settings. Heavy Ball benefits from momentum acceleration proportional to $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$, which for Rosenbrock's $\kappa \approx 2508$ gives a rate $\approx 0.9996^k$ for both GD \emph{and} Heavy Ball near the optimum (Heavy Ball's guarantee is for quadratics only).
 
-\textbf{Momentum and SGD (Q2):} Nesterov's $O(1/k^2)$ optimal rate provides a $7\times$ improvement over GD on Rosenbrock (150 iterations). Adam's per-coordinate scaling handles anisotropy but is less effective than Nesterov's global momentum on the Rosenbrock valley. Mini-batch SGD shows the fundamental batch-size trade-off: smaller batches converge faster in terms of epochs (more updates) but with higher gradient variance; the advantage disappears when observation noise dominates sampling noise.
+\textbf{Momentum and SGD (Q2):} Nesterov's $O(1/k^2)$ optimal rate (vs.\ GD's $O(1/k)$) provides a $7\times$ improvement over GD on Rosenbrock in 150 iterations. The key mechanism is the lookahead: by evaluating $\nabla f(\tilde{x}_k)$ at the extrapolated point $\tilde{x}_k = x_k + \beta_k z_k$, Nesterov ``corrects'' the momentum direction before overshooting --- this is fundamentally different from Heavy Ball which evaluates the gradient at $x_k$ and cannot self-correct. Adam's per-coordinate scaling handles anisotropy but is less effective on the Rosenbrock valley ($f = 1.579$ vs.\ Nesterov's $f = 0.479$) because the valley's curvature is highly nonlinear: per-coordinate scaling cannot capture the off-diagonal structure of the Rosenbrock Hessian. Mini-batch SGD shows the fundamental batch-size trade-off: smaller batches $b = 5$ give $200$ gradient steps per epoch (faster progress) but gradient variance $\propto 1/b$; larger batches $b = 40$ give $25$ steps per epoch with lower variance. When observation noise dominates sampling noise ($\sigma = 6$), both batch sizes converge to the same elevated floor $J^\star \approx 18$.
 
-\textbf{Newton's method (Q3):} Newton achieves one-step convergence on the quadratic loss (Benchmark A), quadratic local convergence near smooth optima (Benchmark B: $\sim$5 iterations), and a $5.4\times$ objective improvement over GD in fewer iterations on Rosenbrock (Benchmark C). The required Tikhonov damping ($\lambda = 10^{-8}$) prevents numerical instability without materially affecting the direction, while a reduced step size ($\alpha = 0.22$) on Rosenbrock guards against the rapidly changing Hessian. Newton's $O(d^3)$ per-iteration cost (for Hessian solution) limits scalability to large-scale problems, motivating quasi-Newton methods (L-BFGS).
+\textbf{Newton's method (Q3):} Newton achieves \emph{one-step} convergence on the quadratic loss (Benchmark A) --- this is exact for quadratics since Newton's direction is $H^{-1}\nabla J$ and $H^{-1}\nabla J(\theta_0) = \theta_0 - \theta^{\text{OLS}}$ gives the exact solution in a single step. For near-quadratic problems (Benchmark B: $\sim$5 iterations), quadratic local convergence begins immediately. On Rosenbrock (Benchmark C), Newton achieves a $5.4\times$ objective improvement over GD using only 20 vs.\ 80 iterations; the heavy damping $\alpha = 0.22$ is necessary because the Rosenbrock Hessian changes rapidly along the curved valley (20 steps with $\alpha = 0.22$ have not yet entered the quadratic convergence basin). Newton's $O(d^3)$ per-iteration cost (Hessian inversion) limits scalability to large-scale problems, motivating quasi-Newton methods (L-BFGS) that approximate $H^{-1}$ from gradient differences.
 
 \textbf{Derivative-free methods (Q4):} Finite differences with $\delta = 0.05$ successfully approximate the gradient with negligible accuracy loss, while $\delta = 0.8$ introduces significant truncation error. Nesterov random search requires only 2 function evaluations per iteration (dimension-independent) but converges slowly due to one-dimensional gradient projection. Nelder--Mead adapts its simplex geometry to navigate the Rosenbrock valley without any derivative information. Grid search is the only method with a global optimality guarantee (to within grid resolution) but is ruled out by the curse of dimensionality for $d > 3$.
 
@@ -957,7 +1025,7 @@ This report has investigated six families of optimisation algorithms across thre
 
 \textbf{Frank--Wolfe (Q6):} The conditional gradient method exploits the LP oracle to maintain feasibility automatically ($\mathcal{X}$-iterates are guaranteed by convexity of $\mathcal{X}$) without projection. It achieves $O(1/k)$ convergence with a computable convergence certificate (the Frank--Wolfe gap $G_k$). The fixed $\beta$ schedule used here causes oscillation near the optimum; switching to the decreasing $\gamma_k = 2/(k+2)$ schedule would achieve the proven $O(1/k)$ rate bound.
 
-\textbf{Overall recommendation:} For well-conditioned smooth problems, Adam or Nesterov momentum are practical first choices. For very ill-conditioned problems with available Hessians, damped Newton's method provides dramatic convergence improvement. When constraints are present and the projection is cheap, projected GD is preferred; when the LP oracle is cheaper than projection (e.g., for structured polytopes), Frank--Wolfe is the natural choice.
+\textbf{Overall recommendation:} For well-conditioned smooth problems (Benchmark A, B), Adam or Nesterov momentum are practical first choices offering marginal improvements over GD with minimal hyperparameter sensitivity. For very ill-conditioned problems (Benchmark C, $\kappa \approx 2508$), damped Newton provides $O(\log\log(1/\varepsilon))$ quadratic convergence once in the local regime, dramatically outperforming all first-order methods. Derivative-free optimisation is appropriate when gradients are unavailable (black-box, non-smooth, or legacy code), with Nelder--Mead being the preferred low-dimensional solver. When constraints are present and the projection is cheap, projected GD provides the strongest guarantee (hard feasibility from iteration~1). Frank--Wolfe trades the $O(1/k)$ rate for projection-free operation, making it the method of choice when the LP oracle is cheaper than projection (e.g., nuclear norm ball, flow polytopes, spectrahedra).
 
 % ============================================================
 \newpage
