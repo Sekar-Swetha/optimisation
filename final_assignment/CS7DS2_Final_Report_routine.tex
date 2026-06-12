@@ -575,6 +575,21 @@ Since Nesterov's method achieves \eqref{eq:lower_bound} up to a constant factor,
 For general convex (not necessarily quadratic) objectives, Heavy Ball with fixed momentum $\beta$ does not achieve the $O(1/k^2)$ convergence rate, despite the optimal quadratic rate $O((\sqrt{\kappa}-1)^k/(\sqrt{\kappa}+1)^k)$. The issue is that Heavy Ball's convergence analysis relies on the ``eigenvector structure'' of the Hessian being constant --- which only holds for quadratics. On non-quadratic problems, the Hessian changes at each iterate, destroying the Chebyshev polynomial structure. Specific counterexamples have been constructed showing Heavy Ball can cycle or converge arbitrarily slowly on non-quadratic convex functions. The empirically observed $O(\rho^k)$ rate on Rosenbrock (Figure~\ref{fig:q_heavy_vs_nesterov}) reflects the approximately quadratic local structure near the minimum, not a general guarantee.
 \end{remark}
 
+\begin{remark}[Heavy Ball and Nesterov as ODE Discretisations]
+The Heavy Ball method $x_{k+1} = x_k - \alpha\nabla f(x_k) + \beta(x_k - x_{k-1})$ is a finite-difference discretisation of the second-order damped oscillator ODE:
+\begin{equation}
+  \ddot{x}(t) + \gamma\,\dot{x}(t) + \nabla f(x(t)) = 0,
+  \label{eq:hb_ode}
+\end{equation}
+where $\gamma > 0$ is a damping coefficient and $\dot{x}, \ddot{x}$ denote velocity and acceleration. The kinetic term $\beta(x_k - x_{k-1})$ approximates $-h\dot{x}(t)$ (momentum), while the gradient term provides the restoring force. Three damping regimes correspond to the parameter choices observed empirically:
+\begin{itemize}[nosep]
+  \item \emph{Critical damping} ($\gamma = 2\sqrt{\mu}$ for $\mu$-strongly convex $f$): fastest convergence without oscillation; corresponds to the optimal $\beta^{\star} = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$.
+  \item \emph{Under-damping} ($\gamma < 2\sqrt{\mu}$, i.e.\ $\beta > \beta^{\star}$): oscillation around the optimum, observed for $\beta > 0.9$ on Rosenbrock.
+  \item \emph{Over-damping} ($\gamma > 2\sqrt{\mu}$, i.e.\ $\beta < \beta^{\star}$): monotone convergence, slower than critical damping.
+\end{itemize}
+Nesterov's method corresponds to the \emph{Polyak-Su-Boyd-Cand\`es ODE}: $\ddot{x}(t) + (3/t)\dot{x}(t) + \nabla f(x(t)) = 0$, where the time-varying damping $3/t \to 0$ as $t \to \infty$ allows the system to accumulate momentum progressively. This time-varying damping is exactly what enables the $O(1/t^2)$ convergence in continuous time, corresponding to $O(1/k^2)$ discretely. The Heavy Ball ODE~\eqref{eq:hb_ode} with constant $\gamma$ achieves only $O(e^{-\sqrt{\mu}t})$ --- faster than GD's $O(e^{-\mu t/L})$ but sub-optimal. The ODE perspective reveals why Nesterov's schedule $\beta_k = (k-1)/(k+2)$ is not arbitrary: it is the smallest $\beta_k$ consistent with the discrete-time analogue of the $3/t$ damping term.
+\end{remark}
+
 \begin{remark}[Restart Strategies for Nesterov's Method]
 A practical challenge with Nesterov's $O(1/k^2)$ convergence is that the momentum $\beta_k \to 1$ accumulates over time. If the iterates are far from the optimum (e.g., after being stuck near a saddle point), the accumulated momentum may point in a poor direction. \emph{Restart} strategies periodically reset the momentum to zero: when a restart condition is detected (e.g., $f(x_{k+1}) > f(x_k)$, gradient restarts, or periodic fixed-interval restarts), set $k \leftarrow 0$ and start the momentum schedule afresh from the current point. Restarts can accelerate convergence on strongly convex problems from $O(1/k^2)$ to $O(\rho^k)$ while preserving the guarantee on convex problems. For Benchmark C, our $\beta_{\max} = 0.90$ cap provides an implicit form of restart resistance, preventing momentum from growing beyond this threshold.
 \end{remark}
@@ -619,6 +634,17 @@ The parameter $\varepsilon$ in Adam (and Adagrad, RMSprop) prevents division by 
 
 \begin{remark}[Adam Convergence and Non-Convergence]
 Despite empirical success, Adam can fail to converge on simple convex problems. Reddi et al.\ showed a counterexample where the exponential moving average of squared gradients can oscillate; their \emph{AMSGrad} variant fixes this by using $\hat{v}_t = \max(\hat{v}_{t-1}, v_t)$ (non-decreasing denominator). The theoretical $O(1/\sqrt{T})$ regret guarantee for Adam is established in the online learning setting; for offline optimisation, only $O(1/\sqrt{T})$ convergence of $\min_{k \leq T}\|\nabla f(x_k)\|^2$ has been proved \cite{kingma2015adam}. On Benchmark C, Adam achieves $f = 0.09$ (300 iterations), slightly worse than Nesterov's $f = 0.07$, consistent with Adam's adaptive scaling being less suited to the consistent ill-conditioning of Rosenbrock.
+\end{remark}
+
+\begin{remark}[Adam as a Unified Adaptive Momentum Framework]
+Adam unifies two orthogonal ideas via its two hyperparameters. (1) \emph{Momentum}: the first-moment EMA $m_t = \beta_1 m_{t-1} + (1-\beta_1)g_t$ provides gradient smoothing analogous to Heavy Ball. (2) \emph{Adaptive scaling}: the second-moment EMA $v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2$ provides per-coordinate normalisation analogous to RMSprop. Different limiting cases recover known methods:
+\begin{itemize}[nosep,leftmargin=1.5em]
+  \item $\beta_1 \to 0,\ \beta_2 \to 1$ (no momentum, cumulative second moment): $m_t \approx g_t$, $\hat{v}_t \approx G_t/t$ → \textbf{Adagrad} with $\alpha_0 = \alpha$.
+  \item $\beta_1 \to 0,\ \beta_2 \in (0.9, 0.99)$ (no momentum, exponential second moment): $m_t \approx g_t$ → \textbf{RMSprop}.
+  \item $\beta_1 \in (0.8, 0.95),\ \beta_2 \to 0$ (momentum, no adaptive scaling): $v_t \approx g_t^2$, $\sqrt{\hat{v}_t} \approx |g_t|$ → \textbf{sign-SGD with momentum}.
+  \item $\beta_1 \in (0.8,0.95),\ \beta_2 \to 1$ (momentum, slow-forgetting second moment): recovers \textbf{standard Adam}; the bias-corrected $\hat{v}_t$ approximates the diagonal Fisher information matrix $F_{ii} = \mathbb{E}[g_t^{(i)2}]$, connecting Adam to the \emph{natural gradient} at the coordinate level.
+\end{itemize}
+This parameterisation makes Adam a meta-algorithm spanning the space between heavy-ball and Adagrad. The bias correction ensures that all limiting cases start at the correct effective step size $\approx \alpha$ at $t=1$, regardless of $\beta_1, \beta_2$.
 \end{remark}
 
 \subsection{Hyperparameter Settings}
@@ -845,6 +871,15 @@ A key limitation of SGD is the $O(\sigma_b^2)$ variance floor that prevents conv
 The SVRG algorithm \cite{bottou2018optimization} alternates between: (1) computing the full gradient $\mu_s = \nabla J(\tilde\theta_s)$ at a snapshot point $\tilde\theta_s$ every $m$ iterations, and (2) taking stochastic steps with the variance-corrected gradient $\hat{g}_k = \nabla J_{\mathcal{B}}(\theta_k) - \nabla J_{\mathcal{B}}(\tilde\theta_s) + \mu_s$. The correction $-\nabla J_{\mathcal{B}}(\tilde\theta_s) + \mu_s$ has mean zero (unbiased) but \emph{reduced variance} when $\theta_k \approx \tilde\theta_s$, because the stochastic and full gradients cancel. SVRG achieves linear convergence $O(\rho^k)$ for strongly convex $J$ without requiring $\alpha \to 0$, at the cost of one full-gradient computation every $m$ stochastic steps. For Benchmark A ($m = 1000$ samples), SVRG with $m_{\mathrm{epoch}} = 1000$ would achieve the same $O((1-\mu/L)^k)$ rate as GD while processing only $\sim 2 \times$ more samples than standard SGD.
 \end{remark}
 
+\begin{remark}[Polyak--Ruppert Averaging: $O(1/k)$ Convergence for SGD]
+For SGD with constant step $\alpha$, the iterate $\theta_k$ oscillates around the optimum with variance $O(\alpha\sigma^2_b/\mu)$ (the variance floor, Proposition~\ref{prop:sgd_conv}). \emph{Polyak--Ruppert averaging} maintains the running average $\bar{\theta}_k = \frac{1}{k}\sum_{t=1}^k \theta_t$ and achieves:
+\begin{equation}
+  \mathbb{E}[J(\bar\theta_k)] - J^{\star} \leq \frac{C\sigma^2_b}{\mu^2 k},
+  \label{eq:pr_averaging}
+\end{equation}
+for constant step $\alpha = O(1/(\mu\sqrt{k}))$, a convergence rate of $O(1/k)$ --- the same as gradient descent, but from a stochastic method. The averaging cancels oscillations: successive iterates overshoot and undershoot the optimum, and their mean tracks the optimum with much smaller variance. For Benchmark A with $b=40$: the individual iterates achieve variance floor $\approx 8.3 \times 10^{-4}$ (Proposition~\ref{prop:sgd_conv}), but the running average $\bar\theta_k$ converges as $O(1/k)$, reaching $J(\bar\theta_{50}) - J^\star \approx C \times 1 / (0.9^2 \times 50) \approx 2.5 \times 10^{-3}$ (a 3$\times$ improvement). The trade-off: the running average is less suitable for online prediction (uses all past iterates, not the most recent), but is the method of choice when a final high-accuracy solution is required after a fixed budget of gradient evaluations.
+\end{remark}
+
 \subsection{Momentum Warm-Up and Nesterov Schedule Interpretation}
 
 The Nesterov momentum schedule $\beta_k = (k-1)/(k+2)$ (capped at $\beta_{\max}$) starts at $\beta_1 = 0$ and gradually increases toward $\beta_{\max}$. This \emph{momentum warm-up} has two benefits: (1) it avoids the large initial oscillations of fixed-$\beta$ momentum methods (which would set $\beta = 0.9$ immediately, causing large momentum-driven overshoots near the start when gradients are large); (2) the schedule satisfies a Lyapunov condition that guarantees $O(1/k^2)$ convergence. The warm-up concept has been rediscovered in deep learning (transformer models use a linear warm-up of the learning rate for the first few thousand steps), where starting with large momentum immediately causes instability due to noisy mini-batch gradients. Figure~\ref{fig:sgd_schedule} shows the effect of different learning rate schedules on SGD convergence; the same principles apply to momentum schedules.
@@ -951,6 +986,18 @@ At the starting point $x_0 = (-1, 1)$ for Rosenbrock, the Hessian is
   = \begin{bmatrix} 802 & 400 \\ 400 & 200 \end{bmatrix}.
 \end{equation}
 The full Newton step $\alpha = 1$ would overshoot significantly because this local quadratic model is a poor approximation of the true function (which has $\kappa \approx 2009$ globally and the Hessian changes rapidly along the valley). The damping factor $\alpha = 0.22$ restricts the step to a region where the quadratic approximation remains reasonable, providing \emph{global} convergence guarantees at the cost of slower convergence than the undamped Newton step would provide near the solution.
+\end{remark}
+
+\begin{remark}[Concrete Newton Step at $x_0 = (-1, 1)$]
+Since $x_{0,2} - x_{0,1}^2 = 1 - 1 = 0$ at $x_0 = (-1,1)$, the gradient simplifies: $\nabla f(x_0) = (-2(1-(-1)), 0)^{\top} = (-4, 0)^{\top}$ (the $x_2$ gradient vanishes along the valley floor). With $\det(H(x_0)) = 802 \times 200 - 400^2 = 400$, the inverse is
+\begin{equation}
+  [H(x_0)]^{-1} = \frac{1}{400}\begin{bmatrix}200 & -400 \\ -400 & 802\end{bmatrix},
+\end{equation}
+giving Newton direction $p_0 = [H(x_0)]^{-1}\nabla f(x_0) = \frac{1}{400}(-800, 1600)^{\top} = (-2, 4)^{\top}$, with $\|p_0\| = \sqrt{20} \approx 4.47$. The undamped step ($\alpha=1$) would produce:
+$$x_1^{\text{undamped}} = x_0 - p_0 = (-1-(-2),\; 1-4) = (1,\; -3),$$
+landing at the correct $x_1 = 1$ but far below the valley ($x_2 = -3 \ll x_1^2 = 1$). With damping $\alpha = 0.22$:
+$$x_1^{\text{damped}} = (-1 + 0.44,\; 1 - 0.88) = (-0.56,\; 0.12),$$
+a step toward the valley floor that keeps the iterate in a region where the quadratic model remains accurate. This computation also reveals why the $x_2$ gradient is absent at $x_0$: the Rosenbrock valley floor ($x_2 = x_1^2$) passes through $x_0 = (-1,1)$, so no $x_2$ force is needed to reach the valley --- only progress along it.
 \end{remark}
 
 \begin{table}[H]
@@ -1063,6 +1110,10 @@ A key advantage of Newton's method over gradient methods is its natural stopping
   \label{eq:newton_decrement}
 \end{equation}
 where $p_k = [\nabla^2 f(x_k)]^{-1}\nabla f(x_k)$ is the Newton direction. The quantity $\lambda(x)^2/2$ is an estimate of $f(x) - f^{\star}$ and is invariant under affine coordinate transformations. The algorithm terminates when $\lambda(x_k)^2/2 \leq \varepsilon$ for a user-specified tolerance $\varepsilon$, providing a certificate of near-optimality. In contrast, gradient methods require comparing $\|\nabla f(x_k)\|$ to a tolerance, which is scale-dependent and may be too conservative or too aggressive depending on the problem geometry.
+
+\begin{remark}[Conjugate Gradient: Optimal for Quadratics without Hessian Storage]
+The \emph{conjugate gradient} (CG) method achieves the same $O(((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^k)$ convergence rate as Nesterov on strongly convex quadratics using only gradient evaluations --- without forming or inverting the Hessian. For $f(\theta) = \frac{1}{2}\theta^{\top}H\theta - b^{\top}\theta$, CG generates directions $p_0, p_1, \ldots$ that are $H$-conjugate ($p_i^{\top}Hp_j = 0$ for $i \neq j$), allowing exact minimisation over the Krylov subspace $\mathcal{K}_k(H,r_0) = \mathrm{span}(r_0, Hr_0, \ldots, H^{k-1}r_0)$ at each step. CG converges \emph{exactly} in at most $d$ iterations since $\mathcal{K}_d = \mathbb{R}^d$. For our 2D benchmarks ($d=2$), CG on Benchmark A would converge in exactly $\mathbf{2}$ iterations: the optimal $\theta^{\star}$ is found in two steps, compared to 80 steps for GD and 1 step for Newton. Cost per step is $O(d)$ (gradient plus vector operations), the same as GD and far cheaper than Newton's $O(d^3)$. However, CG's advantages disappear for non-quadratic objectives: the conjugacy condition $p_i^{\top}Hp_j = 0$ cannot be maintained when $H$ changes at each iterate, forcing periodic restarts and losing the finite-termination property. For non-quadratic $f$, CG with restarts every $d$ steps degenerates to a first-order method and is generally superseded by L-BFGS, which implicitly maintains a better Hessian approximation via the secant condition.
+\end{remark}
 
 \subsection{Limitations of Newton's Method}
 
