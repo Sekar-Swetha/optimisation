@@ -538,6 +538,16 @@ where $\sigma_{\text{grad}}^2$ is the per-sample gradient variance. The variance
 \end{equation}
 where $\mu$ is the strong convexity constant. The epoch-level update count is $\lfloor m/b \rfloor$ per epoch: $200$ updates for $b = 5$ and $25$ updates for $b = 40$ per epoch of $m = 1000$ samples.
 
+\textbf{Learning rate schedules:} The choice of step size schedule significantly impacts convergence of SGD. Common practical schedules are:
+\begin{itemize}[nosep]
+  \item \textbf{Step decay:} $\alpha_k = \alpha_0 \cdot \rho^{\lfloor k/T \rfloor}$ (e.g., $\rho = 0.1$ every $T$ epochs). Simple but requires tuning $T$ and $\rho$.
+  \item \textbf{Exponential decay:} $\alpha_k = \alpha_0\, e^{-\lambda k}$. Satisfies Robbins--Monro since $\sum \alpha_k < \infty$ for $\lambda > 0$.
+  \item \textbf{Polynomial decay:} $\alpha_k = \alpha_0/(1 + k)^\gamma$ for $\gamma \in (0.5, 1]$. Satisfies $\sum \alpha_k = \infty$, $\sum \alpha_k^2 < \infty$ for $\gamma > 0.5$, guaranteeing convergence to $\theta^\star$.
+  \item \textbf{Cosine annealing} (standard in deep learning): $\alpha_k = \alpha_{\min} + \tfrac{1}{2}(\alpha_0 - \alpha_{\min})(1 + \cos(\pi k/T))$. Decays smoothly from $\alpha_0$ to $\alpha_{\min}$ over $T$ iterations, then optionally restarts (SGDR). Avoids the sharp step of step decay.
+  \item \textbf{Linear warmup + cosine decay:} Start with small $\alpha$ for $W$ warmup steps (prevents early instability when the model is far-from-minimum), then apply cosine schedule. The standard in large-scale transformer training (BERT, GPT).
+\end{itemize}
+For the experiments here (constant $\alpha = 0.06$, 50 epochs), the plots show the noise-floor plateau characteristic of constant learning rate SGD; applying a cosine schedule that decays to $\alpha_{\min} \approx 0$ by epoch 50 would eliminate the plateau and drive the iterate to $\theta^\star$.
+
 \textbf{Variance reduction (SVRG):} The fundamental limitation of SGD is the irreducible noise floor $\approx \alpha \sigma^2 / (b\mu)$ imposed by gradient variance. The \emph{stochastic variance reduced gradient} (SVRG, Johnson \& Zhang 2013) removes this limitation by maintaining a periodically-updated full-gradient snapshot $\tilde{g} = \nabla f(\tilde{x})$. The per-iteration estimator is:
 \begin{equation}
 \tilde{v}_k = \nabla f_i(x_k) - \nabla f_i(\tilde{x}) + \tilde{g},
@@ -663,6 +673,12 @@ The radius $\Delta_k$ is adapted by comparing actual decrease $\rho_k^{\text{act
 For the 2-dimensional benchmarks here ($d = 2$), Newton's $O(d^3) = O(8)$ per-iteration overhead is completely negligible --- the bottleneck is the number of iterations and gradient evaluations. This is why Newton's 20 iterations with $\alpha = 0.22$ easily outperforms GD's 80 iterations. L-BFGS is motivated only by large $d$.
 
 For a neural network with $d = 10^8$ parameters, Newton would require $10^{24}$ flops to form and factor the Hessian --- completely infeasible. L-BFGS at $m=20$, $d=10^8$ requires $20 \times 10^8 = 2 \times 10^9$ flops per iteration, feasible on a GPU.
+
+\textbf{Hessian-vector products for large-scale Newton:} Even forming the full Hessian $H \in \mathbb{R}^{d \times d}$ is impractical for large $d$. However, solving the Newton system $H_k p_k = g_k$ by \emph{conjugate gradient} (CG) requires only \emph{Hessian-vector products} $H_k v$ (not the full Hessian). A Hessian-vector product can be computed via double-pass automatic differentiation in the cost of 2 backward passes:
+\begin{equation}
+H(x)\,v = \frac{d}{d\varepsilon}\!\bigl[\nabla f(x + \varepsilon v)\bigr]\!\Bigr|_{\varepsilon=0} \approx \frac{\nabla f(x + \varepsilon v) - \nabla f(x)}{\varepsilon}
+\end{equation}
+(forward-mode AD on the gradient). CG solves $Hp = g$ in at most $d$ iterations (exact arithmetic), where each CG step requires one Hv product. The \emph{truncated Newton} (TN) method stops CG early at $k_{\text{CG}} \ll d$ steps, giving an \emph{inexact} Newton step with per-outer-iteration cost $O(k_{\text{CG}} \cdot \text{cost}(Hv)) = O(k_{\text{CG}} \cdot \text{cost}(\nabla^2 f))$. This avoids the $O(d^3)$ Cholesky solve: for $d = 10^5$, full Newton costs $10^{15}$ flops while TN with $k_{\text{CG}} = 100$ costs $\sim 200$ gradient evaluations --- feasible on a GPU. TN with CG is the basis of modern large-scale second-order methods in deep learning (e.g., Hessian-free optimisation, Khatri--Rao for structured Hessians).
 
 \textbf{Gauss--Newton for least squares (Benchmark A):} For residual-based objectives $J(\theta) = \frac{1}{2m}\|r(\theta)\|^2$ where $r(\theta) = X\theta - y$ is the residual vector, Newton's Hessian decomposes as:
 \begin{equation}
@@ -915,6 +931,7 @@ Grid search & None (exhaustive) & $N^d$ total & None & Very poor & Grid-limited 
 \item Nelder--Mead and grid search do not scale: Nelder--Mead is typically reliable only for $d \leq 10$--$20$, and grid search is intractable beyond $d \approx 3$ due to the curse of dimensionality ($55^{10} \approx 2.5 \times 10^{17}$ evaluations for $d=10$).
 \item When analytical gradients are available, the cost of gradient computation is typically $O(nd)$ for loss functions summing over $n$ data points --- the same order as one function evaluation --- so the per-iteration cost of exact GD is comparable to FD GD but without the approximation error.
 \item \textbf{Finite difference vs.\ automatic differentiation:} In modern machine learning, automatic differentiation (AD/backpropagation) computes \emph{exact} gradients at cost $O(d)$ forward passes by applying the chain rule symbolically to the computation graph. This completely supersedes FD for differentiable code: for a neural network with $d = 10^7$ parameters, FD would require $10^7 + 1$ forward passes per gradient versus AD's 1 backward pass. FD remains relevant when: (i) code is black-box (legacy Fortran/C code, simulation software); (ii) the function is not programmatically differentiable (discontinuities, non-differentiable operations like sorting); or (iii) quick prototyping without implementing a backward pass. Nesterov random search is the FD analog for very high dimensions where even $d+1$ evaluations are too expensive.
+\item \textbf{Bayesian optimisation} is the modern standard for expensive black-box functions (where each evaluation costs minutes or hours: hyperparameter tuning, molecular design, simulation code). It maintains a Gaussian process (GP) surrogate model $\hat{f}(x) \sim \mathcal{GP}(\mu(x), k(x, x'))$ over all past evaluations, and selects the next evaluation point by maximising an \emph{acquisition function} that balances exploration (high GP uncertainty $\sigma(x)$) and exploitation (low GP mean $\mu(x)$). Common acquisition functions include Upper Confidence Bound (UCB): $a_{\text{UCB}}(x) = \mu(x) + \sqrt{\beta_t}\,\sigma(x)$; Expected Improvement (EI): $a_{\text{EI}}(x) = \mathbb{E}[\max(f^\star - \hat{f}(x), 0)]$; and Thompson sampling. With a squared-exponential GP kernel, Bayesian optimisation achieves sub-linear \emph{cumulative regret} bounds in $d$ dimensions. The limitation is GP inference: adding each new point costs $O(n^3)$ (matrix inversion of the $n \times n$ kernel matrix for $n$ past evaluations), limiting scalability to $n \leq 10^3$--$10^4$ evaluations. For Rosenbrock with cheap function evaluations, Bayesian optimisation is not preferred over Nelder--Mead or random search; but for functions costing $\geq 10^2$ seconds per evaluation, it is typically the most sample-efficient method.
 \end{itemize}
 
 % ============================================================
