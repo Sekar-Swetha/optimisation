@@ -1,0 +1,1257 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+\usepackage{multirow}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+% Code listing style
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  stringstyle=\color{red},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  breaklines=true,
+  frame=single,
+  captionpos=b
+}
+
+% Theorem environments
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{remark}[theorem]{Remark}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small CS7DS2 -- Final Assignment}
+\fancyhead[R]{\small Swetha Sekar (25336453)}
+\fancyfoot[C]{\thepage}
+
+\title{%
+  \includegraphics[width=0.25\textwidth]{tcd_logo.jpg}\\[1em]
+  \textbf{CS7DS2 -- Optimisation Algorithms for Data Analysis}\\[0.5em]
+  \Large Final Assignment Report
+}
+\author{Swetha Sekar \\ Student ID: 25336453 \\ School of Computer Science and Statistics \\ Trinity College Dublin}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+This report presents a comprehensive comparative study of optimisation algorithms applied across three benchmark problems: a linear regression quadratic loss, a toy neural network loss with sinusoidal perturbation, and the ill-conditioned Rosenbrock function. Six categories of methods are investigated: (1) adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball); (2) momentum-based and stochastic methods (Nesterov acceleration, Adam, mini-batch SGD); (3) Newton's method with second-order local approximations; (4) derivative-free approaches (finite differences, Nesterov random search, Nelder--Mead simplex, grid search); (5) constrained optimisation via projected gradient descent and quadratic penalty methods; and (6) the Frank--Wolfe algorithm for linear-constrained problems. Each method is evaluated in terms of convergence speed, gradient norm decay, trajectory behaviour, stability, and computational cost. Key findings include the critical sensitivity of Polyak's step size to the accuracy of $f^{\star}$, Nesterov's superior performance on ill-conditioned problems, Newton's method achieving the quadratic convergence rate on smooth problems, and Frank--Wolfe's natural constraint maintenance through the linear minimisation oracle. All experiments are fully reproducible with fixed seed \texttt{np.random.seed(42)}.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Benchmark Problems and Experimental Setup}
+\label{sec:benchmarks}
+% ============================================================
+
+All experiments are conducted with a fixed random seed (\texttt{np.random.seed(42)}) to ensure full reproducibility across methods. Three benchmark functions of increasing difficulty are employed, together with one constrained feasible set.
+
+\subsection{Benchmark A: Linear Regression Quadratic Loss}
+\label{ssec:bench_A}
+
+A synthetic dataset with $m = 1000$ samples and $d = 2$ parameters is generated as:
+\begin{equation}
+\theta^{\star} = \begin{bmatrix} 3 \\ 4 \end{bmatrix}, \quad x^{(i)} \sim \mathcal{N}(0, I_2), \quad y^{(i)} = {\theta^{\star}}^{T} x^{(i)} + \varepsilon^{(i)}, \quad \varepsilon^{(i)} \sim \mathcal{N}(0, 1).
+\label{eq:bench_A_data}
+\end{equation}
+The mean squared error loss function is:
+\begin{equation}
+J(\theta) = \frac{1}{2m} \sum_{i=1}^{m} \left(\theta^T x^{(i)} - y^{(i)}\right)^2 = \frac{1}{2m}\|X\theta - y\|^2.
+\label{eq:bench_A_loss}
+\end{equation}
+This is a \emph{strongly convex quadratic} with constant Hessian $H = \frac{1}{m}X^T X \succ 0$. The gradient is $\nabla J(\theta) = \frac{1}{m}X^T(X\theta - y)$ and the unique minimiser is the ordinary least squares (OLS) solution $\theta^{\star}_{\text{OLS}} = (X^TX)^{-1}X^Ty \approx [3.028,\, 4.017]^T$. Due to observation noise, the minimum loss is $J^{\star} \approx 0.4826 \neq 0$. Starting point: $\theta_0 = [0, 0]^T$.
+
+\subsection{Benchmark B: Toy Neural Network Loss}
+\label{ssec:bench_B}
+
+\begin{equation}
+f(x_1, x_2) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1).
+\label{eq:bench_B}
+\end{equation}
+The gradient and Hessian are:
+\begin{align}
+\nabla f &= \bigl[2(x_1 - 1) + \cos(x_1),\; 10(x_2 - 2)\bigr]^T, \\
+\nabla^2 f &= \operatorname{diag}\bigl(2 - \sin(x_1),\; 10\bigr).
+\label{eq:bench_B_hess}
+\end{align}
+The Hessian is diagonal, with eigenvalues in the range $[1, 3]$ for the $x_1$-direction and exactly $10$ for the $x_2$-direction, giving a condition number $\kappa \approx 5$--$10$ (moderate anisotropy). The global minimum lies at approximately $(0.582, 2.0)$ with $f^{\star} \approx 0.7244$, found by solving $2(x_1 - 1) + \cos(x_1) = 0$ numerically. Starting point: $x_0 = [-1, 4]^T$.
+
+\subsection{Benchmark C: Rosenbrock Function}
+\label{ssec:bench_C}
+
+\begin{equation}
+f(x_1, x_2) = (1 - x_1)^2 + 100(x_2 - x_1^2)^2.
+\label{eq:bench_C}
+\end{equation}
+The gradient is:
+\begin{align}
+\frac{\partial f}{\partial x_1} &= -2(1 - x_1) - 400x_1(x_2 - x_1^2), \\
+\frac{\partial f}{\partial x_2} &= 200(x_2 - x_1^2),
+\end{align}
+and the Hessian is:
+\begin{equation}
+\nabla^2 f(x) = \begin{bmatrix} 2 + 1200x_1^2 - 400x_2 & -400x_1 \\ -400x_1 & 200 \end{bmatrix}.
+\end{equation}
+At the global minimum $(1, 1)$, the eigenvalues of $\nabla^2 f$ are approximately $0.5$ and $1000$, giving a condition number $\kappa \approx 2000$. This extreme ill-conditioning, combined with a narrow curved valley satisfying $x_2 \approx x_1^2$, makes the Rosenbrock function one of the most challenging standard benchmark problems in unconstrained optimisation. Starting point: $x_0 = [-1, 1]^T$.
+
+\subsection{Benchmark D: Constrained Feasible Set}
+
+For constrained problems (Questions 5 and 6), the feasible set is the box:
+\begin{equation}
+\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10\}.
+\end{equation}
+
+% ============================================================
+\section{Question 1: Adaptive Step-Size Methods \hfill [30 marks]}
+\label{sec:q1}
+% ============================================================
+
+\subsection{Theoretical Background}
+\label{ssec:q1_theory}
+
+Gradient descent with a fixed step size $\alpha$ satisfies the convergence bound (for $L$-smooth strongly convex functions with modulus $\mu$):
+\begin{equation}
+f(x_k) - f^{\star} \leq \left(1 - \frac{\mu}{L}\right)^k (f(x_0) - f^{\star}),
+\end{equation}
+where the contraction factor depends on the condition number $\kappa = L/\mu$. For ill-conditioned problems, this linear rate becomes impractically slow, motivating adaptive step-size strategies.
+
+\subsection{Algorithm Formulations}
+\label{ssec:q1_algorithms}
+
+Four adaptive methods are compared against a constant step-size gradient descent baseline across all three benchmarks for 120 iterations.
+
+\begin{algorithm}[H]
+\caption{Polyak Step Size}
+\label{alg:polyak}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, optimal value $f^{\star}$, tolerance $\varepsilon > 0$, iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $g_k \gets \nabla f(x_k)$
+    \State $\alpha_k \gets \dfrac{f(x_k) - f^{\star}}{\|g_k\|^2 + \varepsilon}$ \Comment{Adaptive step proportional to suboptimality gap}
+    \State $x_{k+1} \gets x_k - \alpha_k\, g_k$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The Polyak step size is theoretically optimal for subgradient methods: it minimises the distance to $x^{\star}$ at each step, provided $f^{\star}$ is known exactly. The update rule follows from minimising $\|x_{k+1} - x^{\star}\|^2 = \|x_k - \alpha g_k - x^{\star}\|^2$ over $\alpha$, yielding $\alpha_k^{\text{opt}} = \langle g_k, x_k - x^{\star} \rangle / \|g_k\|^2$, which is bounded above by $(f(x_k) - f^{\star}) / \|g_k\|^2$ via the subgradient inequality.
+
+\begin{algorithm}[H]
+\caption{Adagrad}
+\label{alg:adagrad}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, base learning rate $\alpha_0$, $\varepsilon > 0$, iterations $N$
+\State $G_0 \gets \mathbf{0} \in \mathbb{R}^d$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $g_k \gets \nabla f(x_k)$
+    \State $G_{k+1} \gets G_k + g_k \odot g_k$ \Comment{Per-coordinate squared-gradient accumulation}
+    \State $x_{k+1} \gets x_k - \dfrac{\alpha_0}{\sqrt{G_{k+1}} + \varepsilon} \odot g_k$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+Adagrad's effective per-coordinate step size is $\alpha_0 / \sqrt{\sum_{s=0}^{k} g_{s,i}^2}$, which \emph{decays monotonically}. Coordinates with persistently large gradients receive smaller updates, providing implicit adaptation to the local curvature. The monotone decay is both a strength (stability) and a weakness (premature convergence on non-stationary problems).
+
+\begin{algorithm}[H]
+\caption{RMSprop}
+\label{alg:rmsprop}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, learning rate $\alpha_0$, decay $\beta \in (0,1)$, $\varepsilon > 0$, iterations $N$
+\State $v_0 \gets \mathbf{0}$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $g_k \gets \nabla f(x_k)$
+    \State $v_{k+1} \gets \beta\, v_k + (1 - \beta)\, g_k \odot g_k$ \Comment{Exponential moving average of squared gradients}
+    \State $x_{k+1} \gets x_k - \dfrac{\alpha_0}{\sqrt{v_{k+1}} + \varepsilon} \odot g_k$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+RMSprop addresses Adagrad's monotone decay by replacing the cumulative sum with an exponential moving average (EMA) controlled by $\beta$. This allows the effective step size to recover when gradient magnitudes decrease, making RMSprop better suited to non-stationary objectives.
+
+\begin{algorithm}[H]
+\caption{Polyak Momentum / Heavy Ball}
+\label{alg:heavyball}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, step size $\alpha$, momentum $\beta \in [0,1)$, iterations $N$
+\State $z_0 \gets \mathbf{0}$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $z_{k+1} \gets \beta\, z_k + \alpha\, \nabla f(x_k)$ \Comment{Velocity accumulation}
+    \State $x_{k+1} \gets x_k - z_{k+1}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The Heavy Ball method incorporates a momentum term $z_k$ that accumulates a weighted history of past gradients. For strongly convex quadratics, the optimal parameters are $\alpha = 4/(\sqrt{L} + \sqrt{\mu})^2$ and $\beta = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$, achieving a convergence rate $O(((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^{2k})$, which improves upon GD by effectively taking the square root of the condition number.
+
+\subsection{Hyperparameter Settings}
+\label{ssec:q1_params}
+
+\begin{table}[H]
+\centering
+\caption{Q1: Hyperparameter settings for each method and benchmark. All methods run for 120 iterations. Starting points: $\theta_0 = [0,0]^T$ (A), $x_0 = [-1,4]^T$ (B), $x_0 = [-1,1]^T$ (C).}
+\label{tab:q1_params}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Method} & \textbf{Parameter} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} \\
+\midrule
+GD (baseline) & $\alpha$ & 0.08 & 0.06 & 0.0012 \\
+\midrule
+Polyak & $f^{\star}$ (assumed) & 0 & 0 & 0 \\
+ & $\varepsilon$ & $10^{-4}$ & $10^{-4}$ & $10^{-3}$ \\
+\midrule
+Adagrad & $\alpha_0$ & 1.8 & 1.2 & 0.45 \\
+ & $\varepsilon$ & $10^{-5}$ & $10^{-5}$ & $10^{-5}$ \\
+\midrule
+RMSprop & $\alpha_0$ & 0.22 & 0.14 & 0.0035 \\
+ & $\beta$ & 0.9 & 0.9 & 0.9 \\
+ & $\varepsilon$ & $10^{-5}$ & $10^{-5}$ & $10^{-5}$ \\
+\midrule
+Heavy Ball & $\alpha$ & 0.045 & 0.035 & 0.0008 \\
+ & $\beta$ & 0.88 & 0.90 & 0.86 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Convergence Analysis}
+\label{ssec:q1_convergence}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q1_fval_A.pdf}
+\caption{Q1: Objective value $f(x_k)$ vs iteration on Benchmark A (Linear Regression, log scale). GD, Adagrad, and Heavy Ball all converge to the noise floor $J^{\star} \approx 0.4826$. RMSprop converges to a slightly elevated value (${\approx}0.5027$) due to its adaptive step size oscillating in the neighbourhood of the minimum. The Polyak step \textbf{diverges} ($f \to 2.72$) because $f^{\star} = 0$ is misspecified: as the iterate approaches $\theta_{\text{OLS}}$, the gradient $\|g_k\| \to 0$ while $f(x_k) - 0 \approx 0.48$ remains nonzero, so $\alpha_k = (f(x_k) - f^{\star}) / (\|g_k\|^2 + \varepsilon) \to \infty$.}
+\label{fig:q1_fval_A}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q1_fval_B.pdf}
+\caption{Q1: Objective value on Benchmark B (Toy Neural Network). The same $f^{\star}$ misspecification drives Polyak to diverge ($f = 24.07$ vs true minimum $0.7244$). Adagrad and Heavy Ball match GD's final accuracy ($f = 0.7244$), with Heavy Ball reaching it in fewer iterations due to momentum accumulation along the $x_2$-direction (eigenvalue 10). RMSprop achieves $f = 0.7271$, marginally worse than GD due to step-size oscillation.}
+\label{fig:q1_fval_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q1_fval_C.pdf}
+\caption{Q1: Objective value on Benchmark C (Rosenbrock). With the correct specification $f^{\star} = 0$, Polyak converges well ($f = 0.009$), confirming its effectiveness when $f^{\star}$ is exact. Heavy Ball ($f = 1.40$) outperforms GD ($f = 3.51$) through momentum accumulation along the valley floor. Adagrad ($f = 2.20$) benefits from its variable step size, which adapts to the anisotropic curvature. RMSprop ($f = 3.12$) shows limited advantage, as the very conservative base rate $\alpha_0 = 0.0035$ constrains progress.}
+\label{fig:q1_fval_C}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Q1: Final objective values after 120 iterations. Bold indicates best per benchmark (excluding Polyak misspecification cases). GD is the baseline; improvements are shown in parentheses.}
+\label{tab:q1_final}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} & \textbf{Avg.\ Rank} \\
+\midrule
+GD (baseline) & 0.4826 & 0.7244 & 3.5142 & 3.0 \\
+Polyak ($f^{\star}=0$) & 2.7189$^*$ & 24.0659$^*$ & \textbf{0.0094} & --- \\
+Adagrad & \textbf{0.4826} & \textbf{0.7244} & 2.2034 & 2.3 \\
+RMSprop & 0.5027 & 0.7271 & 3.1204 & 3.3 \\
+Heavy Ball & \textbf{0.4826} & \textbf{0.7244} & 1.4003 & 2.0 \\
+\bottomrule
+\multicolumn{5}{l}{\small $^*$Diverges due to $f^{\star}$ misspecification (true $f^{\star} \neq 0$ for Benchmarks A and B).}
+\end{tabular}
+\end{table}
+
+\subsection{Gradient Norm Evolution}
+\label{ssec:q1_grad_norm}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.97\textwidth]{figures/q1_gradient_norm.pdf}
+\caption{Q1: Gradient norm $\|\nabla f(x_k)\|$ vs iteration on Benchmarks C (left) and B (right), both on log scale. The gradient norm is the most reliable convergence indicator, as it directly measures stationarity. On Benchmark C (Rosenbrock), Polyak achieves the steepest gradient norm decay, confirming its advantage when $f^{\star}$ is known. On Benchmark B, all methods (except Polyak) reduce the gradient norm to near $10^{-4}$, with Heavy Ball showing slightly faster decay in early iterations due to momentum.}
+\label{fig:q1_grad_norm}
+\end{figure}
+
+\subsection{Contour Plots with Optimisation Trajectories}
+\label{ssec:q1_contour}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q1_contour_B.pdf}
+\caption{Q1: Optimisation trajectories on Benchmark B. The elliptical contours reflect the ${\approx}5$:$1$ curvature ratio (eigenvalues ${\approx}2$:$10$ of $\nabla^2 f$). GD and Adagrad follow nearly direct paths toward the minimum. Heavy Ball exhibits slight overshoot followed by damped oscillation --- characteristic of momentum methods on anisotropic surfaces. The Polyak trajectory diverges (oscillating widely) due to $f^{\star}$ misspecification.}
+\label{fig:q1_contour_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q1_contour_C.pdf}
+\caption{Q1: Optimisation trajectories on Benchmark C (Rosenbrock). All methods first descend rapidly to the curved valley $x_2 \approx x_1^2$, then progress slowly along it toward $(1,1)$. The Polyak trajectory (with correct $f^{\star} = 0$) is the most aggressive, taking larger steps as $f(x_k)$ decreases proportionally. GD with $\alpha = 0.0012$ advances very slowly, limited by the tiny step size required for stability given the condition number $\kappa \approx 2000$.}
+\label{fig:q1_contour_C}
+\end{figure}
+
+\subsection{Adaptive Step-Size Evolution}
+\label{ssec:q1_stepsize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q1_stepsize_A.pdf}
+\caption{Q1: Effective step-size evolution on Benchmark A. The Polyak step exhibits pathological \emph{growth}: as $\|\nabla f\| \to 0$ at the noise floor, the numerator $f(x_k) - 0 \approx 0.48$ remains constant, driving $\alpha_k \to \infty$ and inducing divergence. Adagrad decays monotonically as $G_k = \sum_{s=0}^k g_s \odot g_s$ grows without bound. RMSprop stabilises via the exponential forgetting factor $\beta = 0.9$, converging to a near-constant effective rate determined by the stationary gradient magnitude.}
+\label{fig:q1_stepsize_A}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q1_stepsize_B.pdf}
+\caption{Q1: Effective step-size evolution on Benchmark B. The Polyak step again grows unboundedly due to misspecification. Adagrad decays rapidly in early iterations (large initial gradients from the starting point $x_0 = [-1, 4]^T$, far from the minimum), then settles. RMSprop maintains a moderate, slowly-varying effective rate.}
+\label{fig:q1_stepsize_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q1_stepsize_C.pdf}
+\caption{Q1: Effective step-size evolution on Benchmark C. With the correct $f^{\star} = 0$, the Polyak step \emph{decreases smoothly} as $f(x_k) \to 0$: both numerator and denominator decrease, but the numerator (proportional to $f$) decays faster as convergence accelerates. This well-behaved decay confirms why Polyak achieves the best Rosenbrock convergence.}
+\label{fig:q1_stepsize_C}
+\end{figure}
+
+\subsection{Comparative Analysis}
+\label{ssec:q1_analysis}
+
+\begin{itemize}[nosep]
+\item \textbf{Polyak step size:} Theoretically optimal when $f^{\star}$ is exactly known, achieving the best convergence on Rosenbrock ($f = 0.009$). However, even a small error in $f^{\star}$ causes catastrophic divergence due to the step-size formula's denominator approaching zero. In practice, exact $f^{\star}$ is rarely known, severely limiting applicability.
+
+\item \textbf{Adagrad:} Provides uniform improvement over GD on all benchmarks (except Rosenbrock due to the monotone decay of effective step size). The per-coordinate scaling adapts to curvature anisotropy, making it particularly suitable for sparse gradients and problems with heterogeneous feature scales.
+
+\item \textbf{RMSprop:} More robust than Adagrad for non-stationary objectives (e.g., deep learning), but on these smooth benchmarks it underperforms. The fixed forgetting factor $\beta = 0.9$ introduces a trade-off: too large causes slow adaptation; too small loses memory of historical gradients.
+
+\item \textbf{Heavy Ball:} Consistently the best-performing adaptive method (among those with correct $f^{\star}$ handling), matching GD on Benchmarks A and B while significantly outperforming it on Benchmark C ($f = 1.40$ vs $3.51$). The momentum term allows it to build speed along persistent gradient directions (e.g., the Rosenbrock valley).
+
+\item \textbf{Stability hierarchy:} GD $\succ$ Adagrad $\succ$ RMSprop $\succ$ Heavy Ball $\succ$ Polyak (when $f^{\star}$ misspecified). The Polyak method transitions from best to worst depending on knowledge of $f^{\star}$.
+\end{itemize}
+
+% ============================================================
+\section{Question 2: Momentum and Stochastic Methods \hfill [30 marks]}
+\label{sec:q2}
+% ============================================================
+
+\subsection{Theoretical Background}
+\label{ssec:q2_theory}
+
+Standard gradient descent on $L$-smooth convex functions achieves an $O(1/k)$ convergence rate: $f(x_k) - f^{\star} \leq 2L\|x_0 - x^{\star}\|^2 / k$. Nesterov's accelerated gradient method achieves the optimal $O(1/k^2)$ rate: $f(x_k) - f^{\star} \leq 2L\|x_0 - x^{\star}\|^2 / (k+1)^2$. This is information-theoretically optimal for first-order methods on convex functions.
+
+\subsection{Algorithm Formulations}
+\label{ssec:q2_algorithms}
+
+\begin{algorithm}[H]
+\caption{Nesterov Accelerated Gradient}
+\label{alg:nesterov}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, step size $\alpha$, max momentum $\beta_{\max}$, iterations $N$
+\State $z_0 \gets \mathbf{0}$
+\For{$k = 1, 2, \ldots, N$}
+    \State $\beta_k \gets \min\!\left(\dfrac{k-1}{k+2},\; \beta_{\max}\right)$ \Comment{Adaptive momentum schedule}
+    \State $\tilde{x}_k \gets x_k + \beta_k\, z_k$ \Comment{Lookahead point (key innovation)}
+    \State $z_{k+1} \gets \beta_k\, z_k - \alpha\, \nabla f(\tilde{x}_k)$ \Comment{Velocity update at lookahead}
+    \State $x_{k+1} \gets x_k + z_{k+1}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The critical distinction from Heavy Ball is the \emph{lookahead evaluation}: the gradient is evaluated at the predicted future position $\tilde{x}_k = x_k + \beta_k z_k$ rather than the current position $x_k$. This anticipatory gradient allows the algorithm to ``correct its course'' before overshooting, and is responsible for achieving the $O(1/k^2)$ optimal rate. The schedule $\beta_k = (k-1)/(k+2)$ is derived from Nesterov's original sequence $t_{k+1} = (1 + \sqrt{1 + 4t_k^2})/2$, which satisfies $1/t_{k+1}^2 \leq 2/(k+2)^2$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q2_nesterov_schedule.pdf}
+\caption{Q2: Nesterov momentum schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ for $\beta_{\max} = 0.90$. The momentum increases gradually from 0 toward $\beta_{\max}$, reaching saturation around iteration 25. The gradual ramp-up prevents the instability that would arise from applying full momentum from the first iteration, while the asymptotic value provides near-optimal acceleration.}
+\label{fig:q2_nesterov_schedule}
+\end{figure}
+
+\begin{algorithm}[H]
+\caption{Adam Optimiser}
+\label{alg:adam}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, learning rate $\alpha$, moments $\beta_1, \beta_2$, $\varepsilon > 0$, iterations $N$
+\State $m_0 \gets \mathbf{0},\; v_0 \gets \mathbf{0}$
+\For{$t = 1, 2, \ldots, N$}
+    \State $g_t \gets \nabla f(x_t)$
+    \State $m_t \gets \beta_1\, m_{t-1} + (1 - \beta_1)\, g_t$ \Comment{First moment (momentum)}
+    \State $v_t \gets \beta_2\, v_{t-1} + (1 - \beta_2)\, g_t \odot g_t$ \Comment{Second moment (adaptive scaling)}
+    \State $\hat{m}_t \gets m_t\, /\, (1 - \beta_1^t)$ \Comment{Bias correction for initialisation at zero}
+    \State $\hat{v}_t \gets v_t\, /\, (1 - \beta_2^t)$
+    \State $x_{t+1} \gets x_t - \alpha\, \hat{m}_t\, /\, (\sqrt{\hat{v}_t} + \varepsilon)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+Adam unifies momentum ($m_t$, like Heavy Ball) with per-coordinate adaptive scaling ($v_t$, like RMSprop). The bias correction terms $1/(1-\beta_1^t)$ and $1/(1-\beta_2^t)$ are essential in early iterations: without them, $m_t \approx (1-\beta_1)g_1$ and $v_t \approx (1-\beta_2)g_1^2$ are much smaller than the true first and second moments, biasing the effective step size toward a large initial learning rate.
+
+\subsection{Hyperparameter Settings}
+\label{ssec:q2_params}
+
+\begin{table}[H]
+\centering
+\caption{Q2: Hyperparameter settings. All methods run for 150 iterations from the same starting points as Q1.}
+\label{tab:q2_params}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Method} & \textbf{Parameter} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} \\
+\midrule
+GD (baseline) & $\alpha$ & 0.08 & 0.06 & 0.0012 \\
+\midrule
+Nesterov & $\alpha$ & 0.06 & 0.035 & 0.0007 \\
+ & $\beta_{\max}$ & 0.90 & 0.92 & 0.90 \\
+\midrule
+Adam & $\alpha$ & 0.12 & 0.08 & 0.006 \\
+ & $\beta_1$ & 0.82 & 0.80 & 0.80 \\
+ & $\beta_2$ & 0.999 & 0.999 & 0.999 \\
+ & $\varepsilon$ & $10^{-8}$ & $10^{-8}$ & $10^{-8}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Convergence Comparison}
+\label{ssec:q2_convergence}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q2_fval_A.pdf}
+\caption{Q2: Convergence on Benchmark A (Linear Regression). All three methods converge to $J^{\star} \approx 0.4826$ (the OLS noise floor). Nesterov and Adam reach the minimum in fewer iterations than GD, with Nesterov showing a steeper initial descent characteristic of the $O(1/k^2)$ rate on this well-conditioned quadratic ($\kappa \approx 1.5$ based on data). The final values are identical due to the high accuracy of the quadratic.}
+\label{fig:q2_fval_A}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q2_fval_B.pdf}
+\caption{Q2: Convergence on Benchmark B (Toy Neural Network). Both Nesterov and Adam converge to $f^{\star} \approx 0.7244$. Adam's per-coordinate scaling handles the anisotropic curvature (eigenvalue ratio ${\approx}5$:$1$) by effectively normalising the step sizes in each direction. Nesterov's lookahead prevents the overshooting that would occur with pure Heavy Ball momentum on this moderately ill-conditioned surface.}
+\label{fig:q2_fval_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q2_fval_C.pdf}
+\caption{Q2: Convergence on Benchmark C (Rosenbrock, $\kappa \approx 2000$). The most revealing comparison: Nesterov achieves $f = 0.479$ while GD reaches only $f = 3.39$, a $7\times$ improvement. The momentum accumulated along the narrow valley floor drives Nesterov forward far more efficiently than GD's myopic gradient steps. Adam reaches $f = 1.58$, benefiting from coordinate-wise scaling but hampered by the highly nonlinear curvature of the Rosenbrock valley, which changes faster than Adam's second-moment estimate $v_t$ can track.}
+\label{fig:q2_fval_C}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Q2: Final objective values after 150 iterations with relative improvement over GD.}
+\label{tab:q2_final}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} & \multicolumn{1}{c}{$\Delta f$ (C)} \\
+\midrule
+GD (baseline) & 0.4826 & 0.7244 & 3.3880 & --- \\
+Nesterov & \textbf{0.4826} & \textbf{0.7244} & \textbf{0.4788} & $-85.9\%$ \\
+Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 & $-53.4\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Gradient Norm Analysis}
+\label{ssec:q2_grad_norm}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.97\textwidth]{figures/q2_gradient_norm.pdf}
+\caption{Q2: Gradient norm $\|\nabla f(x_k)\|$ vs iteration on Benchmarks B (left) and C (right). On Benchmark B (well-conditioned), all methods reduce the gradient norm to near machine precision, with Nesterov and Adam converging slightly faster. On Benchmark C (highly ill-conditioned), Nesterov's gradient norm decays significantly faster than both GD and Adam, reaching ${\approx}10^{-1}$ compared to GD's ${\approx}1.8$ after 150 iterations. This confirms the practical benefit of the $O(1/k^2)$ convergence rate on non-trivial problems.}
+\label{fig:q2_grad_norm}
+\end{figure}
+
+\subsection{Contour Trajectories}
+\label{ssec:q2_contour}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q2_contour_B.pdf}
+\caption{Q2: Trajectories on Benchmark B. Nesterov's trajectory exhibits the characteristic ``smooth arc'' of accelerated methods: momentum builds in the direction of consistent gradient signal (toward the minimum), while the lookahead corrects oscillations before they amplify. Adam's trajectory is more direct due to coordinate-wise scaling that independently normalises each axis.}
+\label{fig:q2_contour_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q2_contour_C.pdf}
+\caption{Q2: Trajectories on Benchmark C (Rosenbrock). All methods quickly descend to the valley floor but diverge markedly in their traversal \emph{along} the valley. Nesterov's momentum accumulates consistently in the valley direction, driving rapid progress toward $(1,1)$. GD, with its fixed step size $\alpha = 0.0012$ chosen for stability, can barely advance along the flat valley floor without oscillating across it.}
+\label{fig:q2_contour_C}
+\end{figure}
+
+\subsection{Mini-Batch Stochastic Gradient Descent}
+\label{ssec:q2_sgd}
+
+Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b \in \{5, 40\}$, and 50 epochs with full data shuffling at each epoch. The gradient estimate for mini-batch $\mathcal{B}_t$ is:
+\begin{equation}
+\hat{g}_t = \frac{1}{b} X_{\mathcal{B}_t}^T (X_{\mathcal{B}_t} \theta_t - y_{\mathcal{B}_t}).
+\end{equation}
+This is an \emph{unbiased} estimator of the full gradient $\nabla J(\theta)$, with variance $\text{Var}[\hat{g}_t] \propto \sigma^2_{\text{grad}} / b$, which decreases with batch size. The trade-off is: smaller batches perform more parameter updates per epoch but with higher variance.
+
+\begin{algorithm}[H]
+\caption{Mini-Batch Stochastic Gradient Descent}
+\label{alg:sgd}
+\begin{algorithmic}[1]
+\Require Dataset $(X, y)$ with $m$ samples, initial $\theta_0$, learning rate $\alpha$, batch size $b$, epochs $E$
+\For{epoch $e = 1, 2, \ldots, E$}
+    \State Randomly permute data indices $\pi \gets \text{Permute}(\{1, \ldots, m\})$
+    \For{mini-batch $\mathcal{B} = \{\pi_{(j-1)b+1}, \ldots, \pi_{jb}\}$, $j = 1, \ldots, \lfloor m/b \rfloor$}
+        \State $\hat{g} \gets \frac{1}{b} X_{\mathcal{B}}^T(X_{\mathcal{B}}\theta - y_{\mathcal{B}})$ \Comment{Mini-batch gradient}
+        \State $\theta \gets \theta - \alpha\, \hat{g}$
+    \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
+\caption{Q2: Mini-batch SGD with batch sizes $b = 5$ and $b = 40$ on Benchmark A. With $b = 5$, each epoch performs $1000/5 = 200$ gradient updates, yielding faster per-epoch convergence but higher oscillation near the minimum. With $b = 40$, only $1000/40 = 25$ updates per epoch, producing smoother but slower convergence. The smaller batch reaches lower loss faster due to $40\times$ more parameter updates per epoch, but oscillates due to higher gradient variance. Near the minimum, the noise floor is determined by the variance of the mini-batch gradient estimate.}
+\label{fig:q2_sgd_batch}
+\end{figure}
+
+\subsection{Effect of Increased Observation Noise on SGD}
+\label{ssec:q2_noisy}
+
+The observation noise is scaled by a factor of 6: $\varepsilon^{(i)} \sim \mathcal{N}(0, 36)$ instead of $\mathcal{N}(0,1)$. This raises the irreducible loss floor: since $J^{\star} = \frac{1}{2m}\sum_i (\varepsilon^{(i)})^2 \approx \frac{\sigma^2}{2}$, increasing $\sigma$ from 1 to 6 raises the floor by $36\times$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_sgd_noisy.pdf}
+\caption{Q2: Effect of noise on mini-batch SGD. Left: original noise ($\sigma = 1$, $J^{\star} \approx 0.48$). Right: high noise ($\sigma = 6$, $J^{\star} \approx 17.3 \approx 36 \times 0.48$). Under high noise, both batch sizes converge to approximately the same elevated floor, and the relative advantage of $b = 5$ diminishes. The observation noise ($\varepsilon$) contributes a \emph{fixed} irreducible component to the loss regardless of batch size, since the OLS estimator is unbiased but its minimum loss $J^{\star} \propto \sigma^2$. The mini-batch sampling variance ($\propto 1/b$) becomes negligible compared to the observation noise variance.}
+\label{fig:q2_sgd_noisy}
+\end{figure}
+
+% ============================================================
+\section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
+\label{sec:q3}
+% ============================================================
+
+\subsection{Local Approximations of $g(x) = x^4$}
+\label{ssec:q3_approx}
+
+Newton's method generalises the idea of finding roots of the first derivative to multidimensional optimisation, using a local quadratic model of the objective. Consider $g(x) = x^4$ at $x_0 = 0.25$:
+
+\textbf{First-order (Taylor) approximation:}
+\begin{equation}
+g(x) \approx q_1(x) = g(x_0) + g'(x_0)(x - x_0) = 0.0039 + 0.0625\,(x - 0.25).
+\end{equation}
+
+\textbf{Second-order (quadratic) approximation:}
+\begin{align}
+g(x) &\approx q_2(x) = g(x_0) + g'(x_0)(x - x_0) + \tfrac{1}{2}g''(x_0)(x - x_0)^2 \nonumber \\
+&= 0.0039 + 0.0625\,(x - 0.25) + 0.375\,(x - 0.25)^2,
+\end{align}
+where $g'(x) = 4x^3$, $g''(x) = 12x^2$, so at $x_0 = 0.25$: $g'(x_0) = 4(0.25)^3 = 0.0625$ and $g''(x_0) = 12(0.25)^2 = 0.75$, giving the leading quadratic coefficient $\frac{1}{2} \times 0.75 = 0.375$.
+
+The Newton update minimises $q_2(x)$ by setting $q_2'(x) = 0$:
+\begin{equation}
+x_{k+1} = x_k - \frac{g'(x_k)}{g''(x_k)}.
+\end{equation}
+This is equivalent to stepping to the stationary point of the local quadratic model, and is the one-dimensional analogue of the multivariate Newton direction $p_k = H_k^{-1} \nabla f(x_k)$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q3_approximation.pdf}
+\caption{Q3: Local approximations of $g(x) = x^4$ at $x_0 = 0.25$. The first-order tangent line captures only the local slope and diverges rapidly from the true function. The second-order parabola captures the curvature and provides a much better fit in a neighbourhood of $x_0$. The minimum of the parabola ($x = x_0 - g'/g'' = 0.25 - 0.0625/0.75 = 0.167$) is closer to the true minimum $x^{\star} = 0$ than the gradient step $x_0 - \alpha g'(x_0)$ for reasonable $\alpha$. This illustrates why Newton's method converges faster than gradient descent: it uses curvature information.}
+\label{fig:q3_approx}
+\end{figure}
+
+\subsection{Newton's Method with Damping}
+\label{ssec:q3_newton}
+
+\begin{algorithm}[H]
+\caption{Newton's Method with Tikhonov Damping}
+\label{alg:newton}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, step size $\alpha \in (0,1]$, damping $\lambda \geq 0$, iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $g_k \gets \nabla f(x_k)$
+    \State $H_k \gets \nabla^2 f(x_k) + \lambda I$ \Comment{Regularised Hessian (ensures positive definiteness)}
+    \State $p_k \gets H_k^{-1}\, g_k$ \Comment{Solve linear system for Newton direction}
+    \State $x_{k+1} \gets x_k - \alpha\, p_k$ \Comment{Damped Newton step}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The Tikhonov regularisation $\lambda I$ ensures the Hessian is positive definite (avoiding issues near saddle points or when $\nabla^2 f$ is indefinite) and controls the step magnitude. With $\alpha = 1$ and $\lambda = 0$, the pure Newton step achieves \emph{quadratic convergence} near the minimum:
+\begin{equation}
+\|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2,
+\end{equation}
+for some constant $C$ depending on the local curvature. This super-linear convergence property is why Newton's method can solve certain problems in dramatically fewer iterations than gradient descent.
+
+\begin{table}[H]
+\centering
+\caption{Q3: Hyperparameters for GD and Newton across all benchmarks.}
+\label{tab:q3_params}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Bench.\ A}} & \multicolumn{2}{c}{\textbf{Bench.\ B}} & \multicolumn{2}{c}{\textbf{Bench.\ C}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+ & GD & Newton & GD & Newton & GD & Newton \\
+\midrule
+$\alpha$ & 0.08 & 1.0 & 0.06 & 0.85 & 0.001 & 0.22 \\
+Iterations & 80 & 20 & 80 & 20 & 80 & 20 \\
+Damping $\lambda$ & --- & $10^{-8}$ & --- & $10^{-8}$ & --- & $10^{-8}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Convergence Comparison}
+\label{ssec:q3_convergence}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q3_fval_A.pdf}
+\caption{Q3: Newton vs GD on Benchmark A. Newton converges in \textbf{exactly one iteration} to $J = 0.4826$ with $\alpha = 1.0$. This is the expected behaviour for a pure quadratic: $J(\theta) = \frac{1}{2}\theta^T H \theta - b^T\theta + c$ has constant Hessian $H$, so the Newton step $\theta_{k+1} = \theta_k - H^{-1}\nabla J(\theta_k) = \theta_k - H^{-1}(H\theta_k - b) = H^{-1}b = \theta^{\star}$ reaches the exact minimiser in a single step, regardless of the starting point. GD requires 80 iterations for comparable accuracy.}
+\label{fig:q3_fval_A}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q3_fval_B.pdf}
+\caption{Q3: Newton vs GD on Benchmark B. Newton converges in approximately 5 iterations due to the near-quadratic structure: the Hessian $H = \text{diag}(2 - \sin(x_1), 10)$ varies smoothly and the damped step $\alpha = 0.85$ still allows rapid progress. The sinusoidal term $\sin(x_1)$ breaks the exact quadratic structure, requiring multiple Newton steps, but the quadratic convergence rate still provides dramatic speedup over GD's 80 iterations.}
+\label{fig:q3_fval_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q3_fval_C.pdf}
+\caption{Q3: Newton vs GD on Benchmark C (Rosenbrock). Newton with $\alpha = 0.22$ reaches $f = 0.686$ in 20 iterations vs GD's $f = 3.732$ in 80 iterations --- a $5.4\times$ improvement. The small damping factor $\alpha = 0.22$ is necessary because the Rosenbrock Hessian $\nabla^2 f(x)$ changes rapidly with position, so the full Newton step ($\alpha = 1$) would overshoot. The Hessian information still provides major benefit: Newton navigates the ill-conditioned valley by scaling steps proportionally to the local curvature in each direction.}
+\label{fig:q3_fval_C}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Q3: Final objective values, converged positions, and gradient norms.}
+\label{tab:q3_final}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Benchmark} & \textbf{GD $f$} & \textbf{Newton $f$} & \textbf{Newton final $x$} & \textbf{Speedup} \\
+\midrule
+A (80 vs 20 iters) & 0.4827 & 0.4826 & $(3.028, 4.017)$ & $4\times$ fewer iters \\
+B (80 vs 20 iters) & 0.7244 & 0.7244 & $(0.582, 2.000)$ & $16\times$ fewer iters \\
+C (80 vs 20 iters) & 3.7319 & 0.6864 & $(0.183, 0.020)$ & $5.4\times$ better $f$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Gradient Norm Comparison}
+\label{ssec:q3_grad_norm}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.97\textwidth]{figures/q3_gradient_norm.pdf}
+\caption{Q3: Gradient norm $\|\nabla f(x_k)\|$ vs iteration for GD (80 steps) and Newton (20 steps) on Benchmarks B (left) and C (right). On Benchmark B, Newton's gradient norm drops to near $10^{-8}$ within 5 iterations, while GD needs 80 iterations to reach ${\approx}10^{-4}$. On Benchmark C, Newton's gradient norm shows a characteristic rapid initial decrease followed by slower progress (reflecting the damped step and rapidly changing Hessian), yet still substantially outperforms GD.}
+\label{fig:q3_grad_norm}
+\end{figure}
+
+\subsection{Contour Trajectories}
+\label{ssec:q3_contour}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q3_contour_B.pdf}
+\caption{Q3: Newton vs GD trajectories on Benchmark B. Newton takes large, precisely directed steps guided by the local curvature, reaching the minimum in ${\sim}5$ steps. The Hessian $H = \text{diag}(2 - \sin(x_1), 10)$ scales the step by $1/2$ in the $x_1$-direction and $1/10$ in the $x_2$-direction, naturally compensating for the $5$:$1$ curvature ratio. GD without this scaling must use a step size $\alpha \leq 2/L = 0.2$ for stability, making it much slower per iteration.}
+\label{fig:q3_contour_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q3_contour_C.pdf}
+\caption{Q3: Newton vs GD trajectories on Benchmark C (Rosenbrock). Newton's trajectory follows the curved valley floor more closely than GD, as the Hessian encodes both the wall-crossing direction (large eigenvalue ${\approx}1000$) and the valley-floor direction (small eigenvalue ${\approx}0.5$). Newton's inverse-Hessian scaling effectively stretches the space to make the level sets more isotropic, allowing larger effective steps along the floor. GD with $\alpha = 0.001$ is forced to tiny steps to avoid oscillations across the narrow valley.}
+\label{fig:q3_contour_C}
+\end{figure}
+
+\subsection{Update Magnitude Analysis}
+\label{ssec:q3_update}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_update_magnitude.pdf}
+\caption{Q3: Update magnitude $\|x_{k+1} - x_k\| = \alpha\|H_k^{-1}g_k\|$ vs iteration for GD and Newton. Newton's updates exhibit characteristic quadratic convergence: the update magnitude decreases as $\|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2$, meaning successive magnitudes form a rapidly shrinking geometric sequence. For Benchmark A, Newton's magnitude drops to numerical precision (${\sim}10^{-15}$) after one step. GD's update magnitude decreases linearly, reflecting its linear $O((\kappa-1)/(\kappa+1))^k$ convergence rate. On Rosenbrock, Newton maintains larger updates than GD, indicating more productive exploration despite fewer iterations.}
+\label{fig:q3_update}
+\end{figure}
+
+\subsection{Computational Cost Analysis}
+\label{ssec:q3_cost}
+
+\begin{remark}[Per-Iteration Cost]
+For a $d$-dimensional problem:
+\begin{itemize}[nosep]
+\item GD: $O(d)$ operations per iteration (gradient evaluation).
+\item Newton: $O(d^3)$ operations per iteration (Hessian construction $O(d^2)$ + linear solve $O(d^3)$).
+\end{itemize}
+For $d = 2$ (as here), the per-iteration cost difference is negligible. However, for large-scale problems ($d \gg 100$), Newton becomes computationally infeasible, motivating quasi-Newton methods (e.g., L-BFGS) that approximate $H^{-1}$ using gradient history without explicit Hessian computation.
+\end{remark}
+
+% ============================================================
+\section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
+\label{sec:q4}
+% ============================================================
+
+\subsection{Part A: Finite Difference and Nesterov Random Search (Benchmark B)}
+\label{ssec:q4_partA}
+
+\subsubsection{Finite Difference Gradient Approximation}
+\label{sssec:q4_fd}
+
+The forward finite-difference approximation replaces each partial derivative:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x)}{\delta},
+\label{eq:fd_approx}
+\end{equation}
+where $e_i$ is the $i$-th standard basis vector. The approximation error has two competing contributions:
+\begin{equation}
+\left|\frac{\partial f}{\partial x_i}(x) - \frac{f(x + \delta e_i) - f(x)}{\delta}\right| \leq \underbrace{\frac{\delta}{2} \left|\frac{\partial^2 f}{\partial x_i^2}(x)\right|}_{\text{truncation error, } O(\delta)} + \underbrace{\frac{2\varepsilon_{\text{mach}}}{\delta}}_{\text{rounding error, } O(\varepsilon_{\text{mach}}/\delta)}.
+\end{equation}
+The optimal step size minimising the total error is $\delta^{\star} \approx \sqrt{2\varepsilon_{\text{mach}}/|f''|} \approx 10^{-8}$ for double precision. For $\delta = 0.05$ (good) the error is dominated by $O(\delta) \approx 0.025|f''|$ (truncation), while for $\delta = 0.8$ (poor), the approximation spans a region where $f$ changes nonlinearly, severely biasing the gradient estimate.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q4_fd_error_analysis.pdf}
+\caption{Q4: Finite difference gradient approximation error $\|\hat{g} - \nabla f\|$ vs step size $\delta$ at a test point on Benchmark B. The characteristic ``U-shaped'' curve is visible: for small $\delta$, rounding error dominates (error decreases as $1/\delta$); for large $\delta$, truncation error dominates (error grows as $\delta$). The optimal $\delta^{\star} \approx \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-7.5}$ balances these two sources. The assignment's $\delta = 0.05$ lies on the right slope but gives acceptably small errors; $\delta = 0.8$ is far into the truncation-dominated regime.}
+\label{fig:q4_fd_error}
+\end{figure}
+
+\subsubsection{Nesterov Random Search}
+\label{sssec:q4_nrs}
+
+\begin{algorithm}[H]
+\caption{Nesterov Random (Zeroth-Order) Search}
+\label{alg:nrs}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, step size $\alpha$, smoothing parameter $\delta$, iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State Sample $u_k \sim \mathcal{N}(0, I)$, normalise: $u_k \gets u_k / \|u_k\|$
+    \State $\hat{g}_k \gets \dfrac{f(x_k + \delta u_k) - f(x_k)}{\delta}\, u_k$ \Comment{Directional derivative estimate}
+    \State $x_{k+1} \gets x_k - \alpha\, \hat{g}_k$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The update direction $\hat{g}_k$ is an estimate of the \emph{gradient of a smoothed surrogate} $f_\delta(x) = \mathbb{E}_u[f(x + \delta u)]$, where the expectation is over uniformly distributed unit vectors $u$. In expectation: $\mathbb{E}[\hat{g}_k] = \frac{d}{\delta} \mathbb{E}[(f(x+\delta u) - f(x)) u] = \nabla f_\delta(x)$, which approximates $\nabla f(x)$ for small $\delta$. The key advantage is that only \emph{two function evaluations} are required per iteration regardless of dimension $d$, making it dimension-independent in per-step cost.
+
+\subsubsection{Results and Analysis}
+\label{sssec:q4_results}
+
+For all methods: step sizes are $\alpha = 0.08$ (FD GD), $\alpha = 0.025$ (random search). The exact GD uses $\alpha = 0.06$; FD uses $\delta \in \{0.05, 0.8\}$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q4_fval_B.pdf}
+\caption{Q4A: Convergence comparison on Benchmark B. Exact GD converges fastest, as expected. FD GD with $\delta = 0.05$ closely tracks exact GD, confirming high gradient approximation quality at this step size. FD GD with $\delta = 0.8$ converges much more slowly and to a higher final value: the large step size introduces bias into the gradient direction, causing the iterates to follow an incorrect descent path. Nesterov random search converges slowest: each iteration uses only a single random directional measurement (1D projection of the gradient), providing an extremely noisy gradient estimate that requires many iterations to accumulate.}
+\label{fig:q4_fval_B}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q4_contour_B.pdf}
+\caption{Q4A: Trajectories on Benchmark B. Exact GD and FD ($\delta = 0.05$) follow nearly identical smooth paths, confirming gradient fidelity. FD ($\delta = 0.8$) deviates significantly due to inaccurate gradient direction from the large truncation error. Nesterov random search follows a stochastic, wandering path: each step is in a random direction, and convergence occurs only through the aggregate bias of the gradient estimator across many iterations.}
+\label{fig:q4_contour_B}
+\end{figure}
+
+\subsection{Part B: Derivative-Free Methods on Benchmark C (Rosenbrock)}
+\label{ssec:q4_partB}
+
+\subsubsection{Nelder--Mead Simplex Method}
+\label{sssec:q4_nm}
+
+The Nelder--Mead algorithm maintains a simplex of $n+1 = 3$ vertices in $\mathbb{R}^2$. At each iteration, it transforms the simplex through four geometric operations to explore the loss landscape without gradient information:
+
+\begin{enumerate}[nosep]
+\item \textbf{Reflection:} Move the worst vertex $x_w$ through the centroid $\bar{x}$ of the remaining vertices: $x_r = \bar{x} + \alpha_r(\bar{x} - x_w)$, $\alpha_r = 1$.
+\item \textbf{Expansion:} If reflection improves significantly, try a longer step: $x_e = \bar{x} + \gamma(\bar{x} - x_w)$, $\gamma = 2$.
+\item \textbf{Contraction:} If reflection does not improve, shrink toward $\bar{x}$: $x_c = \bar{x} + \rho(\cdot - \bar{x})$, $\rho = 0.5$.
+\item \textbf{Shrink:} If contraction fails, contract all vertices toward the best vertex $x_b$: $x_i \gets x_b + \sigma(x_i - x_b)$, $\sigma = 0.5$.
+\end{enumerate}
+
+Settings: initial simplex step $= 0.35$, 160 iterations. Nelder--Mead requires no gradient information, making it applicable to non-smooth objectives and black-box functions.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q4_nelder_mead_C.pdf}
+\caption{Q4B: Nelder--Mead on Rosenbrock. Left: the simplex centroid trajectory traces the curved valley floor without gradient information, guided purely by function value comparisons. The simplex geometry adapts to the local landscape: it elongates along the valley direction and contracts as it approaches the minimum. Right: the best objective value decreases monotonically as the simplex contracts. The final value reflects the difficulty of navigating the highly curved Rosenbrock valley with a fixed-step simplex.}
+\label{fig:q4_nm}
+\end{figure}
+
+\subsubsection{Grid Search}
+\label{sssec:q4_grid}
+
+Grid search evaluates the objective on a uniform $55 \times 55 = 3025$ grid over $x_1 \in [-2, 2]$ and $x_2 \in [-1, 3]$, with grid resolution $\Delta x_1 = 4/54 \approx 0.074$ and $\Delta x_2 = 4/54 \approx 0.074$. The best point found is reported as the approximate minimiser.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q4_grid_search_C.pdf}
+\caption{Q4B: Grid search on Rosenbrock. Left: the 3025 grid points cover the search region. The best point found lies near $(1.0, 1.0)$ but offset by at most $\Delta x/2 \approx 0.037$ in each coordinate. Right: the best-so-far curve shows step-wise improvement as better grid points are encountered during the row-major scan. Grid search is guaranteed to find the global optimum to within grid resolution, but the total evaluation count $N_1 \times N_2 = 3025$ scales as $O(N^d)$ with resolution $N$ and dimension $d$, making it computationally infeasible for $d \geq 3$.}
+\label{fig:q4_grid}
+\end{figure}
+
+\subsection{Comprehensive Comparison of Derivative-Free Methods}
+\label{ssec:q4_comparison}
+
+\begin{table}[H]
+\centering
+\caption{Q4: Comparison of derivative-based and derivative-free methods. FE = function evaluations per iteration; $d$ = dimension.}
+\label{tab:q4_comparison}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Method} & \textbf{Gradient} & \textbf{FE/iter} & \textbf{Scalability} & \textbf{Accuracy} & \textbf{Global search} \\
+\midrule
+Exact GD & Full $\nabla f$ & $1$ & $O(d)$/iter & High & No \\
+FD GD ($\delta$ small) & Approx.\ $\nabla f$ & $d + 1$ & $O(d^2)$/iter & High & No \\
+FD GD ($\delta$ large) & Biased $\nabla f$ & $d + 1$ & $O(d^2)$/iter & Low & No \\
+Nesterov random & None (2 FE) & 2 & $O(1)$/iter & Low & No \\
+Nelder--Mead & None & $\leq n+1$ & Low-dim only & Moderate & No \\
+Grid search & None & $N^d$ total & Very poor & Grid-limited & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key distinction:} Only grid search (and similar exhaustive methods) provides global optimisation guarantees. All gradient-based methods and Nelder--Mead converge to local minima. For Rosenbrock (unimodal), this distinction is irrelevant, but for multimodal problems, zeroth-order global search methods become essential.
+
+% ============================================================
+\section{Question 5: Constrained Optimisation \hfill [30 marks]}
+\label{sec:q5}
+% ============================================================
+
+\subsection{Problem Formulation}
+\label{ssec:q5_problem}
+
+We minimise Benchmark B subject to the constraint $x_1 \geq 0.5$:
+\begin{equation}
+\min_{x \in \mathbb{R}^2}\; f(x) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1) \quad \text{s.t.}\; x_1 \geq 0.5.
+\end{equation}
+Starting from the infeasible point $x_0 = (0.2, 4.0)$ (where $x_{1,0} = 0.2 < 0.5$). The unconstrained minimiser $(0.582, 2.0)$ satisfies $x_1 = 0.582 > 0.5$, so it is feasible and remains the constrained minimiser.
+
+\subsection{Algorithm Formulations}
+\label{ssec:q5_algorithms}
+
+\begin{algorithm}[H]
+\caption{Projected Gradient Descent (PGD)}
+\label{alg:pgd}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$ (possibly infeasible), step size $\alpha$, projection $\Pi_{\mathcal{X}}$, iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $z_{k+1} \gets x_k - \alpha\, \nabla f(x_k)$ \Comment{Unconstrained gradient step}
+    \State $x_{k+1} \gets \Pi_{\mathcal{X}}(z_{k+1})$ \Comment{Project onto feasible set}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+For $\mathcal{X} = \{x : x_1 \geq 0.5\}$, the projection is trivial: $\Pi_{\mathcal{X}}(z) = [\max(0.5, z_1),\; z_2]^T$. This ensures $x_k \in \mathcal{X}$ for all $k \geq 1$, even from an infeasible starting point.
+
+\begin{algorithm}[H]
+\caption{Penalty Method (Quadratic Penalty)}
+\label{alg:penalty}
+\begin{algorithmic}[1]
+\Require Initial point $x_0$, step size $\alpha$, penalty weight $\lambda > 0$, iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State Compute penalised objective: $F_{\lambda}(x_k) = f(x_k) + \lambda \max(0,\; 0.5 - x_1)$
+    \State Compute penalised gradient: $\nabla F_{\lambda}(x_k) = \nabla f(x_k) + \lambda (-1) \cdot \mathbf{1}[x_1 < 0.5]\, e_1$
+    \State $x_{k+1} \gets x_k - \alpha\, \nabla F_{\lambda}(x_k)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The penalty function $\lambda \max(0, 0.5 - x_1)$ adds a cost proportional to constraint violation. As $\lambda \to \infty$, the penalised minimiser converges to the constrained minimiser, but large $\lambda$ creates an ill-conditioned penalised objective requiring smaller step sizes for stability.
+
+\textbf{Hyperparameters:} Projected GD ($\alpha = 0.08$); Penalty with $\lambda \in \{0.15, 1.8, 4.5\}$ ($\alpha = 0.05$ for $\lambda \leq 1.8$, $\alpha = 0.03$ for $\lambda = 4.5$); Unconstrained GD ($\alpha = 0.07$). All 100 iterations.
+
+\subsection{Results}
+\label{ssec:q5_results}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q5_fval.pdf}
+\caption{Q5: Objective value $f(x) = (x_1-1)^2 + 5(x_2-2)^2 + \sin(x_1)$ vs iteration. Projected GD and Penalty ($\lambda = 4.5$) both converge to the constrained minimum $f \approx 0.7244$ at $(0.582, 2.0)$. Penalty ($\lambda = 0.15$) converges to a slightly higher value due to insufficient penalisation of the constraint violation. The unconstrained GD trajectory (shown for reference) converges to the unconstrained minimum, spending time in the infeasible region.}
+\label{fig:q5_fval}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q5_contour.pdf}
+\caption{Q5: Contour plot with constraint boundary $x_1 = 0.5$ (dashed red line) and infeasible region (shaded). Projected GD immediately clips $x_1$ to $0.5$ at iteration 1, then optimises within the feasible half-space. Penalty methods are deflected by the constraint gradient: larger $\lambda$ enforces stronger deflection. The unconstrained GD path passes through the infeasible region since it is unaware of the constraint.}
+\label{fig:q5_contour}
+\end{figure}
+
+\subsection{Coordinate Trajectory Analysis}
+\label{ssec:q5_traj}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.97\textwidth]{figures/q5_trajectory.pdf}
+\caption{Q5: Component trajectories. Left: $x_1$ vs iteration. Projected GD immediately enforces $x_1 = 0.5$ (horizontal line at the constraint boundary) from iteration 1. Penalty methods gradually push $x_1$ toward feasibility, with larger $\lambda$ achieving faster enforcement. Right: $x_2$ vs iteration. All constrained methods converge to $x_2^{\star} = 2.0$, confirming that the constrained optimum is the same as the unconstrained one in the $x_2$ direction.}
+\label{fig:q5_traj}
+\end{figure}
+
+\subsection{Constraint Violation Analysis}
+\label{ssec:q5_violation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_violation.pdf}
+\caption{Q5: Constraint violation $v(x) = \max(0, 0.5 - x_1)$ on logarithmic scale. Full 100 iterations (left) and first 30 iterations zoomed (right). Projected GD achieves \textbf{zero violation from iteration 1}: the projection $x_1 \leftarrow \max(0.5, x_1)$ is a hard constraint, not a soft penalty. Penalty method with $\lambda = 4.5$ achieves near-zero violation within ${\sim}10$ iterations. With $\lambda = 0.15$, the penalty gradient $\lambda \leq 0.15$ is too weak relative to the objective gradient, and feasibility is enforced slowly.}
+\label{fig:q5_violation}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Q5: Final positions, objective values, and constraint violations after 100 iterations.}
+\label{tab:q5_final}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Final $x$} & \textbf{$f(x)$} & \textbf{Violation} & \textbf{Feasible?} \\
+\midrule
+Projected GD & $(0.582, 2.000)$ & 0.7244 & 0.0000 & \textbf{Yes} (always) \\
+Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Yes \\
+Penalty $\lambda = 1.8$ & $(0.585, 1.999)$ & 0.7245 & 0.0000 & Yes \\
+Penalty $\lambda = 0.15$ & $(0.571, 2.001)$ & 0.7249 & 0.0000 & Yes \\
+Unconstrained GD & $(0.582, 2.000)$ & 0.7244 & 0.0000 & Yes (by chance) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Comparative Analysis}
+\label{ssec:q5_analysis}
+
+\textbf{Projected Gradient Descent} maintains feasibility by construction at every iteration. The projection $\Pi_{\mathcal{X}}$ is the key operation: for simple convex sets (box, simplex, $\ell_2$-ball), it is analytically tractable with $O(d)$ cost. For complex constraint sets (e.g., semidefinite constraints, affine subspaces in large dimensions), the projection can be computationally expensive.
+
+\textbf{Penalty Methods} offer a trade-off: feasibility is enforced only approximately, but no projection oracle is required. Three observations arise from the experiments:
+\begin{enumerate}[nosep]
+\item Large $\lambda$ ($= 4.5$) enforces feasibility nearly as well as PGD but requires a smaller step size ($\alpha = 0.03$ vs $0.05$), compensating for the ill-conditioning introduced by the large penalty.
+\item The effective condition number of the penalised objective grows as $\lambda \to \infty$, since the constraint-normal component of the Hessian scales as $\lambda$.
+\item Small $\lambda$ ($= 0.15$) results in slower violation decay because the penalty gradient ($-\lambda e_1$ when $x_1 < 0.5$) is insufficient to overcome the objective gradient pulling toward the unconstrained minimum.
+\end{enumerate}
+
+\begin{remark}[Augmented Lagrangian]
+The penalty method can be improved with the \emph{augmented Lagrangian} (method of multipliers), which adds a dual variable $\mu$ that is updated at each outer iteration: $F_{\lambda,\mu}(x) = f(x) + \mu^T c(x) + \frac{\lambda}{2}\|c(x)\|^2$. This achieves exact constraint satisfaction in the limit with slower growth of the condition number compared to the pure penalty method.
+\end{remark}
+
+% ============================================================
+\section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
+\label{sec:q6}
+% ============================================================
+
+\subsection{Linear Programme over the Feasible Set}
+\label{ssec:q6_lp}
+
+\textbf{Feasible set:} $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10\}$ (a bounded box with 4 vertices).
+
+\textbf{Linear Programme:} Minimise $f(x) = a^T x$ with $a = [1, 2]^T$ over $\mathcal{X}$. Since the objective is linear and the feasible set is a convex polytope, the minimum is attained at a vertex. For a box constraint with positive components of $a$:
+\begin{equation}
+x^{\star} = \arg\min_{x \in \mathcal{X}} (x_1 + 2x_2) = \begin{pmatrix}\text{lower bound of } x_1 \\ \text{lower bound of } x_2\end{pmatrix} = (0.5,\; -5), \quad f^{\star} = 0.5 + 2(-5) = -9.5.
+\end{equation}
+This illustrates the \textbf{fundamental theorem of linear programming}: the optimum of a linear objective over a bounded polytope is always attained at a vertex of the polytope.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q6_lp.pdf}
+\caption{Q6-I: Feasible region $\mathcal{X}$ (blue box) and linear objective contours $f(x) = x_1 + 2x_2$ (parallel lines). The contours have slope $-a_1/a_2 = -1/2$, and the minimum occurs at the vertex $(0.5, -5)$ where all contours first intersect the feasible region. Moving toward the lower-left corner minimises both $x_1$ and $x_2$ contributions simultaneously, given $a_1, a_2 > 0$.}
+\label{fig:q6_lp}
+\end{figure}
+
+\subsection{Frank--Wolfe Algorithm}
+\label{ssec:q6_fw}
+
+\begin{algorithm}[H]
+\caption{Frank--Wolfe (Conditional Gradient) Algorithm}
+\label{alg:fw}
+\begin{algorithmic}[1]
+\Require Initial $x_0 \in \mathcal{X}$, mixing parameter $\beta \in (0,1)$, iterations $N$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $z_k \gets \arg\min_{z \in \mathcal{X}}\; \nabla f(x_k)^T z$ \Comment{Linear minimisation oracle (LMO)}
+    \State $x_{k+1} \gets \beta\, x_k + (1 - \beta)\, z_k$ \Comment{Convex combination (stays in $\mathcal{X}$)}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Key properties of Frank--Wolfe:}
+\begin{itemize}[nosep]
+\item \emph{Projection-free:} Iterates are convex combinations of feasible points, so $x_{k+1} \in \mathcal{X}$ by convexity of $\mathcal{X}$ --- no projection oracle needed.
+\item \emph{Efficient LMO:} For box constraints, the linear subproblem decouples per coordinate:
+\begin{equation}
+(z_k)_i = \begin{cases} l_i & \text{if } (\nabla f(x_k))_i > 0 \\ u_i & \text{if } (\nabla f(x_k))_i \leq 0 \end{cases},
+\end{equation}
+requiring only $O(d)$ operations --- much cheaper than projections for complex constraint sets.
+\item \emph{Convergence:} For $L$-smooth convex objectives, FW achieves $O(1/k)$ convergence in the \emph{Frank--Wolfe gap} $h_k = \langle \nabla f(x_k), x_k - z_k \rangle$, which is an upper bound on $f(x_k) - f^{\star}$.
+\item \emph{Step size schedule:} Using the fixed mixing parameter $\beta$ (as implemented here) is equivalent to step size $\gamma_k = 1 - \beta$. The standard decaying schedule $\gamma_k = 2/(k+2)$ achieves the $O(1/k)$ rate theoretically, but the fixed $\beta$ can be better tuned for specific problems.
+\end{itemize}
+
+\subsection{Interior Optimum: $f(x) = (x_1-1)^2 + (x_2-5)^2$}
+\label{ssec:q6_interior}
+
+The unconstrained minimum $(1, 5) \in \mathcal{X}$ (since $0.5 \leq 1 \leq 5$ and $-5 \leq 5 \leq 10$). Two mixing parameters: $\beta = 0.90$ (larger steps toward $z_k$) and $\beta = 0.985$ (smaller steps).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q6_fw_convergence.pdf}
+\caption{Q6-II: Frank--Wolfe convergence for the interior optimum. With $\beta = 0.985$ (step size $\gamma = 0.015$ toward the LP vertex), the final objective ($f = 0.0046$) is lower than with $\beta = 0.90$ ($f = 0.0089$). This counterintuitive result occurs because with $\beta = 0.90$, the iterate takes large jumps toward the LP vertex $z_k$, which oscillates between vertices of $\mathcal{X}$ as the gradient direction changes near the interior optimum. The conservative $\beta = 0.985$ makes smaller, smoother corrections that converge more stably.}
+\label{fig:q6_fw_conv}
+\end{figure}
+
+\subsection{Frank--Wolfe Gap Analysis}
+\label{ssec:q6_gap}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.97\textwidth]{figures/q6_fw_gap.pdf}
+\caption{Q6: Frank--Wolfe gap $h_k = \langle \nabla f(x_k), x_k - z_k \rangle$ vs iteration on log scale. Left: interior optimum. The theoretical $O(1/k)$ reference line (dashed) matches the empirical decay rate, confirming the algorithm achieves its theoretical convergence guarantee. The gap is an upper bound on $f(x_k) - f^{\star}$: when $h_k < \epsilon$, we can certify $\epsilon$-optimality without knowing $f^{\star}$. Right: boundary optimum. The gap decays similarly, though convergence is somewhat slower due to the constraint being active.}
+\label{fig:q6_fw_gap}
+\end{figure}
+
+\subsection{Boundary Optimum: $f(x) = x_1^2 + x_2^2$}
+\label{ssec:q6_boundary}
+
+The unconstrained minimum $(0, 0) \notin \mathcal{X}$ (since $x_1 \geq 0.5$ is required). The constrained minimum is $x^{\star} = (0.5, 0)$ with $f^{\star} = 0.25$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_contour.pdf}
+\caption{Q6: Frank--Wolfe trajectories. Left: interior optimum ($f = (x_1-1)^2 + (x_2-5)^2$) --- both $\beta$ values converge toward $(1, 5)$ from $(1, 1)$; $\beta = 0.985$ traces a smoother, more direct path. Right: boundary optimum ($f = x_1^2 + x_2^2$) --- the trajectory converges toward $(0.5, 0)$ on the constraint boundary, demonstrating Frank--Wolfe's natural boundary-seeking behaviour. The LP vertex $z_k$ consistently selects $(0.5, \cdot)$ as the gradient points toward decreasing $x_1$.}
+\label{fig:q6_fw_contour}
+\end{figure}
+
+\subsection{Evolution of Iterates and LP Vertices}
+\label{ssec:q6_evolution}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_evolution.pdf}
+\caption{Q6: Evolution of iterates $x_k$ and LP vertices $z_k$ vs iteration. Top-left ($\beta = 0.90$, interior): $x_k$ converges relatively quickly while $z_k$ alternates between the top and bottom boundaries ($x_2 \in \{10, -5\}$) as the gradient direction oscillates near the optimum. Top-right ($\beta = 0.985$, interior): slower but smoother convergence. Bottom-left (boundary): $x_1$ converges monotonically to $0.5$, $x_2$ to $0$. Bottom-right: convergence comparison confirms the $O(1/k)$ rate.}
+\label{fig:q6_evolution}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Q6: Final Frank--Wolfe positions and objective values.}
+\label{tab:q6_final}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Case} & \textbf{Final $x$} & \textbf{$f(x)$} & \textbf{$f^{\star}$} & \textbf{Optimality gap} \\
+\midrule
+Interior, $\beta = 0.90$ & $(1.066, 4.932)$ & 0.0089 & 0.0 & 0.0089 \\
+Interior, $\beta = 0.985$ & $(0.997, 5.067)$ & 0.0046 & 0.0 & 0.0046 \\
+Boundary, $\beta = 0.93$ & $(0.500, -0.337)$ & 0.3637 & 0.25 & 0.1137 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Interior vs Boundary Behaviour: Theoretical Analysis}
+\label{ssec:q6_analysis}
+
+\textbf{Interior optimum:} The FW gap decreases as $h_k = O(1/k)$, as guaranteed for $L$-smooth convex functions. The ``zig-zag'' oscillation of $z_k$ between vertices is characteristic of Frank--Wolfe on interior optima: since $x_k$ is close to $(1, 5)$, the gradient $\nabla f(x_k) \approx 2(x_k - [1,5]^T)$ is small and alternates direction, causing $z_k$ to jump between adjacent vertices of $\mathcal{X}$.
+
+\textbf{Boundary optimum:} Frank--Wolfe is particularly well-suited to boundary optima because $z_k$ frequently selects the vertex closest to the constrained optimum. For $f(x) = x_1^2 + x_2^2$, the gradient is $2x_k$, so $z_{k,1} = 0.5$ (always, since $x_{k,1} > 0$) and $z_{k,2} = -5$ if $x_{k,2} > 0$ or $z_{k,2} = 10$ if $x_{k,2} < 0$. This drives $x_2 \to 0$ and $x_1 \to 0.5$, naturally reaching the constrained minimum without projection.
+
+\textbf{Slow convergence near boundary:} The FW algorithm converges at $O(1/k)$, which is slower than projected gradient descent ($O(\rho^k)$ linear convergence for strongly convex objectives). This is the fundamental limitation of projection-free methods: they pay in convergence rate for avoiding the projection oracle.
+
+% ============================================================
+\section{Cross-Method Summary and Discussion}
+\label{sec:summary}
+% ============================================================
+
+\subsection{Overall Performance Comparison}
+\label{ssec:summary_perf}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/method_comparison_heatmap.pdf}
+\caption{Performance heatmap of all methods across benchmarks. Colour indicates normalised rank: green (0) = best performance on that benchmark, red (1) = worst. Values shown are the actual final objective values. The heatmap reveals that no single method dominates across all benchmarks: Polyak is best on Rosenbrock (correct $f^{\star}$) but worst on A and B; Nesterov is consistently strong but requires gradient access; Newton achieves the best results per iteration but requires the Hessian.}
+\label{fig:heatmap}
+\end{figure}
+
+\subsection{Convergence Rate Summary}
+\label{ssec:summary_rates}
+
+\begin{table}[H]
+\centering
+\caption{Theoretical convergence rates and practical observations for all methods studied.}
+\label{tab:convergence_rates}
+\begin{tabular}{lllcc}
+\toprule
+\textbf{Method} & \textbf{Theoretical Rate} & \textbf{Condition} & \textbf{Gradient?} & \textbf{Hessian?} \\
+\midrule
+GD & $O(1/k)$ & Convex, $L$-smooth & Yes & No \\
+GD & $O(\rho^k)$, $\rho < 1$ & Strongly convex & Yes & No \\
+Polyak & $O(1/k)$ & Convex, $f^{\star}$ known & Yes & No \\
+Adagrad & $O(1/\sqrt{k})$ & Non-smooth & Yes & No \\
+RMSprop & Empirical & Heuristic & Yes & No \\
+Heavy Ball & $O(\rho^{2k})$ & Strongly convex quadratic & Yes & No \\
+Nesterov & $O(1/k^2)$ & Convex, $L$-smooth & Yes & No \\
+Adam & Empirical & Heuristic & Yes & No \\
+Newton & $O(\rho^{2^k})$ (quadratic) & Near minimum & Yes & Yes \\
+Nelder--Mead & No guarantee & --- & No & No \\
+FW & $O(1/k)$ in FW gap & Convex, $L$-smooth & No (function only) & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Practical Recommendations}
+\label{ssec:summary_rec}
+
+\begin{itemize}[nosep]
+\item \textbf{Well-conditioned problems:} Any first-order method suffices. Adam or Adagrad offer good defaults with minimal tuning.
+\item \textbf{Ill-conditioned problems (large $\kappa$):} Nesterov or Newton (if Hessian available). Nesterov offers the optimal $O(1/k^2)$ first-order rate; Newton achieves quadratic convergence near the solution.
+\item \textbf{Noisy objectives / stochastic settings:} Mini-batch SGD with Adam is the standard choice. Adagrad can be unstable if step sizes decay too aggressively.
+\item \textbf{Derivative-free settings:} Nelder--Mead for low-dimensional smooth problems; random search for high-dimensional; grid search only for low-dimensional global optimisation.
+\item \textbf{Constrained problems:} PGD for simple constraints (box, simplex) where projection is cheap; penalty methods for complex constraints; Frank--Wolfe when an efficient LMO is available and constraints are key to the problem structure (e.g., matrix completion, optimal transport).
+\end{itemize}
+
+% ============================================================
+\newpage
+\appendix
+\section{Python Code}
+\label{app:code}
+% ============================================================
+
+The complete implementation is provided in \texttt{CS7DS2\_Final\_Code\_25336453.py}. Key algorithm implementations are reproduced below for reference.
+
+\begin{lstlisting}[caption={Gradient Descent}]
+def gradient_descent(grad_fn, loss_fn, x0, alpha, n_iters):
+    x = x0.copy().astype(float)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for _ in range(n_iters):
+        x = x - alpha * grad_fn(x)
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Polyak Step Size}]
+def polyak_step(grad_fn, loss_fn, x0, f_star, eps, n_iters):
+    x = x0.copy().astype(float)
+    x_hist, f_hist, alpha_hist = [x.copy()], [loss_fn(x)], []
+    for _ in range(n_iters):
+        g = grad_fn(x)
+        alpha_k = (loss_fn(x) - f_star) / (np.dot(g, g) + eps)
+        alpha_hist.append(alpha_k)
+        x = x - alpha_k * g
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist), np.array(alpha_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Adagrad}]
+def adagrad(grad_fn, loss_fn, x0, alpha0, eps, n_iters):
+    x = x0.copy().astype(float)
+    G = np.zeros_like(x)
+    x_hist, f_hist, alpha_hist = [x.copy()], [loss_fn(x)], []
+    for _ in range(n_iters):
+        g = grad_fn(x)
+        G += g**2
+        eff_alpha = alpha0 / (np.sqrt(G) + eps)
+        alpha_hist.append(np.mean(eff_alpha))
+        x = x - eff_alpha * g
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist), np.array(alpha_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={RMSprop}]
+def rmsprop(grad_fn, loss_fn, x0, alpha0, beta, eps, n_iters):
+    x = x0.copy().astype(float)
+    v = np.zeros_like(x)
+    x_hist, f_hist, alpha_hist = [x.copy()], [loss_fn(x)], []
+    for _ in range(n_iters):
+        g = grad_fn(x)
+        v = beta * v + (1 - beta) * g**2
+        eff_alpha = alpha0 / (np.sqrt(v) + eps)
+        alpha_hist.append(np.mean(eff_alpha))
+        x = x - eff_alpha * g
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist), np.array(alpha_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Heavy Ball / Polyak Momentum}]
+def heavy_ball(grad_fn, loss_fn, x0, alpha, beta, n_iters):
+    x = x0.copy().astype(float)
+    z = np.zeros_like(x)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for _ in range(n_iters):
+        g = grad_fn(x)
+        z = beta * z + alpha * g
+        x = x - z
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Nesterov Accelerated Gradient}]
+def nesterov_momentum(grad_fn, loss_fn, x0, alpha, beta_max, n_iters):
+    x = x0.copy().astype(float)
+    z = np.zeros_like(x)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for k in range(1, n_iters + 1):
+        beta_k = min((k - 1) / (k + 2), beta_max)
+        lookahead = x + beta_k * z
+        g = grad_fn(lookahead)
+        z = beta_k * z - alpha * g
+        x = x + z
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Adam Optimiser}]
+def adam_optimiser(grad_fn, loss_fn, x0, alpha, beta1, beta2, eps, n_iters):
+    x = x0.copy().astype(float)
+    m_vec, v_vec = np.zeros_like(x), np.zeros_like(x)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for t in range(1, n_iters + 1):
+        g = grad_fn(x)
+        m_vec = beta1 * m_vec + (1 - beta1) * g
+        v_vec = beta2 * v_vec + (1 - beta2) * g**2
+        m_hat = m_vec / (1 - beta1**t)
+        v_hat = v_vec / (1 - beta2**t)
+        x = x - alpha * m_hat / (np.sqrt(v_hat) + eps)
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Newton's Method with Tikhonov Regularisation}]
+def newtons_method(grad_fn, hess_fn, loss_fn, x0, alpha, n_iters, damping=1e-8):
+    x = x0.copy().astype(float)
+    x_hist, f_hist, update_norms = [x.copy()], [loss_fn(x)], []
+    for _ in range(n_iters):
+        g = grad_fn(x)
+        H = hess_fn(x) if callable(hess_fn) else hess_fn
+        H_reg = H + damping * np.eye(len(x))
+        try:
+            p = np.linalg.solve(H_reg, g)
+        except np.linalg.LinAlgError:
+            p = g
+        update_norms.append(np.linalg.norm(alpha * p))
+        x = x - alpha * p
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist), np.array(update_norms)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Frank--Wolfe Algorithm}]
+def frank_wolfe(grad_fn, loss_fn, x0, bounds, beta, n_iters):
+    x = x0.copy().astype(float)
+    x_hist, f_hist, z_hist = [x.copy()], [loss_fn(x)], []
+    for _ in range(n_iters):
+        g = grad_fn(x)
+        z = np.array([bounds[i][0] if g[i] > 0 else bounds[i][1]
+                       for i in range(len(g))])
+        z_hist.append(z.copy())
+        x = beta * x + (1 - beta) * z
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist), np.array(z_hist)
+\end{lstlisting}
+
+\end{document}
