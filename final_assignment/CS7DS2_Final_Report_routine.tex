@@ -14,6 +14,7 @@
 \usepackage{listings}
 \usepackage{fancyhdr}
 \usepackage{multirow}
+\usepackage{microtype}
 
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
 
@@ -107,6 +108,15 @@ Frank--Wolfe & Q6 & $O(1/k)$ smooth convex & Linear min.\ oracle \\
 \end{table}
 
 \textbf{Organisation.} Section~\ref{sec:benchmarks} defines the three benchmark problems used throughout. Sections~\ref{sec:q1}--\ref{sec:q6} correspond to Questions~1--6 respectively, each presenting algorithm formulations, hyperparameter choices, experimental results, and theoretical analysis. A concluding synthesis is given in Section~\ref{sec:conclusion}, and complete Python code is reproduced in Appendix~\ref{app:code}.
+
+A key theme throughout is the role of the \emph{condition number} $\kappa = L/\mu$ in governing convergence speed. Figure~\ref{fig:kappa} illustrates how the theoretical iteration count to reach $1\%$ of the initial error grows with $\kappa$ for three methods. For Benchmarks A and B ($\kappa \approx 2$--$5$), nearly all methods converge in similar iteration counts, masking their algorithmic differences. Benchmark C (Rosenbrock, $\kappa \approx 2000$) is therefore the most discriminating test: the required iterations for plain GD grow proportionally to $\kappa$, while momentum methods require only $O(\sqrt{\kappa})$ iterations.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/convergence_vs_kappa.pdf}
+\caption{Theoretical iteration counts to reach $\varepsilon = 1\%$ of the initial error as a function of the condition number $\kappa$, for strongly convex functions. GD requires $O(\kappa)$ iterations, while Nesterov and optimal Heavy Ball both achieve $O(\sqrt{\kappa})$ --- a fundamental quadratic improvement. Vertical lines mark the approximate condition numbers of the three benchmarks. The large $\kappa \approx 2000$ of Rosenbrock explains why GD requires thousands of iterations while momentum methods succeed in hundreds.}
+\label{fig:kappa}
+\end{figure}
 
 All experiments use a fixed random seed (\texttt{np.random.seed(42)}) for reproducibility.
 
@@ -227,6 +237,11 @@ RMSprop addresses Adagrad's vanishing step problem by replacing the cumulative s
 \end{algorithm}
 
 The Heavy Ball method adds a momentum term $\beta z_k$ to the gradient update. For a quadratic $f$ with condition number $\kappa$, the optimal Heavy Ball parameters yield the convergence rate $\rho = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$, improving upon GD's rate of $(1 - 1/\kappa)$. Physically, the iterate behaves like a ball rolling in the objective landscape, accumulating speed in consistent descent directions and decelerating across oscillating directions.
+
+\begin{remark}
+\label{rem:hb_nonquadratic}
+The optimal $O(\sqrt{\kappa})$ rate of Heavy Ball applies only to strongly convex \emph{quadratic} functions. For general non-quadratic objectives, Heavy Ball does not enjoy the same guarantees and can even diverge for poorly chosen $(\alpha, \beta)$. In contrast, Nesterov's acceleration (Section~\ref{sec:q2}) achieves $O(1/k^2)$ for \emph{any} smooth convex function, making it theoretically superior. Empirically, this is reflected in Table~\ref{tab:q1_final}: Heavy Ball achieves $f = 1.40$ on Rosenbrock vs Nesterov's $f = 0.479$ (Table~\ref{tab:q2_final}).
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -527,6 +542,12 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 
 \subsection{SGD with Increased Observation Noise}
 
+\textbf{Convergence theory for SGD:} For a $\mu$-strongly convex, $L$-smooth function, mini-batch SGD with learning rate $\alpha_k = c/(\mu k)$ achieves:
+\begin{equation}
+\mathbb{E}[f(\theta_k)] - f^\star \leq \frac{L c^2 \sigma^2_g}{2b\mu k},
+\end{equation}
+where $\sigma^2_g$ is the per-sample gradient variance and $b$ is the batch size. This $O(1/k)$ rate is optimal for stochastic first-order methods (vs $O(1/k^2)$ for deterministic Nesterov). The expected suboptimality scales as $\sigma^2_g/(b \cdot k)$, confirming that larger batches reduce variance (and thus the optimisation noise floor) proportional to $1/b$.
+
 The experiment is repeated with output noise scaled by factor 6 ($\varepsilon^{(i)} \sim \mathcal{N}(0,36)$ vs $\mathcal{N}(0,1)$).
 
 \begin{figure}[H]
@@ -676,7 +697,9 @@ C & 3.7319 & 0.6864 & $5.4\times$ & $(0.183,\; 0.020)$ \\
 
 \subsection{Computational Trade-offs}
 
-Newton's method requires computing and inverting the $d \times d$ Hessian at each iteration: $O(d^2)$ to evaluate $\nabla^2 f$ and $O(d^3)$ (or $O(d^2)$ using conjugate gradient) to solve the linear system. For $d = 2$ (as in these experiments), this is negligible. However, in high-dimensional settings (deep neural networks, $d \sim 10^6$--$10^9$), full Newton is computationally prohibitive, motivating quasi-Newton methods (L-BFGS) and second-order-free methods (Adam, Nesterov). The Rosenbrock experiment illustrates Newton's strength precisely where gradient methods struggle most: extreme ill-conditioning.
+Newton's method requires computing and inverting the $d \times d$ Hessian at each iteration: $O(d^2)$ to evaluate $\nabla^2 f$ and $O(d^3)$ (or $O(d^2)$ using conjugate gradient) to solve the linear system. For $d = 2$ (as in these experiments), this is negligible --- Newton's entire 20-iteration run completes in microseconds. However, in high-dimensional settings ($d \sim 10^6$--$10^9$), full Newton is computationally prohibitive, motivating quasi-Newton methods (L-BFGS approximates $H^{-1}$ using $O(md)$ operations with $m \ll d$ history vectors) and second-order-free methods (Adam, Nesterov).
+
+The Rosenbrock results demonstrate Newton's strength precisely where gradient methods struggle most: extreme ill-conditioning ($\kappa \approx 2000$). While GD achieves $f = 3.73$ in 80 iterations (barely leaving the starting valley), Newton reaches $f = 0.69$ in 20 iterations --- a $5.4\times$ improvement with $4\times$ fewer iterations. This remarkable efficiency gain is a direct consequence of Newton's iteration complexity being \emph{independent} of the condition number near the minimum: the quadratic convergence rate $\|x_{k+1} - x^\star\|^2 \leq C\|x_k - x^\star\|^4$ means the method does not ``feel'' ill-conditioning once it enters the quadratic convergence regime.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -710,6 +733,17 @@ The bias (truncation error) is $O(\delta)$; rounding errors add $O(\varepsilon_{
 \end{algorithm}
 
 \textbf{Theoretical properties:} The estimator $\hat{g}_k$ is an unbiased estimate of $\frac{1}{d}\nabla f(x_k)$ in expectation (after normalisation): $\mathbb{E}[u(u^T\nabla f)] = \frac{1}{d}\nabla f$ for $u \sim \text{Uniform}(\mathbb{S}^{d-1})$. The noise variance scales as $O(\|\nabla f\|^2/d)$, so convergence rate degrades with dimension $d$ --- this is the fundamental curse of dimensionality for zeroth-order methods. For fixed $d=2$, the method requires $\sim 3\times$ more iterations than exact GD (empirically), but uses only 2 function evaluations per step.
+
+\subsubsection{Finite Difference Error Analysis}
+
+Figure~\ref{fig:fd_error} plots the gradient approximation error $\|\hat{g}_\delta - \nabla f\|$ as a function of $\delta$ for Benchmark B at a fixed test point, demonstrating the classical U-shaped error curve. For very small $\delta$, rounding errors dominate; for large $\delta$, truncation error dominates; and the optimal $\delta \approx 10^{-8}$ balances both. The tested values $\delta = 0.05$ and $\delta = 0.8$ are both in the truncation-dominated regime, but $\delta = 0.05$ incurs a truncation error $\approx 6\times$ smaller than $\delta = 0.8$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fd_error_vs_delta.pdf}
+\caption{Q4: Gradient approximation error $\|\hat{g}_\delta - \nabla f\|$ vs perturbation $\delta$ for Benchmark B at $x=(0.5, 3.0)$. The theoretical rounding floor ($\sim \varepsilon_{\rm mach}/\delta$) and truncation error ($\sim \delta |f''|$) are shown as dashed lines. Both $\delta=0.05$ and $\delta=0.8$ lie in the truncation-dominated regime; $\delta=0.05$ achieves $5\times$ lower error. The optimal $\delta \approx 10^{-8}$ is impractical for general use (sensitive to function scaling), but $\delta = 0.05$ is a good engineering choice for this problem.}
+\label{fig:fd_error}
+\end{figure}
 
 \subsubsection{Hyperparameter Settings for Q4 Part A}
 
@@ -1014,7 +1048,9 @@ Boundary & 0.93 & $(0.500,\; -0.337)$ & 0.3637 & 0.250 \\
 
 \textbf{Boundary optimum:} Frank--Wolfe is naturally suited because the LMO consistently selects a vertex near the constrained optimum. The boundary case converges slower than the interior case in terms of absolute $f$ reduction because the residual gap $0.364 - 0.25 = 0.114$ requires the iterate to travel close to a vertex of $\mathcal{X}$, but the mixing parameter $\beta = 0.93$ limits the step size. Implementing the standard decaying schedule $\gamma_k = 2/(k+2)$ (equivalent to $\beta = 1 - 2/(k+2) = k/(k+2) \to 1$) would accelerate convergence in this case.
 
-\textbf{Frank--Wolfe vs Projected GD:} Frank--Wolfe avoids projections, making it preferable when projections are expensive (e.g.\ nuclear norm ball, spectrahedron). Projected GD converges faster per iteration when projections are cheap (e.g.\ box constraints), because it can take gradient steps of size $1/L$ vs Frank--Wolfe's steps that are constrained to convex combinations with distant vertices.
+\textbf{Standard decaying step schedule:} The theoretical $O(1/k)$ guarantee of Theorem~\ref{thm:fw_conv} requires $\gamma_k = 2/(k+2)$, equivalent to $\beta_k = k/(k+2) \to 1$. The fixed $\beta$ used in the implementation converges faster initially (when $\beta < k/(k+2)$, i.e.\ the step is larger than the decaying schedule) but may oscillate at later stages when $\beta > k/(k+2)$ (the step is now larger than optimal). The boundary case ($\beta = 0.93$) has not converged to $f^\star = 0.25$ after 140 iterations, whereas the decaying schedule would guarantee convergence by Theorem~\ref{thm:fw_conv}. This illustrates the practical importance of using the theoretically motivated step-size schedule.
+
+\textbf{Frank--Wolfe vs Projected GD:} Frank--Wolfe avoids projections, making it preferable when projections are expensive (e.g.\ nuclear norm ball, spectrahedron). Projected GD converges faster per iteration when projections are cheap (e.g.\ box constraints), because it can take gradient steps of size $1/L$ vs Frank--Wolfe's steps that are constrained to convex combinations with potentially distant vertices. Additionally, Frank--Wolfe provides a natural convergence certificate via the Frank--Wolfe gap $h_k = \nabla f(x_k)^T(x_k - z_k) \geq f(x_k) - f^\star$ --- this duality gap certifies optimality without knowing $f^\star$, an important practical advantage.
 
 % ============================================================
 \section{Conclusion}
@@ -1022,6 +1058,15 @@ Boundary & 0.93 & $(0.500,\; -0.337)$ & 0.3637 & 0.250 \\
 % ============================================================
 
 \subsection{Summary of Results}
+
+Figure~\ref{fig:cross_rosenbrock} provides a unified view of the best representative method from each question on the Rosenbrock function, which serves as the most discriminating benchmark due to its extreme condition number ($\kappa \approx 2000$). Table~\ref{tab:final_summary} then tabulates the full numerical results.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.90\textwidth]{figures/cross_comparison_rosenbrock.pdf}
+\caption{Cross-question comparison on Rosenbrock ($\kappa \approx 2000$), running each method for up to 200 iterations. Newton achieves the lowest final value in only 20 steps (green squares), demonstrating the power of second-order information. Nesterov (blue) shows the fastest first-order descent due to the $O(\sqrt{\kappa})$ vs $O(\kappa)$ iteration advantage. The Polyak step (purple) achieves the second-lowest value overall by exploiting the known $f^\star = 0$. Adam (orange) and Heavy Ball (red) outperform plain GD (dashed), while GD itself barely makes progress on this ill-conditioned function. This figure visually encapsulates the central message of the report: algorithmic choice matters most when condition numbers are large.}
+\label{fig:cross_rosenbrock}
+\end{figure}
 
 Table~\ref{tab:final_summary} summarises the final objective values achieved by every method across all benchmarks.
 
