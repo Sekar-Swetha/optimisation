@@ -529,6 +529,15 @@ Heavy Ball uses a fixed $\beta$ and evaluates the gradient at the current iterat
 Adam combines momentum (via $m_t$, an EMA of gradients with $\beta_1 = 0.9$) with per-coordinate adaptive scaling (via $v_t$, an EMA of squared gradients with $\beta_2 = 0.999$). The bias correction factors $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ compensate for the fact that $m_0 = v_0 = \mathbf{0}$; without correction, early iterates would be biased toward zero. Adam can be viewed as a combination of RMSprop (via $v_t$) and momentum (via $m_t$).
 \end{remark}
 
+\begin{remark}[Armijo Line Search for Automatic Step Size]
+All methods in Q1--Q2 require hand-tuned step sizes. The \emph{Armijo sufficient-decrease} condition provides a principled alternative: accept step size $\alpha_k$ if
+\begin{equation}
+  f(x_k - \alpha_k \nabla f(x_k)) \leq f(x_k) - c\,\alpha_k\|\nabla f(x_k)\|^2, \quad c \in (0, 1),
+  \label{eq:armijo}
+\end{equation}
+starting from $\alpha_k = 1$ and halving until \eqref{eq:armijo} is satisfied (backtracking). This removes the need to know $L$ while guaranteeing descent at every step. Combined with the Wolfe curvature condition, it ensures the step is neither too small (sufficient decrease) nor too large (curvature condition). The Polyak step can be interpreted as a special Armijo condition where $c = 0$ and the step is set to the exact minimisation value along the gradient direction.
+\end{remark}
+
 \begin{remark}[Adam Convergence and Non-Convergence]
 Despite empirical success, Adam can fail to converge on simple convex problems. Reddi et al.\ showed a counterexample where the exponential moving average of squared gradients can oscillate; their \emph{AMSGrad} variant fixes this by using $\hat{v}_t = \max(\hat{v}_{t-1}, v_t)$ (non-decreasing denominator). The theoretical $O(1/\sqrt{T})$ regret guarantee for Adam is established in the online learning setting; for offline optimisation, only $O(1/\sqrt{T})$ convergence of $\min_{k \leq T}\|\nabla f(x_k)\|^2$ has been proved \cite{kingma2015adam}. On Benchmark C, Adam achieves $f = 0.09$ (300 iterations), slightly worse than Nesterov's $f = 0.07$, consistent with Adam's adaptive scaling being less suited to the consistent ill-conditioning of Rosenbrock.
 \end{remark}
@@ -707,6 +716,14 @@ A key practical consideration for SGD is whether to measure efficiency in \emph{
 \caption{Q2: Mini-batch SGD efficiency measured by epoch (left) and by total gradient evaluations / data samples processed (right). Per epoch, smaller batches converge faster due to more frequent updates. Per sample, all batch sizes converge at a similar rate for this strongly convex quadratic loss, where the stochastic gradient is an unbiased estimator with variance $O(1/b)$. For well-conditioned problems, the sample-level efficiency of larger batches matches smaller batches, making larger batches computationally superior on modern hardware (via parallelism). However, for ill-conditioned problems or when approaching the noise floor, smaller batches provide more frequent updates and can escape stochastic noise floors more efficiently.}
 \label{fig:q2_sgd_evals}
 \end{figure}
+
+\subsection{Variance Reduction Methods}
+
+A key limitation of SGD is the $O(\sigma_b^2)$ variance floor that prevents convergence to the exact minimum with constant step size (Proposition~\ref{prop:sgd_conv}). \emph{Variance reduction} methods eliminate this floor by periodically computing the full gradient as a reference point.
+
+\begin{remark}[SVRG: Stochastic Variance Reduced Gradient]
+The SVRG algorithm \cite{bottou2018optimization} alternates between: (1) computing the full gradient $\mu_s = \nabla J(\tilde\theta_s)$ at a snapshot point $\tilde\theta_s$ every $m$ iterations, and (2) taking stochastic steps with the variance-corrected gradient $\hat{g}_k = \nabla J_{\mathcal{B}}(\theta_k) - \nabla J_{\mathcal{B}}(\tilde\theta_s) + \mu_s$. The correction $-\nabla J_{\mathcal{B}}(\tilde\theta_s) + \mu_s$ has mean zero (unbiased) but \emph{reduced variance} when $\theta_k \approx \tilde\theta_s$, because the stochastic and full gradients cancel. SVRG achieves linear convergence $O(\rho^k)$ for strongly convex $J$ without requiring $\alpha \to 0$, at the cost of one full-gradient computation every $m$ stochastic steps. For Benchmark A ($m = 1000$ samples), SVRG with $m_{\mathrm{epoch}} = 1000$ would achieve the same $O((1-\mu/L)^k)$ rate as GD while processing only $\sim 2 \times$ more samples than standard SGD.
+\end{remark}
 
 \subsection{Learning Rate Schedules for SGD}
 
@@ -899,6 +916,15 @@ Figure~\ref{fig:q3_rates} provides a direct comparison of suboptimality $f(x_k) 
 \label{fig:q3_rates}
 \end{figure}
 
+\subsection{Newton Decrement as a Stopping Criterion}
+
+A key advantage of Newton's method over gradient methods is its natural stopping criterion: the \emph{Newton decrement}
+\begin{equation}
+  \lambda(x)^2 = \nabla f(x)^{\top}[\nabla^2 f(x)]^{-1}\nabla f(x) = p_k^{\top}\nabla^2 f(x_k) p_k,
+  \label{eq:newton_decrement}
+\end{equation}
+where $p_k = [\nabla^2 f(x_k)]^{-1}\nabla f(x_k)$ is the Newton direction. The quantity $\lambda(x)^2/2$ is an estimate of $f(x) - f^{\star}$ and is invariant under affine coordinate transformations. The algorithm terminates when $\lambda(x_k)^2/2 \leq \varepsilon$ for a user-specified tolerance $\varepsilon$, providing a certificate of near-optimality. In contrast, gradient methods require comparing $\|\nabla f(x_k)\|$ to a tolerance, which is scale-dependent and may be too conservative or too aggressive depending on the problem geometry.
+
 \subsection{Limitations of Newton's Method}
 
 While Newton's method is superior in iteration count, it has important practical limitations:
@@ -1056,6 +1082,14 @@ Grid search evaluates the objective on a uniform $55 \times 55 = 3025$ grid over
 \caption{Q4B: Grid search on Rosenbrock. Left: the 3025 grid points cover the search region uniformly; the best point found is near the true optimum $(1,1)$ but offset by up to $\Delta x \approx 0.074$ (the grid resolution). Right: the best-so-far curve shows step-wise improvement as progressively better grid points are scanned. Grid search provides a \emph{probabilistic global search} guarantee --- it cannot miss the global minimum if the grid is fine enough --- but requires $O(N^d)$ evaluations, making it computationally infeasible for $d > 3$.}
 \label{fig:q4_grid}
 \end{figure}
+
+\subsection{Coordinate Descent as a Structured Derivative-Free Alternative}
+
+For problems with separable or block-separable structure, \emph{coordinate descent} minimises over one coordinate (or block) at a time:
+\begin{equation}
+  x_k^{(i)} = \arg\min_{t} f(x_k^{(1)}, \ldots, x_k^{(i-1)},\, t,\, x_k^{(i+1)}, \ldots, x_k^{(d)}),
+\end{equation}
+requiring only $O(1)$ function evaluations per step (for exact 1D minimisation) or one partial derivative (for gradient-based updates). On Benchmark B, coordinate descent would alternate between minimising over $x_1$ (solving $2(x_1-1) + \cos(x_1) = 0$ numerically) and $x_2$ (exact: $x_2 = 2$), converging in approximately two steps due to the near-separable structure. On Rosenbrock, coordinate descent performs poorly because the coupling term $100(x_2 - x_1^2)^2$ creates strong inter-coordinate dependence; progress along $x_1$ and $x_2$ are tightly coupled, making one-at-a-time minimisation inefficient. This illustrates when structured derivative-free methods outperform general-purpose ones: separability is a prerequisite.
 
 \subsection{Nelder--Mead vs.\ Grid Search: A Direct Comparison}
 
@@ -1490,6 +1524,29 @@ Nelder--Mead & 160 & 0.001 & Empirical & --- \\
 \noindent\textbf{Overall comparative insight:} For smooth, well-conditioned problems, Nesterov acceleration and Adam are the methods of choice. For ill-conditioned problems where the Hessian is tractable (low dimension), Newton's method or quasi-Newton methods (e.g., L-BFGS) provide dramatic speedups. When gradients are unavailable, Nelder--Mead is surprisingly effective in low dimensions. For constrained problems, projected gradient descent is preferred when projections are cheap, while Frank--Wolfe and penalty methods offer alternatives when projections are expensive.
 
 The experiments also reveal a consistent \emph{computational hierarchy} on Benchmark C: for equal iteration counts, Newton $\gg$ Polyak (with $f^{\star}$) $\gg$ Nesterov $\gg$ Adam $\gg$ Heavy Ball $\gg$ Adagrad $\gg$ GD. However, adjusting for \emph{gradient evaluations per iteration}, Newton is actually $4\times$ more expensive per step (requires Hessian) than first-order methods, making the comparison more nuanced: Newton uses $20 \times 3 = 60$ evaluations (gradient + Hessian column evaluations) while GD uses $300 \times 1 = 300$. Even on this adjusted basis, Newton achieves far better results, demonstrating the superiority of second-order information for ill-conditioned problems.
+
+\begin{table}[H]
+\centering
+\caption{Per-gradient-evaluation efficiency on Benchmark C (Rosenbrock). Gradient evaluations = total function evaluations that contribute gradient information; for Newton each Hessian column requires $d=2$ additional evaluations ($d^2 = 4$ total per step). Final $f$ uses $f^{\star} = 0$.}
+\label{tab:per_eval_eff}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Iterations} & \textbf{Grad evals / iter} & \textbf{Total evals} & \textbf{Final $f$} \\
+\midrule
+GD & 300 & 1 & 300 & 1.39 \\
+Heavy Ball & 300 & 1 & 300 & 0.25 \\
+Nesterov & 300 & 1 & 300 & 0.07 \\
+Adam & 300 & 1 & 300 & 0.09 \\
+Polyak & 120 & 1 & 120 & 0.009 \\
+Newton (damped) & 20 & $d^2 = 4$ & 80 & 0.686 \\
+Nelder--Mead & 160 & $\leq d+3 = 5$ & $\leq 800$ & 0.001 \\
+FD GD ($\delta=0.05$) & 120 & $d+1 = 3$ & 360 & $\approx0.73$ \\
+Nesterov rand.\ search & 220 & 2 & 440 & $\approx1.2$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent When evaluated on a \emph{per-evaluation} basis, Newton with 80 total evaluations achieving $f = 0.686$ is not as dominant over Nesterov (300 evaluations, $f = 0.07$) as the per-iteration comparison suggests. However, Nelder--Mead ($\leq 800$ evaluations, $f = 0.001$) remains impressive, achieving the best final value among all gradient-free methods with a comparable evaluation budget.
 
 \noindent\textbf{Cross-cutting theme:} All fifteen methods studied ultimately represent different answers to a single question: \emph{how to use available information most efficiently to descend toward a minimum.} GD uses only the current gradient; momentum methods (Heavy Ball, Nesterov) use gradient history; adaptive methods (Adagrad, RMSprop, Adam) use gradient statistics; Newton uses second-order local geometry; derivative-free methods use function value history; Frank--Wolfe uses a linear oracle over the feasible set. The theoretical guarantees formalise exactly how much information each method extracts and how quickly. In practice, the choice is governed by problem dimension, smoothness, constraint structure, and the cost of function/gradient evaluation --- a trade-space that the practical recommendations in each section seek to navigate.
 
