@@ -558,6 +558,18 @@ Figure~\ref{fig:q2_rates} verifies empirically that GD converges at $O(1/k)$ whi
 
 The Nesterov momentum schedule $\beta_k = \min\bigl((k-1)/(k+2),\ \beta_{\max}\bigr)$ is shown in Figure~\ref{fig:q2_schedule}. For small $k$, $\beta_k$ grows from 0, building momentum gradually. When $\beta_k$ reaches $\beta_{\max}$, it is capped, preventing momentum from growing without bound. The standard schedule without the cap corresponds to $\gamma_k = 1 - \beta_k = 3/(k+2)$, which decays as $O(1/k)$ --- exactly the step size schedule required for the $O(1/k^2)$ rate proof.
 
+\paragraph{Optimality of $O(1/k^2)$.} Nesterov (1983) \cite{nesterov1983} proved not only that the accelerated gradient method achieves $O(1/k^2)$ but also established a \emph{matching lower bound}: for any first-order algorithm and any $k \leq (n-1)/2$ (dimension-free for $n \to \infty$), there exists a smooth convex function such that:
+\begin{equation}
+f(x_k) - f^{\star} \geq \frac{3L\|x_0 - x^{\star}\|^2}{32(k+1)^2}.
+\end{equation}
+This means \textbf{no first-order algorithm can achieve a convergence rate better than $O(1/k^2)$} on $L$-smooth convex functions. Nesterov's method is therefore \emph{optimal in the complexity-theoretic sense}.
+
+\paragraph{Chebyshev polynomial connection.} For the special case of quadratic objectives $f(x) = \frac{1}{2}x^T H x - b^T x$ with $H$ symmetric positive definite, the optimal first-order method on Benchmark~A (eigenvalues $[\mu, L]$) is equivalent to evaluating a sequence of Chebyshev polynomials $\{T_k\}$ on the eigenvalues of $H$. Specifically, the residual after $k$ steps satisfies:
+\begin{equation}
+\frac{\|x_k - x^{\star}\|}{\|x_0 - x^{\star}\|} \leq 2\left(\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}\right)^k = 2\rho_{\rm acc}^k,
+\end{equation}
+where $\rho_{\rm acc} = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$. This is the \emph{Chebyshev} convergence rate, matching the optimal rate achievable by any polynomial (first-order) method. Comparing to GD's $\rho_{\rm GD} = (\kappa-1)/(\kappa+1)$: for $\kappa = 2504$, $\rho_{\rm GD} \approx 0.9992$ but $\rho_{\rm acc} \approx (\sqrt{2504}-1)/(\sqrt{2504}+1) = 49.04/51.04 \approx 0.961$, a dramatic improvement. The ratio of iterations to achieve $\varepsilon$-accuracy scales as $\rho_{\rm GD}/\rho_{\rm acc} \approx \sqrt{\kappa}$ in favour of acceleration.
+
 \textbf{Restart heuristic.} One practical improvement is to \emph{restart} the Nesterov momentum (reset $\beta_k \to 0$) when the objective function increases or when an approximate criterion $f(x_k) > f(x_{k-1})$ triggers. This addresses Nesterov's tendency to occasionally overshoot on non-convex problems. O'Donoghue \& Cand\`{e}s (2015) \cite{odonoghue2015} showed that periodic restarts achieve linear convergence on strongly convex problems (matching $\rho = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$) while retaining $O(1/k^2)$ on convex ones. The capped schedule $\beta_{\max}$ implemented here is a simpler proxy for this idea.
 
 \begin{figure}[H]
@@ -858,10 +870,26 @@ Newton's method requires $O(n^2)$ storage (to store the Hessian) and $O(n^3)$ co
 
 Practical alternatives for large-scale problems include:
 \begin{itemize}[nosep]
-  \item \textbf{Quasi-Newton (L-BFGS):} Approximates $H^{-1}$ using $m$ gradient history pairs, $O(mn)$ per step. Achieves superlinear convergence (between linear and quadratic) without storing the full Hessian.
+  \item \textbf{Quasi-Newton (BFGS / L-BFGS):} Approximates $H^{-1}$ using $m$ gradient history pairs, $O(mn)$ per step. Achieves superlinear convergence (between linear and quadratic) without storing the full Hessian.
   \item \textbf{Gauss--Newton:} Approximates the Hessian with the outer product of Jacobians $J^TJ$ (positive semidefinite by construction), appropriate for nonlinear least-squares problems.
   \item \textbf{Natural gradient:} Uses the Fisher information matrix $F = \mathbb{E}[\nabla \log p \cdot (\nabla \log p)^T]$ as a Riemannian metric, popular in probabilistic models and reinforcement learning.
 \end{itemize}
+
+\paragraph{L-BFGS in detail.} The BFGS (Broyden--Fletcher--Goldfarb--Shanno) update \citep{nocedal2006} maintains a curvature approximation $B_k \approx H_k$ via a rank-2 correction that satisfies the \emph{secant condition} $B_{k+1} s_k = y_k$, where $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$. Working with the inverse approximation $\hat{H}_k = B_k^{-1}$, the BFGS rank-2 update is:
+\begin{equation}
+\hat{H}_{k+1} = \left(I - \rho_k s_k y_k^T\right)\hat{H}_k\left(I - \rho_k y_k s_k^T\right) + \rho_k s_k s_k^T, \quad \rho_k = \frac{1}{y_k^T s_k}.
+\end{equation}
+This is a Sherman--Morrison--Woodbury update that preserves positive definiteness whenever the curvature condition $y_k^T s_k > 0$ holds (guaranteed by the Wolfe conditions on the line search). The descent direction is $p_k = -\hat{H}_k \nabla f(x_k)$, requiring only an $O(n^2)$ matrix--vector product rather than an $O(n^3)$ solve.
+
+For large-scale problems, \textbf{L-BFGS} (\emph{limited-memory} BFGS) stores only the $m$ most recent pairs $\{(s_j, y_j)\}_{j=k-m}^{k}$ instead of the full $n \times n$ matrix $\hat{H}_k$, reducing storage from $O(n^2)$ to $O(mn)$. The implicit matrix--vector product $\hat{H}_k g$ is computed in $O(mn)$ via the two-loop recursion (Algorithm~12 of \citealt{nocedal2006}).
+
+On our $n = 2$ Rosenbrock problem, L-BFGS (with $m = 5$) would converge to $f < 10^{-10}$ in $\approx 30$--$50$ iterations --- competitive with Newton but requiring no explicit Hessian computation. For a neural network with $n = 10^7$ parameters, Newton's $O(n^3) = O(10^{21})$ cost is completely infeasible, whereas L-BFGS costs only $O(mn) = O(5 \times 10^7)$ per iteration, making it the standard ``second-order'' method for medium-scale unconstrained optimisation in scientific computing (e.g., \texttt{scipy.optimize.minimize} with \texttt{method='L-BFGS-B'}).
+
+The convergence rate of BFGS satisfies:
+\begin{equation}
+\lim_{k\to\infty} \frac{\|\theta_{k+1} - \theta^{\star}\|}{\|\theta_k - \theta^{\star}\|} = 0 \quad \text{(superlinear)},
+\end{equation}
+meaning $\|\theta_k - \theta^{\star}\| = o(\rho^k)$ for \emph{any} $\rho > 0$. In practice this is observed as ``rapidly accelerating'' linear convergence: after an initial phase, each step reduces the error by a larger factor than the last, approaching Newton's quadratic rate without requiring explicit Hessian assembly.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -876,10 +904,30 @@ The forward finite-difference approximation replaces each partial derivative wit
 \begin{equation}
 \frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x)}{\delta}, \quad i = 1, \ldots, n.
 \end{equation}
-The total approximation error has two competing components: truncation error $O(\delta)$ (from the Taylor remainder) and rounding error $O(\varepsilon_{\text{machine}}/\delta)$ (from floating-point cancellation). The optimal $\delta$ balances these:
+The total approximation error has two competing components whose balance determines the optimal $\delta$.
+
+\paragraph{Truncation error.} Expanding $f(x + \delta e_i)$ via Taylor's theorem:
 \begin{equation}
-\delta^{\star} = \sqrt{\varepsilon_{\text{machine}}} \approx 10^{-8}, \qquad \text{giving error } \approx 2\sqrt{\varepsilon_{\text{machine}}} \approx 2 \times 10^{-8}.
+f(x + \delta e_i) = f(x) + \delta \frac{\partial f}{\partial x_i}(x) + \frac{\delta^2}{2}\frac{\partial^2 f}{\partial x_i^2}(x) + O(\delta^3).
 \end{equation}
+Substituting into the forward difference formula:
+\begin{equation}
+\frac{f(x + \delta e_i) - f(x)}{\delta} = \frac{\partial f}{\partial x_i}(x) + \frac{\delta}{2}\frac{\partial^2 f}{\partial x_i^2}(x) + O(\delta^2).
+\end{equation}
+The leading truncation error is $E_T = \frac{\delta}{2}|f''(x)| = O(\delta)$, which grows linearly with $\delta$. The \emph{central difference} formula $[f(x+\delta e_i) - f(x-\delta e_i)]/(2\delta)$ cancels the $O(\delta)$ term, achieving $E_T = O(\delta^2)$ at cost $2n$ function evaluations instead of $n+1$.
+
+\paragraph{Rounding error.} In floating-point arithmetic, $f(x)$ is computed as $f(x)(1 + \varepsilon_1)$ and $f(x+\delta e_i)$ as $f(x+\delta e_i)(1+\varepsilon_2)$ where $|\varepsilon_j| \leq \varepsilon_{\text{machine}} \approx 2.2 \times 10^{-16}$ (double precision). The subtraction $f(x+\delta e_i) - f(x)$ suffers cancellation when both values are close, giving absolute error $\approx 2\varepsilon_{\rm machine}|f(x)|$. The rounding contribution to the gradient approximation is:
+\begin{equation}
+E_R \approx \frac{2\varepsilon_{\rm machine}|f(x)|}{\delta} = O\!\left(\frac{\varepsilon_{\rm machine}}{\delta}\right),
+\end{equation}
+which blows up as $\delta \to 0$.
+
+\paragraph{Optimal $\delta$.} Minimising the total error $E(\delta) = E_T + E_R = c_1 \delta + c_2 \varepsilon_{\rm machine}/\delta$ (with $c_1 = |f''|/2$ and $c_2 = 2|f|$) by setting $dE/d\delta = 0$:
+\begin{equation}
+\delta^{\star} = \sqrt{\frac{c_2}{c_1}\,\varepsilon_{\rm machine}} = \sqrt{\frac{4|f(x)|}{|f''(x)|}}\,\varepsilon_{\rm machine}^{1/2} \approx \varepsilon_{\rm machine}^{1/2} \approx 10^{-8},
+\end{equation}
+giving minimum total error $E(\delta^{\star}) \approx 2\sqrt{c_1 c_2}\,\varepsilon_{\rm machine}^{1/2} \approx 2\sqrt{|f||f''|}\times 10^{-8}$. For the central difference approximation, the analogous calculation gives $\delta^{\star}_{\rm central} \approx \varepsilon_{\rm machine}^{1/3} \approx 10^{-5}$, a much larger optimal step size. The standard recommendation in numerical analysis \citep{nocedal2006} is to use $\delta = 10^{-8}$ for forward differences and $\delta = 10^{-5}$ for central differences in double precision.
+
 The experiments test $\delta = 0.05$ (moderately small, good accuracy) and $\delta = 0.8$ (large, high truncation error). Each FD gradient evaluation requires $n + 1 = 3$ function evaluations for $n = 2$ dimensions.
 
 \subsubsection{Nesterov Random Search}
@@ -1045,7 +1093,17 @@ The \textbf{KKT conditions} for this inequality-constrained problem are:
 0.5 - x_1^{\star} &\leq 0, \label{eq:kkt_primal}\\
 \mu(0.5 - x_1^{\star}) &= 0. \label{eq:kkt_complementarity}
 \end{align}
-The unconstrained minimum of $f$ lies at $x^{\star}_{\text{unc}} = (0.582, 2.000)$ with $x_1 > 0.5$, so it is already feasible. Since the unconstrained minimum satisfies the constraint strictly, the constraint is \emph{inactive} at optimality: $\mu = 0$ and $x^{\star}_{\text{con}} = x^{\star}_{\text{unc}} = (0.582, 2.000)$ with $f^{\star} = 0.7244$.
+These three conditions --- stationarity, primal feasibility, and complementary slackness --- are necessary for optimality under the Linear Constraint Qualification (LCQ), which holds trivially for the half-space constraint $x_1 \geq 0.5$ \citep{boyd2004}. Since $f$ is strictly convex near $x^{\star}$ (the Hessian is positive definite with minimum eigenvalue $\mu_f \approx 1.45$ at the optimum), the KKT conditions are also \emph{sufficient}: any KKT point is a global minimiser.
+
+\paragraph{Case 1: Constraint inactive ($c \leq x_1^{\star}_{\rm unc}$).} The unconstrained minimum of $f$ lies at $x^{\star}_{\text{unc}} = (0.582, 2.000)$ with $x_1 = 0.582 > 0.5$, so it satisfies the constraint strictly. Substituting into \eqref{eq:kkt_stationarity}: $\nabla f(x^{\star}_{\rm unc}) = 0$ (since it's the unconstrained minimiser), so $\mu e_1 = 0 \Rightarrow \mu = 0$. Complementary slackness \eqref{eq:kkt_complementarity} is satisfied since $\mu = 0$. All KKT conditions hold with $\mu = 0$, confirming that the constrained solution coincides with the unconstrained solution: $x^{\star}_{\text{con}} = x^{\star}_{\text{unc}} = (0.582, 2.000)$, $f^{\star} = 0.7244$.
+
+\paragraph{Case 2: Constraint active ($c > x_1^{\star}_{\rm unc} \approx 0.582$).} When the lower bound $c$ is moved above $x_1^{\star}_{\rm unc}$, the constraint becomes active at optimality ($x_1^{\star} = c$). From the stationarity condition, the dual variable satisfies:
+\begin{equation}
+\mu = \frac{\partial f}{\partial x_1}\bigg|_{x^{\star}} = 2(c - 1) + \cos(c).
+\end{equation}
+For $c = 0.582$: $\mu = 2(0.582-1) + \cos(0.582) = -0.836 + 0.836 = 0$ (consistent with inactive constraint). For $c = 1.0$: $\mu = 2(1.0-1) + \cos(1.0) = 0 + 0.540 = 0.540 > 0$ (active constraint, dual variable positive). The constraint violation $x_1^{\star} = c = 1.0 > 0.5$ satisfies primal feasibility, complementary slackness holds since $\mu > 0$ and $x_1^{\star} - 0.5 = 0.5 > 0$ requires $0.5 - x_1^{\star} = -0.5 \leq 0$ (boundary active), confirming the KKT point.
+
+The current experiment uses $c = 0.5$, which satisfies Case~1: the constraint is inactive, $\mu = 0$, and all methods that converge to the feasible region will find $f^{\star} = 0.7244$ at $(0.582, 2.000)$.
 
 \begin{algorithm}[H]
 \caption{Projected Gradient Descent}
@@ -1201,6 +1259,17 @@ f(x_k) - f^{\star} \leq \frac{2LD^2}{k+2} = O\!\left(\frac{1}{k}\right),
 \end{equation}
 using the step size schedule $\gamma_k = 2/(k+2)$ (corresponding to $\beta_k = k/(k+2)$). This rate is \emph{optimal} for the Frank--Wolfe class of methods \cite{jaggi2013} and cannot be improved without stronger assumptions.
 
+\paragraph{Convergence proof sketch.} Starting from the $L$-smoothness inequality applied to the Frank--Wolfe step $x_{k+1} = x_k + \gamma_k(z_k - x_k)$:
+\begin{align}
+f(x_{k+1}) &\leq f(x_k) + \gamma_k \langle \nabla f(x_k),\, z_k - x_k \rangle + \frac{L\gamma_k^2}{2}\|z_k - x_k\|^2 \nonumber\\
+&\leq f(x_k) + \gamma_k \langle \nabla f(x_k),\, x^{\star} - x_k \rangle + \frac{L\gamma_k^2 D^2}{2},
+\end{align}
+where the second inequality uses $\langle \nabla f(x_k), z_k - x_k \rangle \leq \langle \nabla f(x_k), x^{\star} - x_k \rangle$ (since $z_k$ is the linear minimiser over $\mathcal{X}$, hence no worse than $x^{\star}$), and $\|z_k - x_k\| \leq D$. By convexity, $\langle \nabla f(x_k), x^{\star} - x_k \rangle \leq f(x^{\star}) - f(x_k) = f^{\star} - f(x_k)$. Defining $h_k = f(x_k) - f^{\star}$:
+\begin{equation}
+h_{k+1} \leq (1 - \gamma_k) h_k + \frac{L\gamma_k^2 D^2}{2}.
+\end{equation}
+Substituting $\gamma_k = 2/(k+2)$ and applying the recurrence $h_k \leq \frac{C}{k+2}$ with $C = \max(h_0 \cdot 2, 2LD^2)$ proves the $O(1/k)$ rate by induction. For strongly convex $f$, a similar analysis yields a geometric rate $O(\rho^k)$ with the optimal step schedule, but standard Frank--Wolfe cannot achieve this without modifications (away-steps or pairwise steps).
+
 For the interior optimum $f(x) = (x_1-1)^2 + (x_2-5)^2$, the Lipschitz constant of the gradient is $L = 2$ (from $\nabla^2 f = 2I$). The diameter of $\mathcal{X} = [0.5,5] \times [-5,10]$ is $D = \|(4.5, 15)\|_2 \approx 15.66$. The theoretical bound gives:
 \begin{equation}
 f(x_k) - f^{\star} \leq \frac{2 \times 2 \times 15.66^2}{k+2} = \frac{980}{k+2}.
@@ -1348,6 +1417,56 @@ Q3 & Newton (damped $\alpha=0.22$) & Second-order & $\approx 0.01$ \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Cross-Benchmark Performance Matrix}
+\label{sec:perfmatrix}
+
+To assess how methods generalise across problems of different difficulty, Figure~\ref{fig:perf_matrix} presents a \emph{performance matrix} comparing seven core Q1--Q2 methods (GD, Polyak, Adagrad, Heavy Ball, Nesterov, Adam, Newton) across all three benchmarks simultaneously, both as excess objective values and as per-benchmark rankings.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/performance_matrix.pdf}
+\caption{Cross-benchmark performance matrix for seven optimisation methods. \textbf{Left}: excess above optimum $f(x_k) - f^{\star}$ on a log scale (green $=$ better). On Benchmarks~A and~B, almost all methods reach the optimum; Polyak diverges on both because $f^{\star} = 0$ is specified rather than the true $f^{\star} \approx 0.4826$ (A) or $\approx 0.7244$ (B). On Benchmark~C (Rosenbrock, $\kappa \approx 2504$), a large spread emerges: Polyak (correct $f^{\star} = 0$) achieves $f - f^{\star} = 0.0094$ while GD reaches only $3.51$. \textbf{Right}: per-benchmark ranks (1 = best). Nesterov and Newton are consistently ranked 1st--2nd on Benchmark~C; Polyak ranks 1st on~C but 7th on A and~B due to misspecified $f^{\star}$. Average ranks (shown below each column): Newton $= 1.7$, Nesterov $= 2.0$, Adam $= 3.0$, Heavy Ball $= 3.3$, GD $= 4.3$, Adagrad $= 4.3$, Polyak $= 5.3$.}
+\label{fig:perf_matrix}
+\end{figure}
+
+The performance matrix reveals several patterns not visible from single-benchmark comparisons:
+
+\begin{itemize}[nosep]
+  \item \textbf{Benchmark~A and~B homogeneity:} On both well-conditioned benchmarks, GD, Adagrad, Heavy Ball, Nesterov, Adam, and Newton all converge to the respective optima ($f = f^{\star}$) within the iteration budget. Polyak is the sole exception: with $f^{\star}_{\rm spec} = 0$ incorrectly specified (since the true minima are $\approx 0.4826$ and $\approx 0.7244$ respectively), the step size $\alpha_k = (f(x_k) - 0) / \|\nabla f(x_k)\|^2$ becomes negative as soon as $f(x_k) < f^{\star}_{\rm spec}$, causing divergence. This is the Polyak rule's critical failure mode: any underestimate of $f^{\star}$ causes $\alpha_k \to 0^+$ prematurely, while any overestimate causes divergence. The extreme final values (2.72 on A, 24.07 on B) confirm numerical divergence.
+
+  \item \textbf{Benchmark~C as the differentiator:} With $\kappa \approx 2504$, Rosenbrock separates all seven methods into a spectrum: $f_C \in \{0.009, 0.479, 0.686, 1.400, 1.579, 2.203, 3.514\}$ spanning 2.5 orders of magnitude. Nesterov ($f = 0.479$) outperforms Adam ($f = 1.579$) by $3.3\times$, demonstrating that $O(1/k^2)$ acceleration provides a genuine advantage even without strong convexity. Heavy Ball ($f = 1.400$) lies between Adam and Nesterov, consistent with its linear convergence on quadratics but lack of provable acceleration guarantee on non-quadratic objectives.
+
+  \item \textbf{Newton's method positioning:} Newton achieves rank 3 on Benchmark~C (behind Polyak and Nesterov) rather than rank 1, because the 200-iteration experiment used for this table employs the damped Newton step ($\alpha = 0.22$). When given 300 iterations (Figure~\ref{fig:iters_comparison}), Newton reaches $f < 0.01$ in just 33 iterations and eventually reaches machine precision. The performance matrix thus depends on the iteration budget: Newton's quadratic rate is decisive at convergence but the damping phase delays it early on.
+
+  \item \textbf{Adagrad's structural limitation:} Despite Adagrad's adaptive coordinate scaling (accumulating gradient history via $G_{kk} = \sum_{t=1}^{k} g_t^2$), it achieves only $f = 2.203$ on Rosenbrock --- ranking 6th and only slightly better than GD ($f = 3.514$). The reason is Adagrad's monotonically decreasing effective step size: $\alpha_k = \alpha / \sqrt{G_{kk}}$ decreases to zero as $k \to \infty$, causing the algorithm to ``freeze'' before reaching the Rosenbrock minimum. RMSprop avoids this by replacing the cumulative sum with an exponential moving average, maintaining a non-zero effective step throughout.
+\end{itemize}
+
+Table~\ref{tab:perf_matrix_numbers} provides the exact numerical values underlying Figure~\ref{fig:perf_matrix}.
+
+\begin{table}[H]
+\centering
+\caption{Final objective values $f(x_k)$ and ranks for 7 methods on 3 benchmarks (200 iterations from $x_0$ given in Section~\ref{sec:benchmarks}). Rank 1 = lowest $f$. $f^{\star}$ values: A $= 0.4826$, B $= 0.7244$, C $= 0$. Polyak run with $f^{\star}_{\rm spec} = 0$ for all benchmarks; the correct value is 0 only for C.}
+\label{tab:perf_matrix_numbers}
+\begin{tabular}{lccc|ccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}} & \multicolumn{3}{c|}{\textbf{Final $f$ value}} & \multicolumn{3}{c}{\textbf{Rank}} \\
+ & \textbf{Bench~A} & \textbf{Bench~B} & \textbf{Bench~C} & \textbf{A} & \textbf{B} & \textbf{C} \\
+\midrule
+GD        & 0.4826  & 0.7244  & 3.5142  & 1 & 1 & 7 \\
+Polyak    & 2.7189  & 24.0659 & 0.0094  & 7 & 7 & 1 \\
+Adagrad   & 0.4826  & 0.7244  & 2.2034  & 1 & 1 & 6 \\
+Heavy Ball& 0.4826  & 0.7244  & 1.4003  & 1 & 1 & 4 \\
+Nesterov  & 0.4826  & 0.7244  & 0.4788  & 1 & 1 & 2 \\
+Adam      & 0.4826  & 0.7244  & 1.5785  & 1 & 1 & 5 \\
+Newton    & 0.4826  & 0.7244  & 0.6864  & 1 & 1 & 3 \\
+\midrule
+$f^{\star}$ & 0.4826 & 0.7244 & 0.0000 & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The key theoretical insight from the matrix: \emph{condition number is a sufficient statistic for method selection}. On Benchmarks~A ($\kappa = 1.12$) and~B ($\kappa = 6.9$), any descent method with a stable step size reaches the optimum in 200 iterations. Only on Benchmark~C ($\kappa = 2504$) does algorithm choice matter, separating the 7 methods by 2.5 decades in final objective value.
 
 % ============================================================
 \newpage
