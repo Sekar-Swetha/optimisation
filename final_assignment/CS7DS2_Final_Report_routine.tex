@@ -534,6 +534,20 @@ where $\sigma_{\text{grad}}^2$ is the per-sample gradient variance. The variance
 \end{equation}
 where $\mu$ is the strong convexity constant. The epoch-level update count is $\lfloor m/b \rfloor$ per epoch: $200$ updates for $b = 5$ and $25$ updates for $b = 40$ per epoch of $m = 1000$ samples.
 
+\textbf{Variance reduction (SVRG):} The fundamental limitation of SGD is the irreducible noise floor $\approx \alpha \sigma^2 / (b\mu)$ imposed by gradient variance. The \emph{stochastic variance reduced gradient} (SVRG, Johnson \& Zhang 2013) removes this limitation by maintaining a periodically-updated full-gradient snapshot $\tilde{g} = \nabla f(\tilde{x})$. The per-iteration estimator is:
+\begin{equation}
+\tilde{v}_k = \nabla f_i(x_k) - \nabla f_i(\tilde{x}) + \tilde{g},
+\end{equation}
+where $i$ is a randomly selected sample and $\tilde{x}$ is the anchor (snapshot) updated every $s$ steps. This estimator is unbiased: $\mathbb{E}[\tilde{v}_k] = \nabla f(x_k)$. Its variance satisfies:
+\begin{equation}
+\mathbb{E}[\|\tilde{v}_k - \nabla f(x_k)\|^2] \leq 4L\,[f(x_k) - f^\star + f(\tilde{x}) - f^\star],
+\end{equation}
+which tends to \emph{zero} as $x_k \to x^\star$ (unlike the fixed $\sigma^2$ of plain SGD). With step size $\alpha \leq 1/(10L)$ and update frequency $s = 2m$, SVRG achieves the same linear convergence rate as full GD:
+\begin{equation}
+\mathbb{E}[f(x_k) - f^\star] \leq \left(1 - \frac{1}{10\kappa}\right)^k [f(x_0) - f^\star],
+\end{equation}
+but at cost $O(m + s/b) = O(m)$ per full pass rather than GD's $O(m)$ per step for the same $n$ gradient evaluations. The total complexity to reach $\varepsilon$-accuracy is $O((m + \kappa)\log(1/\varepsilon))$: when $\kappa \ll m$ (as in large data / weakly regularized problems), SVRG costs essentially $O(m\log(1/\varepsilon))$ --- the same as running GD once but with linear convergence. For the Benchmark~A setting ($m = 1000$, $\kappa \approx 1.12$, $\mu \approx 0.92$), vanilla SGD with constant $\alpha$ already converges to the noise floor quickly; SVRG's advantage is most pronounced when $\kappa \gg 1$ and the data set is large ($m \gg \kappa$), e.g., $m = 10^6$, $\kappa = 10^3$.
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -1020,7 +1034,15 @@ L_\rho(x, \mu) = f(x) + \mu\,\max(0,\, 0.5 - x_1) + \frac{\rho}{2}\bigl[\max(0,\
 \end{algorithmic}
 \end{algorithm}
 
-The key advantage over the pure penalty method is that the augmented Lagrangian provides \emph{exact constraint satisfaction at a finite $\rho$}: as the multiplier $\mu_k$ converges to the true KKT multiplier $\mu^\star$, the inner minimisation at fixed $\rho$ achieves the constrained minimum exactly (rather than requiring $\rho \to \infty$). The inner problem (Algorithm~\ref{alg:aug_lag}, line 2) can be solved by a few steps of gradient descent since it is an unconstrained smooth problem for fixed $\mu_k$. The augmented Lagrangian is the foundation of ADMM (Alternating Direction Method of Multipliers), which is widely used in large-scale optimisation and distributed learning.
+The key advantage over the pure penalty method is that the augmented Lagrangian provides \emph{exact constraint satisfaction at a finite $\rho$}: as the multiplier $\mu_k$ converges to the true KKT multiplier $\mu^\star$, the inner minimisation at fixed $\rho$ achieves the constrained minimum exactly (rather than requiring $\rho \to \infty$). The inner problem (Algorithm~\ref{alg:aug_lag}, line 2) can be solved by a few steps of gradient descent since it is an unconstrained smooth problem for fixed $\mu_k$.
+
+\textbf{ADMM (Alternating Direction Method of Multipliers):} The augmented Lagrangian is the foundation of ADMM, which splits the primal variable into $(x, z)$ linked by a consensus constraint $Ax + Bz = c$. The ADMM updates are:
+\begin{align}
+x^{(k+1)} &\gets \arg\min_x\; L_\rho(x,\, z^{(k)},\, \mu^{(k)}), \label{eq:admm_x}\\
+z^{(k+1)} &\gets \arg\min_z\; L_\rho(x^{(k+1)},\, z,\, \mu^{(k)}), \label{eq:admm_z}\\
+\mu^{(k+1)} &\gets \mu^{(k)} + \rho\,(A x^{(k+1)} + B z^{(k+1)} - c). \label{eq:admm_mu}
+\end{align}
+By alternating between the $x$- and $z$-subproblems (which can often be solved in closed form or independently), ADMM decouples objectives that would otherwise be hard to minimise jointly. The canonical application is \emph{distributed learning} over $N$ machines: assign $x_i$ = local model on machine $i$, $z$ = global consensus variable, and constraint $x_i = z$ for all $i$. Each machine solves its local $x_i$-subproblem using its own data, then sends the result to a parameter server that computes the $z$-update (global average). The multiplier $\mu_i$ update enforces consensus across machines. This structure enables parallelism: all $N$ machines update $x_i$ simultaneously, with $O(1)$ communication rounds per ADMM iteration regardless of dataset size. ADMM converges at $O(1/k)$ for convex $f$ (Boyd et al., 2011) and achieves linear convergence when both $f$ and $g$ are strongly convex. In the present Q5 setting (single constraint $x_1 \geq 0.5$), the $x$- and $z$-splits reduce to the augmented Lagrangian described above, making ADMM equivalent to Algorithm~\ref{alg:aug_lag}.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1070,6 +1092,17 @@ The Frank--Wolfe algorithm (1956) maintains feasibility automatically: since $x_
 f(x_k) - f^\star \leq \frac{2L\,\mathrm{diam}(\mathcal{X})^2}{k+2},
 \end{equation}
 where $L$ is the Lipschitz constant of $\nabla f$ and $\mathrm{diam}(\mathcal{X}) = \|u - l\|$ for box bounds. With fixed $\gamma = 1 - \beta$, convergence is guaranteed as long as $z_k$ converges to a fixed point, but the oscillatory behaviour of $z_k$ (which jumps between vertices) can prevent exact convergence at a fixed step.
+
+\textbf{Proof sketch of $O(1/k)$ rate for the decaying schedule $\gamma_k = 2/(k+2)$:} Since $f$ is $L$-smooth and $x_{k+1} = x_k + \gamma_k(z_k - x_k)$, applying the descent lemma gives:
+\begin{align}
+f(x_{k+1}) &\leq f(x_k) + \gamma_k\, \nabla f(x_k)^T(z_k - x_k) + \frac{L\gamma_k^2}{2}\|z_k - x_k\|^2 \\
+&\leq f(x_k) - \gamma_k G_k + \frac{L\gamma_k^2}{2}\,\mathrm{diam}(\mathcal{X})^2,
+\end{align}
+where $G_k = \nabla f(x_k)^T(x_k - z_k) \geq f(x_k) - f^\star$ (FW gap lower-bounds suboptimality). Subtracting $f^\star$ and denoting $h_k = f(x_k) - f^\star$:
+\begin{equation}
+h_{k+1} \leq (1-\gamma_k)\, h_k + \frac{L\gamma_k^2}{2}\,\mathrm{diam}(\mathcal{X})^2.
+\end{equation}
+One verifies by induction with $\gamma_k = 2/(k+2)$ and $C = 2L\,\mathrm{diam}(\mathcal{X})^2$ that $h_k \leq C/(k+2)$: the initial case $h_0 \leq C/2$ follows from the bound on $f(x_0) - f^\star$; the inductive step uses $(1-2/(k+2))\cdot C/(k+2) + (L\cdot 4/(k+2)^2 \cdot C/(2L)) = C/(k+3)$. This confirms the $O(1/k)$ rate and shows that the choice $\gamma_k = 2/(k+2)$ is \emph{optimal} for the decaying-step schedule.
 
 \textbf{Sparsity-inducing property:} After $k$ iterations, the Frank--Wolfe iterate is a convex combination of \emph{at most $k+1$ vertices} of $\mathcal{X}$ (since each step adds at most one vertex $z_k$ to the representation). For the $\ell^1$ ball $\mathcal{X} = \{x : \|x\|_1 \leq \tau\}$, the vertices are $\pm \tau e_i$ (coordinate vectors), so FW naturally produces \emph{sparse} solutions: $x_k = \sum_{i \leq k} \gamma_i \cdot (\pm \tau e_{j_i})$ has at most $k+1$ nonzero components. This structural property makes FW a natural choice for compressed sensing, sparse signal recovery, and matrix completion problems where sparse or low-rank solutions are desired.
 
