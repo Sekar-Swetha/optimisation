@@ -614,6 +614,11 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 \\
 \label{fig:q2_hb_nesterov}
 \end{figure}
 
+\begin{remark}[Heavy Ball: Theory vs Practice]
+\label{rem:hb_limits}
+The Heavy Ball method with optimal parameters $\alpha^\star, \beta^\star$ (Definition~\ref{def:hb_optimal}) achieves the $O((1 - 1/\sqrt{\kappa})^k)$ linear convergence rate \emph{only for quadratic objectives}. For general smooth strongly convex functions, no convergence guarantee of this form is known --- indeed, counterexamples exist (Lessard et al., 2016) where Heavy Ball diverges on smooth strongly convex functions when $\beta > 0$. The intuition is that on a quadratic, the momentum recursion is a linear time-invariant system whose spectral radius can be exactly computed; on non-quadratic $f$, the effective ``A-matrix'' changes at every iteration and instabilities can accumulate. Nesterov's method, by contrast, is proven to achieve $O(1/k^2)$ for \emph{any} smooth convex function --- not just quadratics --- through the energy estimate $\Phi_k = f(x_k) - f^\star + (k+1)^2/(2\alpha) \|y_k - x^\star\|^2$ which is shown to be non-increasing. This is why in Figure~\ref{fig:q2_hb_nesterov}, Nesterov uniformly outperforms Heavy Ball on Rosenbrock: Heavy Ball's optimal parameters were computed for a quadratic with $\kappa \approx 2508$ but the actual function is non-quadratic, so the momentum amplification creates oscillations (visible in the right panel) rather than clean acceleration.
+\end{remark}
+
 \subsection{Why Adam Underperforms Nesterov on Rosenbrock}
 
 Table~\ref{tab:q2_final} shows Nesterov achieving $f = 0.479$ vs Adam's $f = 1.578$ on Rosenbrock. This gap arises from a fundamental structural difference:
@@ -781,6 +786,28 @@ For $\kappa = 7$ (Benchmark B), this is a $12\times$ iteration advantage for New
 
 The damping parameter $\lambda = 10^{-8}$ in \texttt{newtons\_method} regularises the Hessian $H_k + \lambda I$, ensuring positive definiteness when $H_k$ may be singular or nearly singular (as occurs on Rosenbrock where $H_{\rm Rosenbrock}$ can be very ill-conditioned). The step size $\alpha < 1$ provides a \emph{global convergence} safeguard: the pure Newton step ($\alpha = 1$) only has local convergence guarantees, while damping ($\alpha < 1$) trades convergence speed for a larger basin of attraction.
 
+\begin{definition}[Newton Decrement]
+\label{def:newton_decrement}
+The \emph{Newton decrement} at $x$ is
+\begin{equation}
+\lambda(x) = \bigl(\nabla f(x)^T [\nabla^2 f(x)]^{-1} \nabla f(x)\bigr)^{1/2} = \|p_k\|_{H_k},
+\end{equation}
+where $p_k = H_k^{-1}\nabla f(x)$ is the Newton direction. For a strongly convex $f$,
+\begin{equation}
+f(x) - f^\star \leq \frac{\lambda(x)^2}{2}.
+\end{equation}
+\end{definition}
+
+The Newton decrement provides a \emph{computable optimality certificate} analogous to the Frank--Wolfe gap $h_k$: when $\lambda(x_k)^2/2 \leq \varepsilon$, the current iterate is $\varepsilon$-optimal without knowing $f^\star$. For Algorithm~\ref{alg:newton} applied to Benchmark B ($\mu_{\min} = 2$), the Newton decrement at $x_0 = [-1, 4]^T$ is
+\[
+\lambda(x_0)^2/2 = \tfrac{1}{2} \nabla f(x_0)^T H^{-1}(x_0)\, \nabla f(x_0) = \tfrac{1}{2} \nabla f_0^T \begin{bmatrix}1/2 & 0 \\ 0 & 1/10\end{bmatrix}\nabla f_0
+\]
+where $\nabla f(x_0) = [2(-1-1)+\cos(-1),\; 10(4-2)]^T \approx [-4.54,\; 20]^T$, giving $\lambda^2/2 \approx \frac{1}{2}((-4.54)^2/2 + 400/10) \approx 25.2$. This quantifies the initial suboptimality and shrinks to near zero within 5 Newton iterations, matching the quadratic convergence guarantee.
+
+\begin{remark}[Damped Newton for Global Convergence]
+The standard damped Newton algorithm uses a backtracking line search: starting from $\alpha = 1$, reduce $\alpha$ by factor $0 < \rho < 1$ until the \emph{Armijo condition} $f(x_k - \alpha p_k) \leq f(x_k) - \gamma\alpha\lambda(x_k)^2$ is satisfied (typically $\rho = 0.5$, $\gamma = 0.01$). This guarantees global convergence from any starting point: in the \emph{damped phase} ($\lambda(x_k) > 1$), $f$ decreases by at least $\gamma\rho$ per step; in the \emph{quadratic phase} ($\lambda(x_k) \leq 1$), $\alpha = 1$ is always accepted and convergence is quadratic. The implementation here uses a fixed $\alpha$ rather than backtracking, which is simpler but requires manual step-size tuning.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -894,6 +921,15 @@ The forward finite-difference approximation replaces each partial derivative wit
 \label{eq:fd}
 \end{equation}
 The bias (truncation error) is $O(\delta)$; rounding errors add $O(\varepsilon_{\rm mach}/\delta)$ where $\varepsilon_{\rm mach} \approx 10^{-16}$. The optimal $\delta$ balances these: $\delta_{\rm opt} \sim \sqrt{\varepsilon_{\rm mach}} \approx 10^{-8}$. In practice, $\delta = 0.05$ gives small truncation error while remaining numerically well-conditioned, whereas $\delta = 0.8$ introduces large truncation error because the function curvature on Benchmark B is $O(1)$--$O(10)$, so the $O(\delta^2 \cdot f'')\approx O(0.64\cdot 10) = O(6.4)$ bias term is large relative to the gradient.
+
+\begin{remark}[Central Differences]
+\label{rem:central_diff}
+The \emph{central} finite difference $\frac{f(x+\delta e_i) - f(x - \delta e_i)}{2\delta}$ cancels the $O(\delta)$ term (since odd Taylor terms cancel), giving a second-order accurate approximation:
+\begin{equation}
+\frac{f(x+\delta e_i) - f(x - \delta e_i)}{2\delta} = \frac{\partial f}{\partial x_i}(x) + \frac{\delta^2}{6}\frac{\partial^3 f}{\partial x_i^3}(x) + O(\delta^4).
+\end{equation}
+The truncation error is now $O(\delta^2)$, so the optimal $\delta$ satisfies $\delta^2 |f'''| \sim \varepsilon_{\rm mach}/\delta$, giving $\delta_{\rm opt}^{\rm central} \sim \varepsilon_{\rm mach}^{1/3} \approx 10^{-5.3} \approx 5\times 10^{-6}$ --- four orders of magnitude larger than the forward-difference optimal. This matters in practice: the implementation uses forward differences, so $\delta = 0.05$ with $O(\delta)$ truncation error of $\approx 0.025 |f''|$; a central difference with the same $\delta = 0.05$ would achieve $O(\delta^2) = O(0.0025)$ truncation error, improving gradient accuracy by a factor $\sim 20$ at the cost of doubling function evaluations from $d+1$ to $2d$.
+\end{remark}
 
 \subsubsection{Nesterov Random Search}
 
