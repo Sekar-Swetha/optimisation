@@ -628,6 +628,15 @@ All methods in Q1--Q2 require hand-tuned step sizes. The \emph{Armijo sufficient
 starting from $\alpha_k = 1$ and halving until \eqref{eq:armijo} is satisfied (backtracking). This removes the need to know $L$ while guaranteeing descent at every step. Combined with the Wolfe curvature condition, it ensures the step is neither too small (sufficient decrease) nor too large (curvature condition). The Polyak step can be interpreted as a special Armijo condition where $c = 0$ and the step is set to the exact minimisation value along the gradient direction.
 \end{remark}
 
+\begin{remark}[Wolfe Conditions: Preventing Steps that are Too Small]
+The Armijo condition~\eqref{eq:armijo} prevents steps that are \emph{too large} by requiring sufficient decrease. However, it alone allows steps that are \emph{too small}: any $\alpha_k \in (0, \varepsilon)$ satisfies~\eqref{eq:armijo} for small enough $\varepsilon$, causing the algorithm to stagnate. The \emph{Wolfe curvature condition} fixes this:
+\begin{equation}
+  |\nabla f(x_k - \alpha_k d_k)^{\top} d_k| \leq c_2\,|\nabla f(x_k)^{\top} d_k|, \quad 0 < c_1 < c_2 < 1,
+  \label{eq:wolfe_curvature}
+\end{equation}
+where $d_k = -\nabla f(x_k)$ is the descent direction. Condition~\eqref{eq:wolfe_curvature} requires the projected gradient at the new point to be less than $c_2$ times the projected gradient at $x_k$; equivalently, the function should not have a large downward slope in the descent direction at $x_{k+1}$, which would indicate more progress was available with a larger step. Together, the Armijo and Wolfe conditions guarantee a step exists (by the intermediate value theorem) and that the chosen step is both small enough for safety and large enough for progress. For quasi-Newton methods (L-BFGS), the Wolfe conditions are \emph{mandatory}: they ensure the curvature condition $y_k^{\top}s_k > 0$ (where $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$) that guarantees the secant-condition Hessian approximation remains positive definite. Typical choices: $c_1 = 10^{-4}$ (loose sufficient decrease), $c_2 = 0.9$ for quasi-Newton or $c_2 = 0.1$ for CG.
+\end{remark}
+
 \begin{remark}[Role of $\varepsilon$ in Adam and Adaptive Methods]
 The parameter $\varepsilon$ in Adam (and Adagrad, RMSprop) prevents division by zero when $v_t \to 0$, but its choice affects the early-training behaviour significantly. At $t=1$, $v_1 = (1-\beta_2)g_1^2 \approx 0.001\,g_1^2$; with $\varepsilon = 10^{-8}$ and $\|g_1\| \approx 20$ (Benchmark B), $\sqrt{v_1} \approx 0.63 \gg \varepsilon$, so $\varepsilon$ has no effect. But for sparse features where some coordinates have $g_t^{(i)} = 0$ for many steps: $\sqrt{v_t^{(i)}} \ll \varepsilon$, and the effective step for coordinate $i$ is $\alpha/\varepsilon = 0.08/10^{-8} = 8 \times 10^6$, causing explosive updates. Setting $\varepsilon = 10^{-7}$ or $10^{-6}$ (larger $\varepsilon$) prevents this. Conversely, too large $\varepsilon$ (e.g.\ $\varepsilon = 1$) effectively disables adaptive scaling: the denominator is dominated by $\varepsilon$, reverting to SGD with learning rate $\alpha$. The choice $\varepsilon = 10^{-8}$ in our experiments is standard for dense gradients; for NLP/embedding problems with sparse features, larger $\varepsilon = 10^{-6}$ to $10^{-4}$ is common.
 \end{remark}
@@ -1350,6 +1359,12 @@ Grid search & None & $N^d$ total & \textbf{Very poor} & Grid-limited & Yes \\
 
 \noindent\textbf{Practical recommendation (Q4):} For derivative-free problems with $d \leq 5$, Nelder--Mead is the default choice, being both simple and effective. For $d \leq 20$, central finite differences with $\delta \approx 10^{-5}$ approach exact gradient quality with modest function evaluation overhead ($2d$ evaluations per step). For $d > 100$ where gradient computation is infeasible, Nesterov random search (2 evaluations per step) or evolutionary strategies (CMA-ES) are preferred over grid search, which requires exponentially many evaluations.
 
+\begin{remark}[CMA-ES: Covariance Matrix Adaptation for Higher Dimensions]
+The \emph{Covariance Matrix Adaptation Evolution Strategy} (CMA-ES) extends Nelder--Mead to higher dimensions by maintaining and adapting a full $d \times d$ covariance matrix $C$ of the search distribution. At each step, CMA-ES samples $\lambda \approx 4 + 3\lfloor\log d\rfloor$ candidate points from $\mathcal{N}(m, \sigma^2 C)$, evaluates $f$ at each, and updates $(m, \sigma, C)$ based on the $\lfloor\lambda/2\rfloor$ best candidates. The covariance matrix gradually rotates and scales to align with the principal curvature directions of $f$: if $f$ has an elongated basin with $\kappa = L/\mu \gg 1$ (like Rosenbrock), $C$ converges toward the inverse Hessian $H^{-1}$ direction, effectively normalising the search to unit condition number.
+
+Key properties: (1) \emph{Affine invariance}: CMA-ES is invariant to orthogonal transformations and scaling of the search space, unlike Nelder--Mead which can fail under axis-misaligned objectives. (2) \emph{Dimension scaling}: requires $O(d^2)$ storage for $C$ and $O(d^2 \lambda)$ function evaluations per significant progress step; effective for $d \leq 1000$. (3) For Rosenbrock with $d = 2$: CMA-ES with $\lambda = 5$ samples and the default population update would typically reach $f \approx 10^{-10}$ in $\approx 1000$ function evaluations --- comparable to Nelder--Mead at 800 evaluations, but more robust and extendable to $d = 50$ where Nelder--Mead fails. For $d = 50$ with Rosenbrock-like $\kappa = 2009$: CMA-ES requires $\approx 10^4$ evaluations, while Nelder--Mead would require $\gg 10^6$ due to simplex degeneracy.
+\end{remark}
+
 % ============================================================
 \section{Question 5: Constrained Optimisation}
 \label{sec:q5}
@@ -1635,6 +1650,20 @@ requiring $O(d)$ operations --- far cheaper than a general LP. The step $(1-\bet
 The standard Frank--Wolfe algorithm uses $x_{k+1} = (1 - \gamma_k) x_k + \gamma_k z_k$ with $\gamma_k = 2/(k+2)$, achieving the optimal $O(LD^2/k)$ convergence rate. The fixed-$\beta$ implementation ($x_{k+1} = \beta x_k + (1-\beta) z_k$, i.e.\ $\gamma = 1-\beta$ constant) is a simplified variant. The key difference: with diminishing $\gamma_k \to 0$, the contribution of each new vertex to $x_k$ decreases as $O(1/k)$, suppressing the oscillation effect of alternating vertices near the optimum. The interior optimum case benefits more from this suppression (oscillating vertices near the interior) than the boundary case (LP oracle consistently selects the same vertex). To verify: for the interior case, switching from fixed $\beta = 0.90$ to diminishing $\gamma_k = 2/(k+2)$ would reduce the suboptimality from $f = 0.0089$ to approximately $2LD^2/(k+2) \approx 2 \times 1002.5 \times (\sqrt{2}+15)^2 / 182 \approx 0.19$ --- but for the specific problem geometry with $\kappa$ close to 1 for the interior problem, the actual convergence is much faster.
 \end{remark}
 
+\begin{remark}[Mirror Descent: Frank--Wolfe's Cousin via Bregman Divergences]
+\emph{Mirror descent} is a generalisation of gradient descent that replaces the Euclidean proximity term with a \emph{Bregman divergence} $D_h(x, y) = h(x) - h(y) - \nabla h(y)^{\top}(x-y)$ induced by a strictly convex function $h$:
+\begin{equation}
+  x_{k+1} = \arg\min_{x \in \mathcal{X}}\bigl\{\nabla f(x_k)^{\top}x + \tfrac{1}{\alpha_k} D_h(x, x_k)\bigr\}.
+  \label{eq:mirror_descent}
+\end{equation}
+Different choices of $h$ give different constrained optimisation algorithms:
+\begin{itemize}[nosep,leftmargin=1.5em]
+  \item $h(x) = \frac{1}{2}\|x\|^2$ (Euclidean): $D_h(x,y) = \frac{1}{2}\|x-y\|^2$, and~\eqref{eq:mirror_descent} reduces to \emph{projected gradient descent} $x_{k+1} = \Pi_{\mathcal{X}}(x_k - \alpha_k\nabla f(x_k))$.
+  \item $h(x) = \sum_i x_i\log x_i$ (negative entropy) on $\mathcal{X} = \Delta_d$ (simplex): $D_h$ is the KL divergence, and~\eqref{eq:mirror_descent} gives the \emph{exponentiated gradient / multiplicative weights} update $x_{k+1,i} \propto x_{k,i}\exp(-\alpha_k (\nabla f(x_k))_i)$. This achieves $O(\log d/\sqrt{k})$ convergence (vs.\ $O(\sqrt{d/k})$ for Euclidean projection), logarithmically better in dimension.
+\end{itemize}
+Frank--Wolfe and mirror descent are conceptually related: both linearise $f$ and solve a tractable subproblem over $\mathcal{X}$. Frank--Wolfe uses an LP subproblem; mirror descent uses a proximal subproblem with the Bregman divergence. When the Bregman divergence is adapted to the constraint geometry (as with the negative entropy for the simplex), mirror descent can be more efficient than Frank--Wolfe, but requires the proximity operator to be computable in closed form.
+\end{remark}
+
 \begin{theorem}[Frank--Wolfe Convergence Rate \cite{frank1956algorithm,jaggi2013revisiting}]
 For a convex $L$-smooth function $f$ and compact convex set $\mathcal{X}$ with diameter $D = \max_{x,y \in \mathcal{X}}\|x-y\|$, the Frank--Wolfe algorithm with step size $\gamma_k = 2/(k+2)$ achieves:
 \begin{equation}
@@ -1783,6 +1812,14 @@ Nelder--Mead & 160 & 0.001 & Empirical & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}[Pre-Asymptotic vs.\ Asymptotic Convergence on Rosenbrock]
+Table~\ref{tab:empirical_rates} shows Nesterov achieving an empirical rate $\approx 70/k^{1.7}$ rather than the theoretical $O(1/k^2)$. This discrepancy reveals the \emph{pre-asymptotic} vs.\ \emph{asymptotic} dichotomy:
+
+The Nesterov bound $f(x_k) - f^{\star} \leq 2L\|x_0-x^{\star}\|^2/(k+1)^2$ uses the \emph{global} smoothness constant $L = \lambda_{\max}(\nabla^2 f(x_{\max}))$. On Rosenbrock, $L$ at $x_0 = (-1,1)$ is $\approx 1002$ (near-optimum value), but the iterate passes through regions where $L$ can be much larger as it traverses the valley. The method is operating in a \emph{pre-asymptotic regime} where the global bound applies but is loose.
+
+The asymptotic (quadratic convergence near $x^{\star}$) phase begins when $\|x_k - x^{\star}\| \leq r$ for some radius $r$ depending on $L$ and the Hessian Lipschitz constant. For Rosenbrock with $\kappa = 2009$, this requires roughly $k > \kappa = 2009$ iterations for first-order methods --- far more than the 300 iterations budgeted. The observed slope 1.7 represents the transition: better than GD's $O(1/k)$ (reflecting the momentum acceleration) but not yet achieving the full $O(1/k^2)$ asymptotic rate. For comparison, at $k=300$: theoretical bound gives $2 \times 1002.5 \times 4 / 301^2 \approx 0.089$, which matches the observed $f = 0.07$ --- but only because the constant in the bound happens to be tight for this problem, not because the $1/k^2$ scaling has been reached. To observe $O(1/k^2)$ clearly, one would need $k > 2009$ iterations.
+\end{remark}
 
 \noindent\textbf{Overall comparative insight:} For smooth, well-conditioned problems, Nesterov acceleration and Adam are the methods of choice. For ill-conditioned problems where the Hessian is tractable (low dimension), Newton's method or quasi-Newton methods (e.g., L-BFGS) provide dramatic speedups. When gradients are unavailable, Nelder--Mead is surprisingly effective in low dimensions. For constrained problems, projected gradient descent is preferred when projections are cheap, while Frank--Wolfe and penalty methods offer alternatives when projections are expensive.
 
