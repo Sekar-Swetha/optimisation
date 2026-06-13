@@ -76,6 +76,28 @@ The experiments are structured around six questions, each targeting a distinct c
 \subsection*{Notation}
 Throughout this report, $f : \mathbb{R}^n \to \mathbb{R}$ denotes the objective function, $\nabla f(x)$ its gradient, and $\nabla^2 f(x)$ its Hessian. The iterates are $\{x_k\}_{k \geq 0}$, and $x^{\star}$ denotes a local or global minimiser with optimal value $f^{\star} = f(x^{\star})$. The operator $\odot$ denotes element-wise (Hadamard) product. The Euclidean norm is $\|\cdot\| = \|\cdot\|_2$.
 
+\subsection*{Report Roadmap}
+
+Table~\ref{tab:roadmap} summarises the algorithm--benchmark mapping. Each question targets a distinct algorithmic paradigm evaluated on the benchmarks that best reveal its properties.
+
+\begin{table}[H]
+\centering
+\caption{Report roadmap: algorithms, benchmarks, and key theoretical concepts per question.}
+\label{tab:roadmap}
+\begin{tabular}{clll}
+\toprule
+\textbf{Q.} & \textbf{Algorithms} & \textbf{Primary Bench.} & \textbf{Key Concept} \\
+\midrule
+Q1 & GD, Polyak, Adagrad, RMSprop, Heavy Ball & A, B, C & Adaptive step sizes; $f^\star$ sensitivity \\
+Q2 & Nesterov, Adam, Mini-batch SGD & A, B, C & Momentum; $O(1/k^2)$ rate; variance--batch trade-off \\
+Q3 & Newton's method (damped) & A, B, C & Quadratic local convergence; $O(n^3)$ cost \\
+Q4 & FD gradient, Rand.\ search, Nelder--Mead, Grid & B, C & Derivative-free methods; curse of dimensionality \\
+Q5 & Projected GD, Penalty, Aug.\ Lagrangian & B & KKT conditions; hard vs soft constraints \\
+Q6 & LP, Frank--Wolfe (conditional gradient) & Box $\mathcal{X}$ & Projection-free; $O(1/k)$ rate; duality gap \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 % ============================================================
 \section{Benchmark Problems and Experimental Setup}
 \label{sec:benchmarks}
@@ -219,7 +241,16 @@ RMSprop addresses Adagrad's over-decay by replacing the cumulative sum with an e
 \end{algorithmic}
 \end{algorithm}
 
-The Heavy Ball method maintains a momentum vector $z_k$ that accumulates a decaying sum of past gradients: $z_k = \alpha \sum_{j=0}^{k-1} \beta^{k-1-j} \nabla f(x_j)$. For a strongly convex quadratic with condition number $\kappa$, the optimal Heavy Ball parameters achieve a convergence rate of $O\bigl((\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1})^k\bigr)$, compared to $O\bigl((\frac{\kappa-1}{\kappa+1})^k\bigr)$ for GD---a quadratic improvement.
+The Heavy Ball method maintains a momentum vector $z_k$ that accumulates a decaying sum of past gradients: $z_k = \alpha \sum_{j=0}^{k-1} \beta^{k-1-j} \nabla f(x_j)$. For a strongly convex quadratic with condition number $\kappa = \lambda_{\max}/\lambda_{\min}$, the \emph{optimal} Heavy Ball parameters are:
+\begin{equation}
+\alpha^{\star} = \frac{4}{(\sqrt{\lambda_{\max}} + \sqrt{\lambda_{\min}})^2}, \qquad \beta^{\star} = \left(\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}\right)^{\!\!2},
+\end{equation}
+achieving the convergence rate $r^{\star} = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ per step, compared to $r_{\rm GD} = (\kappa-1)/(\kappa+1)$ for GD --- a \emph{quadratic improvement} in the exponent. For Benchmark C ($\kappa \approx 2508$, $\lambda_{\min} \approx 0.4$, $\lambda_{\max} \approx 1001.6$):
+\begin{equation}
+\alpha^{\star}_C = \frac{4}{(\sqrt{1001.6} + \sqrt{0.4})^2} = \frac{4}{(31.65 + 0.632)^2} \approx 0.00383, \qquad
+\beta^{\star}_C = \left(\frac{\sqrt{2508} - 1}{\sqrt{2508} + 1}\right)^{\!\!2} = \left(\frac{49.08}{51.08}\right)^{\!\!2} \approx 0.923.
+\end{equation}
+Our chosen parameters ($\alpha = 0.0008$, $\beta = 0.86$) are more conservative than the quadratic-optimal values, providing additional stability margin for the non-quadratic Rosenbrock geometry. The theoretical optimal rate $r^{\star}_C = 49.08/51.08 \approx 0.961$ per step vs GD's rate $r_{\rm GD,C} = 2507/2509 \approx 0.9992$ represents a $\sim 13\times$ speedup in convergence exponent.
 
 \subsection{Hyperparameter Settings}
 
@@ -621,6 +652,26 @@ With $m = 1000$ samples and batch size $b$, each epoch performs $\lfloor m/b \rf
 \includegraphics[width=\textwidth]{figures/q2_sgd_steps.pdf}
 \caption{Q2: Mini-batch SGD measured per epoch (left) vs per gradient update step (right). Per epoch, batch size $b = 5$ (200 steps/epoch) converges faster than $b = 40$ (25 steps/epoch) because more weight updates are performed each epoch. Per update step, the picture inverts: $b = 40$ reaches low loss faster per step due to lower gradient variance---each step uses $40/5 = 8\times$ more data. The two views capture different costs: ``epoch'' measures data passes (relevant for data transfer cost), while ``step'' measures computation steps (relevant for wall-clock time on parallel hardware where a batch costs the same regardless of $b$).}
 \label{fig:q2_sgd_steps}
+\end{figure}
+
+\subsection{SGD Noise Floor: Theoretical Analysis}
+\label{subsec:sgd_noise_floor}
+
+For mini-batch SGD on Benchmark A, the gradient noise arises from the random batch selection. Each mini-batch gradient $g_{\mathcal{B}}(\theta)$ is an unbiased estimator of the full gradient with variance:
+\begin{equation}
+\text{Var}[g_{\mathcal{B}}(\theta)] = \frac{\sigma^2}{b}\, \frac{\|X\|_F^2}{m^2} = \frac{\sigma^2}{b}\, \text{tr}(H), \quad H = \frac{X^TX}{m},
+\end{equation}
+where $\sigma^2 = 1$ is the observation noise variance. For a fixed step size $\alpha$, SGD does not converge to a \emph{point} but rather oscillates in a neighbourhood of $\theta^{\star}$. The \emph{noise floor}---the lowest achievable loss in expectation---scales approximately as:
+\begin{equation}
+\mathbb{E}[J(\theta_k)] - J^{\star} \;\sim\; \frac{\alpha\, \sigma^2\, \text{tr}(H)}{2b(1 - \alpha\, \lambda_{\max}(H))}, \quad k \to \infty.
+\end{equation}
+This reveals three key relationships: (i) larger $\alpha$ raises the noise floor; (ii) larger $b$ lowers it proportionally ($\propto 1/b$); (iii) the noise floor is zero for full-batch GD ($b = m$). A step size schedule $\alpha_k \to 0$ eliminates the noise floor at the cost of sub-linear asymptotic convergence.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_sgd_noise_floor.pdf}
+\caption{Q2: SGD noise floor analysis on Benchmark A ($\sigma = 1$, $\alpha = 0.06$). Left: convergence curves for batch sizes $b \in \{5, 10, 20, 40, 100, 200, 500, 1000\}$. All batch sizes converge rapidly in early epochs, but plateau at batch-size-dependent noise floors. Larger batches achieve lower noise floors due to lower gradient variance. The noise floor for $b = 1000$ (full batch) is near zero, confirming that full-batch GD converges to $J^{\star}$. Right: final loss (above $J^{\star}$) vs batch size on a log-log scale. The empirical fit gives slope $\approx -1.25$ (close to the theoretical $-1$), confirming the $O(1/b)$ noise floor scaling. Deviations from exact $-1$ arise because all batch sizes have not yet fully converged (80 epochs is sufficient for large $b$ but marginal for small $b$).}
+\label{fig:sgd_noise}
 \end{figure}
 
 \subsection{SGD with Increased Observation Noise}
