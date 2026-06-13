@@ -366,6 +366,8 @@ which is \emph{optimal} among first-order methods for smooth convex optimisation
 
 The crucial distinction from Heavy Ball (Section~\ref{sec:q1}) is the \emph{gradient lookahead}: the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than at $x_k$. This forward-looking evaluation allows the method to correct overshoot before it occurs, establishing the theoretical $O(1/k^2)$ rate. Heavy Ball evaluates the gradient at $x_k$ and cannot achieve this guarantee in general.
 
+The increasing momentum schedule $\beta_k = (k-1)/(k+2)$ is not arbitrary: it is the exact sequence required to achieve the $O(1/k^2)$ convergence rate certificate in Nesterov's original proof. As $k \to \infty$, $\beta_k \to 1$, meaning the algorithm places increasing weight on the accumulated direction. The cap at $\beta_{\max}$ prevents instability in non-convex or ill-conditioned settings where the asymptotic $\beta_k \to 1$ would cause divergence.
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
 \label{alg:adam}
@@ -495,6 +497,13 @@ With $m = 1000$ samples and batch size $b$, each epoch performs $\lfloor m/b \rf
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
 \caption{Q2: Mini-batch SGD with different batch sizes, measured in epochs. With $b = 5$, each epoch performs $1000/5 = 200$ gradient steps, providing faster per-epoch convergence with higher per-step gradient variance. With $b = 40$, each epoch has $1000/40 = 25$ gradient steps, resulting in smoother but slower per-epoch progress. The smaller batch size converges to a lower loss faster (per epoch) due to more frequent parameter updates, but exhibits larger oscillations near the minimum as each mini-batch gradient deviates more from the true gradient. This illustrates the fundamental \emph{variance--computation} trade-off in stochastic methods.}
 \label{fig:q2_sgd_batch}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_sgd_steps.pdf}
+\caption{Q2: Mini-batch SGD measured per epoch (left) vs per gradient update step (right). Per epoch, batch size $b = 5$ (200 steps/epoch) converges faster than $b = 40$ (25 steps/epoch) because more weight updates are performed each epoch. Per update step, the picture inverts: $b = 40$ reaches low loss faster per step due to lower gradient variance---each step uses $40/5 = 8\times$ more data. The two views capture different costs: ``epoch'' measures data passes (relevant for data transfer cost), while ``step'' measures computation steps (relevant for wall-clock time on parallel hardware where a batch costs the same regardless of $b$).}
+\label{fig:q2_sgd_steps}
 \end{figure}
 
 \subsection{SGD with Increased Observation Noise}
@@ -653,9 +662,15 @@ On Benchmark C, the Newton final position $(0.183, 0.020)$ is far from the true 
 \label{fig:q3_update}
 \end{figure}
 
-\subsection{Computational Cost Discussion}
+\subsection{Computational Cost and Scalability}
 
-Each Newton iteration requires: (i) evaluating $\nabla f(x_k)$: $O(n)$ operations for separable functions; (ii) evaluating $\nabla^2 f(x_k)$: $O(n^2)$ in general; (iii) solving the linear system $H_k p_k = g_k$: $O(n^3)$ via Cholesky factorisation. For $n = 2$ (as in our benchmarks), these costs are negligible. However, for large-scale problems with $n \gg 1$, the $O(n^3)$ cost per step makes Newton's method impractical, motivating quasi-Newton methods (L-BFGS) that approximate $H_k^{-1}$ without explicit Hessian computation.
+Each Newton iteration requires: (i) evaluating $\nabla f(x_k)$: $O(n)$; (ii) evaluating $\nabla^2 f(x_k)$: $O(n^2)$ in general; (iii) solving $H_k p_k = g_k$: $O(n^3)$ via Cholesky factorisation. For $n = 2$ these costs are negligible. For large-scale problems ($n \gg 1$), the $O(n^3)$ cost per step makes Newton impractical.
+
+\textbf{Quasi-Newton methods (L-BFGS):} A practical alternative is to \emph{approximate} $H_k^{-1}$ without explicit Hessian computation. The BFGS update maintains an estimate $B_k \approx H_k$ using rank-2 updates from gradient differences:
+\begin{equation}
+B_{k+1} = B_k - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k} + \frac{y_k y_k^T}{y_k^T s_k}, \quad s_k = x_{k+1} - x_k, \quad y_k = \nabla f(x_{k+1}) - \nabla f(x_k).
+\end{equation}
+The Limited-memory BFGS (L-BFGS) variant stores only the last $m \approx 5$--$20$ gradient difference pairs, reducing memory to $O(mn)$ and matrix-vector product cost to $O(mn)$ per iteration while retaining superlinear convergence. L-BFGS is the de facto standard for large-scale unconstrained differentiable optimisation in machine learning and scientific computing.
 
 % ============================================================
 \section{\texorpdfstring{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}{Question 4: Derivative Approximation and Derivative-Free Optimisation [30 marks]}}
@@ -898,7 +913,13 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Yes \\
 
 \textbf{Projected Gradient Descent} is the gold standard for problems with projectable constraint sets. Feasibility is a hard guarantee at every iterate, not just at convergence. This is critical in applications such as probability simplex constraints, norm balls in compressed sensing, or per-coordinate bounds in portfolio optimisation. The cost is requiring a fast projection oracle: trivial for half-spaces and box constraints ($O(d)$), but potentially $O(d^3)$ or worse for general semidefinite constraints.
 
-\textbf{Penalty methods} are more flexible: any differentiable solver can be applied to $F_\lambda$ without modification. However, there is a fundamental trade-off: larger $\lambda$ enforces tighter feasibility but creates a stiffer (ill-conditioned) objective that requires smaller step sizes for stability. In the limit, as $\lambda \to \infty$, the penalised problem becomes equivalent to the original constrained problem, but the Lipschitz constant of $\nabla F_\lambda$ grows linearly with $\lambda$, requiring $\alpha = O(1/\lambda)$. Augmented Lagrangian methods (ADMM, method of multipliers) address this by adaptively growing $\lambda$ while correcting the Lagrange multiplier, achieving exact constraint satisfaction without infinite $\lambda$.
+\textbf{Penalty methods} are more flexible: any differentiable solver can be applied to $F_\lambda$ without modification. However, there is a fundamental trade-off: larger $\lambda$ enforces tighter feasibility but creates a stiffer objective requiring smaller step sizes. In the limit $\lambda \to \infty$, the penalised problem equals the constrained problem but the Lipschitz constant of $\nabla F_\lambda$ grows as $O(\lambda)$, requiring $\alpha = O(1/\lambda)$.
+
+\textbf{Augmented Lagrangian method:} A principled resolution is the method of multipliers, which solves:
+\begin{equation}
+x_{k+1} = \argmin_{x}\; f(x) + \mu_k \max(0, 0.5 - x_1) + \frac{\rho}{2} \max(0, 0.5 - x_1)^2,
+\end{equation}
+followed by the dual update $\mu_{k+1} = \max(0, \mu_k + \rho \max(0, 0.5 - x_{1,k+1}))$. By maintaining a Lagrange multiplier estimate $\mu_k$ and a fixed (moderate) penalty $\rho$, the augmented Lagrangian achieves exact constraint satisfaction without requiring $\rho \to \infty$, thereby avoiding the ill-conditioning problem. The ADMM (Alternating Direction Method of Multipliers) extends this to separable problems and is widely used in distributed optimisation and signal processing.
 
 % ============================================================
 \section{\texorpdfstring{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}{Question 6: Linear Programmes and Frank-Wolfe Algorithm [30 marks]}}
@@ -1020,6 +1041,13 @@ g_k = \nabla f(x_k)^T (x_k - z_k) \geq f(x_k) - f^{\star} \geq 0,
 \end{equation}
 which serves as a certificate of sub-optimality without knowing $f^{\star}$. When $g_k < \varepsilon$, we know $f(x_k) - f^{\star} < \varepsilon$. This is a significant advantage over gradient norm as a stopping criterion, since $\|\nabla f(x_k)\|$ can be small even far from the constrained optimum.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_gap.pdf}
+\caption{Q6: Frank--Wolfe duality gap $g_k = \nabla f(x_k)^T(x_k - z_k)$ (solid) vs true sub-optimality $f(x_k) - f^{\star}$ (dashed). Left: interior case with both $\beta$ values. The gap reliably upper-bounds the sub-optimality at every iteration. With $\beta = 0.985$, the gap decreases to $0.082$ (final), while with $\beta = 0.90$ the gap stalls at $7.3$ due to oscillation. Right: boundary case with $O(1/k)$ reference (dotted). The duality gap closely tracks $C/k$, empirically confirming the $O(1/k)$ convergence rate prediction of Frank--Wolfe theory.}
+\label{fig:fw_gap}
+\end{figure}
+
 \textbf{Comparison with projected gradient descent:} PGD (Q5) achieves zero constraint violation from iteration 1 and converges linearly for strongly convex $f$, while Frank--Wolfe has an $O(1/k)$ sublinear rate and no projection. The trade-off is between projection oracle availability and LMO availability. For problems where the feasible set is the nuclear norm ball (matrix completion), the LMO is a rank-1 SVD (cheap), while projection requires a full SVD (expensive), making Frank--Wolfe strongly preferred in such settings.
 
 % ============================================================
@@ -1055,6 +1083,37 @@ which serves as a certificate of sub-optimality without knowing $f^{\star}$. Whe
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Theoretical Convergence Rate Summary}
+
+\begin{table}[H]
+\centering
+\caption{Theoretical convergence rates. SC = strongly convex, C = convex (not SC), nc = nonconvex. $L$ = Lipschitz gradient constant, $\mu$ = strong convexity constant, $\kappa = L/\mu$ = condition number, $D$ = domain diameter.}
+\label{tab:rates}
+\begin{tabular}{llcl}
+\toprule
+\textbf{Method} & \textbf{Class} & \textbf{Rate} & \textbf{Comments} \\
+\midrule
+Gradient Descent & SC & $O\!\left(\left(\frac{\kappa-1}{\kappa+1}\right)^k\right)$ & Linear; $\alpha = 2/(L+\mu)$ \\
+Heavy Ball & SC quadratic & $O\!\left(\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k\right)$ & Optimal for quadratics \\
+Nesterov & C smooth & $O(L D^2 / k^2)$ & \textbf{Optimal} 1st-order rate \\
+Nesterov & SC smooth & $O\!\left(\left(1 - \sqrt{\mu/L}\right)^k\right)$ & Optimal SC rate \\
+Adam/RMSprop & General & Not guaranteed & Empirically good; see Reddi 2018 \\
+Polyak & SC & $O(1/k)$ (subgradient) & Exact when $f^\star$ known \\
+Newton & C, near opt. & $\|x_{k+1}-x^\star\| = O(\|x_k-x^\star\|^2)$ & Quadratic (local) \\
+PGD & SC, convex $\mathcal{C}$ & $O\!\left(\left(1 - \mu/L\right)^k\right)$ & Same rate as GD \\
+Frank--Wolfe & C smooth & $O(L D^2 / k)$ & Optimal projection-free \\
+SGD (mini-batch) & C smooth & $O(1/\sqrt{k} + \sigma^2/b)$ & Plus noise floor \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{figures/convergence_rates_theory.pdf}
+\caption{Theoretical convergence rate comparison on a log-log scale. The $O(1/k^2)$ rate of Nesterov (blue solid) decays an order of magnitude faster than GD's $O(1/k)$ rate (black dashed) for each decade increase in $k$: after $k = 100$ steps, Nesterov is $\sim 100\times$ better. Linear convergence (red dash-dot, representing Newton's method or PGD on strongly convex problems) eventually dominates both sublinear rates exponentially, but requires either second-order information or strong convexity. The $O(1/k)$ Frank--Wolfe rate (same slope as GD but with different constant) matches GD on log-log scale.}
+\label{fig:conv_rates_theory}
+\end{figure}
 
 \subsection{All-Method Comparison on Rosenbrock}
 
