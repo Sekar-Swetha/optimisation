@@ -430,6 +430,23 @@ Adam combines two key ideas: (1) momentum via the first moment estimate $m_t$ (s
 Adam does not have a general convergence guarantee for non-convex objectives; Reddi et al.\ (2018) demonstrated cases where Adam fails to converge and proposed AMSGrad as a fix. In practice, Adam performs very well on neural network objectives that are empirically well-conditioned.
 \end{remark}
 
+\subsection{Adam Bias Correction: Mathematical Rationale}
+\label{subsec:adam_bias}
+
+The bias correction factors $(1 - \beta_1^t)^{-1}$ and $(1 - \beta_2^t)^{-1}$ in Adam are essential in early iterations. To see why, note that if $g_1 = g_2 = \cdots = g$ (constant gradient), then the exact EMA should equal $g$, but the initialisation $m_0 = 0$ biases the estimates toward zero:
+\begin{equation}
+m_t = (1-\beta_1)\sum_{i=1}^{t}\beta_1^{t-i}g_i = (1-\beta_1^t)\cdot g \quad \Longrightarrow \quad
+\hat{m}_t = \frac{m_t}{1-\beta_1^t} = g. \;\checkmark
+\end{equation}
+Without correction, $m_1 = (1-\beta_1)g$ under-represents the gradient by factor $(1-\beta_1)$. For $\beta_1 = 0.80$, the uncorrected first step has only $20\%$ of the correct gradient magnitude. For $\beta_1 = 0.9$ (default), only $10\%$. The bias correction exactly restores this scaling at each $t$. Similarly for $v_t$: uncorrected second moments underestimate squared gradient magnitudes by factor $(1-\beta_2^t)$, producing inflated effective steps (since $\alpha/\sqrt{v}$ is too large when $v$ is too small).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_adam_bias_correction.pdf}
+\caption{Q2: Adam bias correction analysis with $\beta_1 = 0.80$, $\beta_2 = 0.999$. Left: First moment estimates for coordinate 1 over the first 15 iterations. The uncorrected EMA $m_t$ (red) starts near zero and converges slowly to the true gradient direction. The bias-corrected $\hat{m}_t$ (blue) immediately provides a better estimate. The true gradient at $x_0$ (green dotted) is shown for reference. Right: effective step sizes with and without bias correction. At $t=1$, the uncorrected step is $(1-\beta_1) = 0.20\times$ the corrected step, causing dramatically under-sized initial updates. The corrected steps are larger in early iterations (when the denominator correction is large) and converge to the same value as $t$ grows (since $1-\beta^t \to 1$). This bias correction is the key innovation of Adam over plain RMSprop, particularly for deep learning where the first few gradient steps often carry the most information about the loss landscape.}
+\label{fig:adam_bias}
+\end{figure}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1026,6 +1043,31 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Yes \\
 \end{tabular}
 \end{table}
 
+\subsection{KKT Conditions: Numerical Verification}
+\label{subsec:kkt_numerical}
+
+For the constrained problem (Q5), the KKT optimality conditions provide a precise characterisation of the solution. Since the unconstrained minimiser $x^{\star}_{\text{unc}} = (0.582, 2.0)$ satisfies $x_{1}^{\star} = 0.582 > 0.5$ (strictly feasible), complementary slackness forces $\lambda^{\star} = 0$, and the KKT conditions reduce to:
+\begin{align}
+\nabla f(x^{\star}) &= \mathbf{0} \quad \text{(stationarity, since $\lambda^{\star} = 0$)}, \\
+x_{1}^{\star} &\geq 0.5 \quad \text{(primal feasibility)}, \\
+\lambda^{\star} &= 0 \geq 0 \quad \text{(dual feasibility)}, \\
+\lambda^{\star}(0.5 - x_{1}^{\star}) &= 0 \quad \text{(complementary slackness, satisfied trivially)}.
+\end{align}
+This analysis predicts that the projected gradient method converges to the same point as unconstrained GD and that the KKT multiplier remains zero throughout. Figure~\ref{fig:kkt_verify} verifies this prediction numerically.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_kkt_verification.pdf}
+\caption{Q5: Numerical verification of KKT conditions along the projected GD trajectory from $x_0 = (0.2, 4.0)$ (infeasible). Left: KKT stationarity residual $\|\nabla f(x_k) + \lambda_k \nabla g(x_k)\|$ (red dashed) versus gradient norm $\|\nabla f(x_k)\|$ (blue). Both converge to zero at similar rates, confirming that the constraint is not active and $\lambda_k \to 0$. Centre: constraint violation $v_k = \max(0, 0.5 - x_{1,k})$ on a log scale. The projection enforces $v_k = 0$ from iteration 1 onward (the iterate is feasible immediately after the first projection). Right: the inferred KKT multiplier $\lambda_k$ (defined as $\max(0, \nabla_{x_1} f(x_k))$ when $x_{1,k} \leq 0.5$, else $0$) equals zero for all $k \geq 1$ since the iterates immediately leave the constraint boundary, confirming complementary slackness. The convergence to the same minimum as unconstrained GD --- verified by $f(x_{\rm final}) = 0.7244$ --- confirms the theoretical KKT analysis.}
+\label{fig:kkt_verify}
+\end{figure}
+
+\begin{remark}[Active constraint scenario]
+Had the constrained minimum coincided with the boundary (e.g., if $f = (x_1 - 0.3)^2 + 5(x_2 - 2)^2$, whose unconstrained minimum $x_1^{\star} = 0.3 < 0.5$ violates the constraint), the KKT multiplier at the constrained optimum $x^{\star} = (0.5, 2.0)$ would be:
+$\lambda^{\star} = -(\nabla_{x_1} f(x^{\star}) / (\nabla_{x_1} g(x^{\star}))) = -(-0.4 / -1) = -0.4 < 0$,
+violating dual feasibility. This indicates the constraint direction is wrong and the problem must be reformulated. For our Benchmark B case, $\lambda^{\star} = 0$ confirms no dual certificate is needed: the unconstrained minimiser is feasible.
+\end{remark}
+
 \subsection{Comparative Discussion}
 
 \textbf{Projected Gradient Descent} is the gold standard for problems with projectable constraint sets. Feasibility is a hard guarantee at every iterate, not just at convergence. This is critical in applications such as probability simplex constraints, norm balls in compressed sensing, or per-coordinate bounds in portfolio optimisation. The cost is requiring a fast projection oracle: trivial for half-spaces and box constraints ($O(d)$), but potentially $O(d^3)$ or worse for general semidefinite constraints.
@@ -1185,6 +1227,25 @@ which serves as a certificate of sub-optimality without knowing $f^{\star}$. Whe
 \caption{Q6: Frank--Wolfe duality gap $g_k = \nabla f(x_k)^T(x_k - z_k)$ (solid) vs true sub-optimality $f(x_k) - f^{\star}$ (dashed). Left: interior case with both $\beta$ values. The gap reliably upper-bounds the sub-optimality at every iteration. With $\beta = 0.985$, the gap decreases to $0.082$ (final), while with $\beta = 0.90$ the gap stalls at $7.3$ due to oscillation. Right: boundary case with $O(1/k)$ reference (dotted). The duality gap closely tracks $C/k$, empirically confirming the $O(1/k)$ convergence rate prediction of Frank--Wolfe theory.}
 \label{fig:fw_gap}
 \end{figure}
+
+\subsection{Optimal vs Fixed Step Schedule}
+\label{subsec:fw_optimal_schedule}
+
+The standard Frank--Wolfe convergence theory uses the \emph{decaying schedule} $\gamma_k = 2/(k+2)$, which achieves the $O(1/k)$ rate with constant $2LD^2$. The fixed-$\beta$ variant used in the main experiments is simpler to implement but does not achieve this rate. Figure~\ref{fig:fw_opt_schedule} compares both approaches.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_optimal_schedule.pdf}
+\caption{Q6: Frank--Wolfe optimal decaying schedule $\gamma_k = 2/(k+2)$ (green dash-dot) vs fixed $\beta = 0.985$ (blue) and $\beta = 0.90$ (red dashed) for the interior optimum ($f = (x_1-1)^2 + (x_2-5)^2$, $f^{\star} = 0$, starting at $(1,1)$). Left: sub-optimality $f(x_k) - f^{\star}$. The optimal schedule achieves a consistent $O(1/k)$ decay (matching the black dotted reference), while fixed $\beta = 0.985$ converges faster initially but plateaus due to the non-vanishing step size. Fixed $\beta = 0.90$ converges faster early but oscillates more. Right: duality gaps $g_k$. The optimal schedule's gap closely tracks the theoretical bound $2LD^2/k$ (with $L = 2$, $D^2 = 245.25$, so the bound is $\approx 981/k$). The decaying schedule is the correct choice for provable convergence guarantees; the fixed-$\beta$ schedule should be seen as a practical heuristic.}
+\label{fig:fw_opt_schedule}
+\end{figure}
+
+The trade-off between the two schedules:
+\begin{itemize}[nosep]
+\item \textbf{Optimal $\gamma_k = 2/(k+2)$:} Provably achieves $O(1/k)$ rate, monotonically converges (the step size vanishes ensuring $x_k$ approaches the optimum). However, the step size $\gamma_k \to 0$ means the algorithm eventually stalls and cannot escape if started near a bad point.
+\item \textbf{Fixed $\beta$:} Easier to tune, faster initial convergence for well-chosen $\beta$, but does not have guaranteed $O(1/k)$ rate for general convex $f$. Better for problems where a target accuracy is known and $\beta$ can be set to match it.
+\item \textbf{Line search variant:} A third option is to use exact line search $\gamma_k = \argmin_{\gamma \in [0,1]} f((1-\gamma)x_k + \gamma z_k)$ at each step, which achieves the $O(1/k)$ rate with better constants but requires an additional function minimisation per step.
+\end{itemize}
 
 \textbf{Comparison with projected gradient descent:} PGD (Q5) achieves zero constraint violation from iteration 1 and converges linearly for strongly convex $f$, while Frank--Wolfe has an $O(1/k)$ sublinear rate and no projection. The trade-off is between projection oracle availability and LMO availability. For problems where the feasible set is the nuclear norm ball (matrix completion), the LMO is a rank-1 SVD (cheap), while projection requires a full SVD (expensive), making Frank--Wolfe strongly preferred in such settings.
 
