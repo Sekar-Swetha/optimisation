@@ -194,6 +194,12 @@ RMSprop corrects Adagrad's monotonic decay by replacing the cumulative sum with 
 
 The momentum term $z_{k+1} = \sum_{t=0}^{k} \beta^{k-t} \alpha \nabla f(x_t)$ is a geometrically-weighted sum of all past gradients. With $\beta = 0.9$, the effective step size is amplified by $\approx 1/(1-\beta) = 10$ in consistently downhill directions. When $\beta = 0$, Heavy Ball reduces to standard gradient descent.
 
+\textbf{Optimal Heavy Ball parameters:} For a strongly convex quadratic with eigenvalues $\lambda_{\min}$ and $\lambda_{\max}$, the optimal Heavy Ball parameters that minimise the convergence rate are:
+\begin{equation}
+\alpha^{\star} = \frac{4}{(\sqrt{\lambda_{\max}} + \sqrt{\lambda_{\min}})^2}, \quad \beta^{\star} = \left(\frac{\sqrt{\lambda_{\max}} - \sqrt{\lambda_{\min}}}{\sqrt{\lambda_{\max}} + \sqrt{\lambda_{\min}}}\right)^2 = \left(\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}\right)^2.
+\end{equation}
+For Benchmark~A ($\kappa = 1.12$): $\beta^{\star} \approx 0.003$ (negligible momentum). For Benchmark~B ($\kappa \approx 6.9$): $\beta^{\star} \approx 0.33$ (moderate momentum). For Benchmark~C ($\kappa \approx 200$): $\beta^{\star} \approx 0.81$ (high momentum). The empirical values $\beta \in \{0.88, 0.90, 0.86\}$ are significantly larger than the quadratic-optimal values, suggesting they are tuned for the nonlinear benchmark geometry rather than derived from theory. Nonetheless, the trend ($\beta$ roughly increasing with $\kappa$) is consistent with the theoretical prediction.
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -376,6 +382,8 @@ The key distinction from Heavy Ball (Section~\ref{sec:q1}) is the \emph{lookahea
 
 Adam combines \textbf{two distinct mechanisms}: (1) gradient momentum via $m_t$ (analogous to Heavy Ball / Nesterov), which smooths gradient directions and accelerates in consistent descent directions; and (2) per-coordinate adaptive scaling via $v_t$ (analogous to RMSprop), which normalises the effective step size by recent gradient magnitude. The bias correction factors $(1-\beta_1^t)$ and $(1-\beta_2^t)$ account for the fact that $m_0 = v_0 = 0$, which biases early iterates toward zero without correction. With $\beta_2 = 0.999$, the second-moment memory window is $\approx 1000$ steps.
 
+\textbf{Connection to RMSprop (Q1):} Adam can be understood as RMSprop with added gradient momentum. RMSprop suffers from persistent oscillations near the minimum (observed in Q1, Benchmark~A: $f = 0.5027$ vs $f^{\star} = 0.4826$) because the EMA-normalised step size $\alpha_0/\sqrt{v_\infty}$ remains non-negligible even at the minimum. Adam's first-moment term $m_t$ dampens this oscillation by smoothing the gradient direction---near the minimum, $m_t \to 0$ as gradients average to zero, effectively reducing the step size regardless of $v_t$. This explains why Adam typically converges more smoothly than pure RMSprop near the minimum while retaining per-coordinate adaptation far from it.
+
 \textbf{Why Adam underperforms Nesterov on Rosenbrock:} Adam's per-coordinate scaling $\hat{m}_t / \sqrt{\hat{v}_t}$ normalises the gradient magnitude independently in each coordinate. On Rosenbrock, this has a counterproductive effect: near the curved valley floor, the dominant gradient component is perpendicular to the valley (the $x_2 - x_1^2$ direction), which is large and thus receives a small effective step in $x_2$; the along-valley component is small and thus receives a large effective step---but the large step conflicts with the valley's curved geometry, causing Adam to ``bounce'' off the valley walls rather than following the floor. Nesterov, without per-coordinate scaling, accumulates directional momentum along the consistent valley-floor direction, allowing the iterate to ``surf'' along the floor with increasing speed. This illustrates a fundamental limitation of adaptive coordinate-wise scaling: it destroys the directional correlation structure of the gradient trajectory that momentum methods exploit.
 
 \subsection{Hyperparameter Settings}
@@ -420,7 +428,7 @@ Adam & $\alpha$ & 0.12 & 0.08 & 0.006 \\
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_fval_C.pdf}
-\caption{Q2: Convergence on Benchmark~C (Rosenbrock). This benchmark reveals the most significant differences between methods. Nesterov achieves $f = 0.479$---a dramatic improvement over GD ($f = 3.388$)---by building directional momentum along the valley floor. Adam reaches $f = 1.578$; its per-coordinate scaling helps compensate for the high condition number but the nonlinear curvature of the Rosenbrock valley---where the valley's direction rotates throughout the domain---limits Adam's directional momentum compared to Nesterov's cumulative acceleration in the consistent valley-floor direction.}
+\caption{Q2: Convergence on Benchmark~C (Rosenbrock). This benchmark reveals the most significant differences between methods. Nesterov achieves $f = 0.479$---a 7$\times$ improvement over GD ($f = 3.388$)---by building directional momentum along the valley floor. Adam reaches $f = 1.578$; its per-coordinate second-moment scaling $\hat{v}_t$ normalises the gradient magnitude in each coordinate independently, which disrupts the directional momentum accumulation that makes Nesterov effective on this problem. The fundamental issue is that the Rosenbrock valley floor lies in the direction $(2x_1, 1)$ (approximately), which is neither axis-aligned nor constant across the domain---and Adam's diagonal preconditioning only helps with axis-aligned curvature anisotropy, not curved valley geometry. See Section~\ref{sec:q2} for a detailed mechanistic explanation. All three methods converge to the same qualitative region after 150 iterations, with Nesterov closest to $(1,1)$.}
 \label{fig:q2_fval_C}
 \end{figure}
 
@@ -483,7 +491,7 @@ Mini-batch SGD on Benchmark~A uses learning rate $\alpha = 0.06$, batch sizes $b
 \end{algorithmic}
 \end{algorithm}
 
-The mini-batch gradient $g_{\mathcal{B}}$ is an \emph{unbiased estimate} of the full gradient: $\mathbb{E}[g_{\mathcal{B}}] = \nabla J(\theta)$. The variance of this estimate is $\text{Var}[g_{\mathcal{B}}] \propto \sigma^2/b$ (smaller with larger batches). Each epoch with batch size $b$ performs $\lfloor m/b \rfloor$ gradient updates: $b=5$ gives 200 updates/epoch, $b=40$ gives 25 updates/epoch.
+The mini-batch gradient $g_{\mathcal{B}}$ is an \emph{unbiased estimate} of the full gradient: $\mathbb{E}[g_{\mathcal{B}}] = \nabla J(\theta)$. More precisely, $\mathbb{E}_{\mathcal{B}}[g_{\mathcal{B}}] = \frac{1}{m}X^T(X\theta - y) = \nabla J(\theta)$ since $\mathcal{B}$ is drawn uniformly from the data. The variance of this estimate decomposes as $\text{Var}[g_{\mathcal{B}}] = \frac{1}{b}\Sigma_g$ where $\Sigma_g = \frac{1}{m}\sum_i (\nabla J_i(\theta) - \nabla J(\theta))(\nabla J_i(\theta) - \nabla J(\theta))^T$ is the sample covariance of per-sample gradients. Under high noise ($\sigma^2 \to \infty$), $\Sigma_g \propto \sigma^2$, so both $b=5$ and $b=40$ give proportionally noisier gradient estimates. Each epoch with batch size $b$ performs $\lfloor m/b \rfloor$ gradient updates: $b=5$ gives 200 updates/epoch, $b=40$ gives 25 updates/epoch.
 
 \begin{figure}[H]
 \centering
@@ -662,6 +670,10 @@ where $L_H$ is the Lipschitz constant of $\nabla^2 f$ and $\mu > 0$ is the stron
 
 \textbf{Why does Newton solve quadratics exactly in one step?} For $f(\theta) = \frac{1}{2}\theta^T H \theta - b^T\theta$ with constant $H \succ 0$, the quadratic approximation at any $\theta_k$ is \emph{globally exact}: $f(\theta) = f(\theta_k) + \nabla f(\theta_k)^T(\theta - \theta_k) + \frac{1}{2}(\theta-\theta_k)^T H (\theta-\theta_k)$. Setting $\theta_{k+1} = \theta_k - H^{-1}\nabla f(\theta_k)$ jumps directly to the global minimum. This is exactly the quadratic case seen in Benchmark~A.
 
+\textbf{Relationship to conjugate gradient:} Newton's method on a quadratic is equivalent to the Conjugate Gradient (CG) method's one-step property: CG on a quadratic with $d$ variables terminates exactly in at most $d$ steps, and for rank-$r$ problems in $r$ steps. Here, Benchmark~A has a rank-2 system ($d=2$), so CG would also terminate in exactly 2 steps (or 1 step if the starting residual is an eigenvector of $H$). Newton's use of the \emph{exact} Hessian inverse explains why it achieves this in 1 step regardless of the starting point, while CG would need up to 2 steps---Newton is strictly faster when the Hessian is available analytically.
+
+\textbf{Role of damping in Benchmark~C:} At the starting point $(-1, 1)$, the Rosenbrock Hessian is $H(-1,1) = \begin{bmatrix} 2 + 1200 - 400 & -400 \\ -400 & 200 \end{bmatrix} = \begin{bmatrix} 802 & -400 \\ -400 & 200 \end{bmatrix}$. This has eigenvalues $\approx 6$ and $\approx 996$, giving the Newton direction $p = H^{-1}g$ a very small component in the 996-eigenvalue direction (the full Newton step would be tiny in this direction) and a larger component in the 6-eigenvalue direction. The full Newton step from $(-1,1)$ has $\alpha = 1$, but the step $p = H^{-1}g$ may be large in the 6-eigenvalue direction if $g$ has large projection there, causing the iterate to cross the valley. Damping $\alpha = 0.22$ reduces this to a safe step size.
+
 \subsection{Newton Decrement Analysis}
 
 \begin{figure}[H]
@@ -768,6 +780,8 @@ Settings: initial simplex step $= 0.35$ from $x_0 = [-1, 1]^T$, 160 iterations.
 \subsubsection{Grid Search}
 
 Grid search evaluates the objective on a uniform $55 \times 55 = 3025$ grid over $x_1 \in [-2, 2]$, $x_2 \in [-1, 3]$. The grid resolution is $\Delta x_1 = 4/54 \approx 0.074$ and $\Delta x_2 = 4/54 \approx 0.074$. The best-so-far curve shows the running minimum as grid points are evaluated in raster scan order.
+
+\textbf{Global certificate:} Grid search provides a \emph{provable} approximation guarantee: for any point $x$ in the domain, there exists a grid point $x_g$ with $\|x - x_g\|_\infty \leq \Delta/2 \approx 0.037$. Combined with the Lipschitz continuity of $f$ on the grid domain (Rosenbrock's gradient is bounded on $[-2,2] \times [-1,3]$), this gives $|f(x) - f(x_g)| \leq L_f \cdot \Delta/2$ for the Lipschitz constant $L_f$ of $f$ on the domain. For the Rosenbrock on $[-2,2]\times[-1,3]$, $\|\nabla f\| \leq \max(|2(1-x_1)(-1) + 400(x_2-x_1^2)(-2x_1)|, |200(x_2-x_1^2)|) \leq \approx 2000$, giving a worst-case accuracy of $2000 \times 0.037 \approx 74$---loose, because the true minimum region is well within the grid resolution. In practice, the best grid point achieves $f \approx 0.02$, much better than the worst-case bound.
 
 \begin{figure}[H]
 \centering
@@ -1024,6 +1038,8 @@ Boundary, $\beta = 0.93$ (140 it.) & $(0.500, -0.337)$ & 0.3637 & 0.25 & 0.1137 
 \end{table}
 
 \subsection{Interior vs Boundary Behaviour}
+
+\textbf{Frank--Wolfe gap as convergence diagnostic:} The FW gap $g_k = \nabla f(x_k)^T (x_k - z_k)$ provides both a stopping criterion and an upper bound on suboptimality. For the interior case at convergence ($x_k \approx (1,5)$, $\nabla f \approx 0$): $g_k \approx 0$---confirming the iterate satisfies the KKT condition $\nabla f(x^{\star})^T(x - x^{\star}) \geq 0$ for all $x \in \mathcal{X}$ (first-order optimality for constrained convex problems). For the boundary case at the current iterate $x_k \approx (0.5, -0.3)$: $\nabla f = [1.0, -0.6]$, $z_k = (0.5, 10)$ (since $(\nabla f)_2 = -0.6 < 0$ selects the upper bound $x_2 = 10$). The gap $g_k = \nabla f^T(x_k - z_k) = [1.0, -0.6]^T[(0.5, -0.3) - (0.5, 10)] = [1.0, -0.6]^T[0, -10.3] = 6.18 > 0$, indicating $10.3/k$ suboptimality bound---consistent with the observed gap of $0.114$ and the oscillatory convergence.
 
 \textbf{Interior optimum:} Frank--Wolfe converges but exhibits a characteristic ``zig-zag'' pattern caused by $z_k$ alternating between opposite vertices. The convex combination $x_{k+1} = \beta x_k + (1-\beta)z_k$ averages these jumps, providing geometric convergence with rate $\beta$ per step. The general convergence rate with the standard schedule is $O(1/k)$. Smaller $\beta$ (larger steps toward $z_k$) can be faster initially but introduces more oscillation near the optimum due to the vertex-jumping behaviour.
 
