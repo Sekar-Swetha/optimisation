@@ -356,6 +356,18 @@ Adagrad scales each coordinate by the inverse square root of all past squared gr
 \end{equation}
 This achieves online regret $O(\sqrt{T})$ for convex Lipschitz functions, which is optimal among online algorithms. Crucially, the implicit per-coordinate curvature adaptation mirrors diagonal preconditioning: if coordinate $i$ has consistently large gradients (high effective curvature), its step is suppressed, while sparse or infrequently updated coordinates receive larger steps. The key limitation is that $G_k$ grows monotonically without bound, so $(\alpha_k)_i \to 0$ for all $i$ as $k \to \infty$. This can cause premature stagnation on strongly convex problems where sustained gradient norms prevent adequate final convergence.
 
+\begin{remark}[Adagrad's online regret bound: proof sketch]
+Define the \emph{regret} of an online algorithm producing decisions $x_1, \ldots, x_T$ against a comparator $x^\star \in \mathcal{X}$:
+\[
+  R_T = \sum_{t=1}^T f_t(x_t) - \sum_{t=1}^T f_t(x^\star),
+\]
+where $f_t$ is the loss function revealed at time $t$ (adversarially chosen). Adagrad's regret bound is:
+\[
+  R_T \leq \frac{\|x_1 - x^\star\|^2}{2\alpha_0}\sum_{i=1}^d \sqrt{\sum_{t=1}^T g_{t,i}^2} + \frac{\alpha_0}{2}\sum_{t=1}^T \sum_{i=1}^d \frac{g_{t,i}^2}{\sqrt{\sum_{s=1}^t g_{s,i}^2}}.
+\]
+The second term is bounded using the telescoping inequality $\sum_{t=1}^T x_t/\sqrt{\sum_{s=1}^t x_s} \leq 2\sqrt{\sum_{t=1}^T x_t}$ (for $x_t \geq 0$), giving $R_T \leq O(\sum_{i=1}^d \sqrt{\sum_{t=1}^T g_{t,i}^2}) \leq O(\sqrt{T}\|g\|_{\mathrm{max}}\sqrt{d})$. The key is that the bound depends on the \emph{per-coordinate gradient history} $\sqrt{\sum_{t=1}^T g_{t,i}^2}$ rather than the worst-case maximum, so if some coordinates have small gradients, the bound is tighter than the standard $O(\sqrt{Td})$ from non-adaptive methods. This explains Adagrad's practical advantage in sparse settings (e.g.\ NLP): coordinates with rare features have small $\sum_t g_{t,i}^2$, so they receive larger steps, enabling faster learning of rare patterns.
+\end{remark}
+
 \begin{remark}[Adagrad's vanishing step rate]
 If gradients are bounded $\|(g_k)_i\| \leq G$ for all $k$ and $i$, then $(G_k)_i = \sum_{j=0}^{k-1}(g_j)_i^2 \leq kG^2$, giving effective step $(\alpha_k)_i \geq \alpha_0/(\sqrt{kG^2}+\varepsilon) \approx \alpha_0/(G\sqrt{k})$ for large $k$. The total movement from $k_0$ to $\infty$ is therefore $\sum_{k=k_0}^\infty |x_{k+1}-x_k| \approx \sum_{k=k_0}^\infty \alpha_0/(G\sqrt{k}) = \infty$, so Adagrad \emph{can} still converge. However, the $O(1/\sqrt{k})$ step decay is exactly the $O(1/\sqrt{k})$ convergence rate of non-smooth SGD: if gradient norms are bounded away from zero (the iterate is far from the minimum), the step decays at the same rate as progress, causing stagnation. This is precisely the observed stagnation on Benchmark C (Rosenbrock): after a rapid initial descent, the gradients stabilise at $\|\nabla f(x_k)\| \approx C > 0$, and the effective step decays as $\alpha_0/(C\sqrt{k})$, preventing final convergence. Confirming: with $\alpha_0 = 0.45$ (Benchmark C setting), after 120 iterations the effective step $\approx 0.45/(C\sqrt{120}) \approx 0.04/C$, which for $C \approx 5$ gives $\approx 0.008$ --- much smaller than the initial $\alpha_0 = 0.45$, and too small to make meaningful progress in the Rosenbrock valley.
 \end{remark}
@@ -1298,6 +1310,21 @@ The KKT conditions are necessary for optimality under a \emph{constraint qualifi
 \end{algorithm}
 
 The projection onto $\mathcal{C} = \{x : x_1 \geq 0.5\}$ is simply $\Pi_{\mathcal{C}}(z) = (\max(0.5, z_1),\; z_2)$, a single \texttt{max} operation. For strongly convex $f$ restricted to $\mathcal{C}$, projected GD with step $\alpha \leq 1/L$ achieves linear convergence to $x^\star$.
+
+\begin{remark}[Proximal gradient method: a unifying generalisation]
+Projected GD is a special case of the \emph{proximal gradient method}. For a composite objective $F(x) = f(x) + g(x)$ where $f$ is smooth and $g$ is convex but possibly non-smooth, the proximal gradient update is:
+\[
+  x_{k+1} = \mathrm{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)), \quad \text{where } \mathrm{prox}_{\alpha g}(z) = \arg\min_x \left[g(x) + \frac{1}{2\alpha}\|x - z\|^2\right].
+\]
+Key special cases:
+\begin{itemize}[nosep]
+  \item \textbf{Projected GD}: $g = \iota_{\mathcal{C}}$ (indicator function of $\mathcal{C}$: $g(x) = 0$ if $x \in \mathcal{C}$, $+\infty$ otherwise). Then $\mathrm{prox}_{\alpha g}(z) = \Pi_{\mathcal{C}}(z)$, recovering the projection.
+  \item \textbf{LASSO / $\ell_1$ regularisation}: $g(x) = \lambda\|x\|_1$. Then $\mathrm{prox}_{\alpha g}(z) = \mathrm{sign}(z)\max(|z| - \alpha\lambda, 0)$ (soft thresholding), computable in $O(d)$.
+  \item \textbf{Group LASSO}: $g(x) = \lambda\sum_k \|x_{G_k}\|_2$ (block $\ell_1$). Proximal operator performs block-wise soft thresholding.
+  \item \textbf{Nuclear norm}: $g(X) = \lambda\|X\|_*$. Proximal operator is matrix soft-thresholding on singular values: $\mathrm{prox}_{\alpha g}(Z) = U\mathrm{diag}(\max(\sigma_i - \alpha\lambda, 0))V^T$ (SVD decomposition required, $O(pq\min(p,q))$).
+\end{itemize}
+The proximal gradient method converges at rate $O(1/k)$ for convex $F$ and can be accelerated to $O(1/k^2)$ via FISTA (Beck \& Teboulle, 2009 --- the proximal analogue of Nesterov's method). For our Q5 problem with $g(x) = \lambda\max(0, 0.5-x_1)$ (linear penalty): the proximal operator is a shift-and-clip operation, which is exactly the projection $\Pi_\mathcal{C}$ in the $\lambda \to \infty$ limit.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Penalty Method}
