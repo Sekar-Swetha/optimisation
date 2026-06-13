@@ -271,6 +271,23 @@ achieving the convergence rate $r^{\star} = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$
 \end{equation}
 Our chosen parameters ($\alpha = 0.0008$, $\beta = 0.86$) are more conservative than the quadratic-optimal values, providing additional stability margin for the non-quadratic Rosenbrock geometry. The theoretical optimal rate $r^{\star}_C = 49.08/51.08 \approx 0.961$ per step vs GD's rate $r_{\rm GD,C} = 2507/2509 \approx 0.9992$ represents a $\sim 13\times$ speedup in convergence exponent.
 
+\subsubsection*{Chebyshev Polynomial Connection}
+\label{subsec:chebyshev}
+
+The optimality of the Heavy Ball parameters has a deep algebraic explanation via \textbf{Chebyshev polynomial theory}. For a quadratic $f(x) = \tfrac{1}{2}x^T A x - b^T x$ with $A$ having eigenvalues $\lambda_i \in [\mu, L]$, any linear iterative method produces iterates of the form $e_k := x_k - x^{\star} = P_k(A)\,e_0$, where $P_k$ is a polynomial of degree $k$ with $P_k(0) = 1$ (the constraint $P_k(0) = 1$ ensures that $x^{\star}$ is a fixed point). The convergence rate satisfies:
+\begin{equation}
+\|e_k\| \leq \|P_k(A)\|_2 \cdot \|e_0\| \leq \left(\max_{\lambda \in [\mu, L]} |P_k(\lambda)|\right) \|e_0\|.
+\end{equation}
+The \emph{optimal} polynomial minimising the worst-case amplification over all such $P_k$ with $P_k(0) = 1$ is the degree-$k$ \textbf{Chebyshev polynomial} of the interval $[\mu, L]$:
+\begin{equation}
+P_k^{\star}(\lambda) = \frac{T_k\!\left(\displaystyle\frac{L + \mu - 2\lambda}{L - \mu}\right)}{T_k\!\left(\displaystyle\frac{L + \mu}{L - \mu}\right)}, \quad\text{where}\quad T_k(\xi) = \cos(k \arccos \xi), \quad |\xi| \leq 1.
+\end{equation}
+The minimax value is $\min_{P_k} \max_{\lambda \in [\mu,L]} |P_k(\lambda)| = 1/T_k((L+\mu)/(L-\mu))$. Using the identity $T_k(\xi) \approx \tfrac{1}{2}(\xi + \sqrt{\xi^2-1})^k$ for large $\xi$:
+\begin{equation}
+\frac{1}{T_k\!\left(\frac{L+\mu}{L-\mu}\right)} \approx 2\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k,
+\end{equation}
+which is precisely the Heavy Ball convergence rate. The Heavy Ball method implements the Chebyshev recursion via its two-step update: $T_k$ satisfies the three-term recurrence $T_{k+1}(\xi) = 2\xi\, T_k(\xi) - T_{k-1}(\xi)$, which translates directly to $x_{k+1} = \beta^{\star} x_k - \alpha^{\star} \nabla f(x_k) + (1 - \beta^{\star}) x_{k-1}$. The momentum coefficient $\beta^{\star}$ is thus determined by the need to satisfy the Chebyshev recurrence, not merely as a heuristic for ``using past information''. For Benchmark C, $\xi = (L+\mu)/(L-\mu) = (1001.6 + 0.4)/1001.2 \approx 1.0008$, giving $T_{100}(\xi) \approx 49$, consistent with our empirical convergence improvements.
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1708,6 +1725,19 @@ Polyak step & Yes (C, exact $f^{\star}$) & Known $f^{\star}$ & Fails if $f^{\sta
 \end{table}
 
 For our experiments on Rosenbrock (non-convex), all first-order methods find only local minima or stationary points. The remarkable performance of Nelder--Mead ($f \approx 0$, exact global minimum) is not guaranteed by theory --- it is a consequence of the specific geometry of Rosenbrock at the starting point $x_0 = [-1, 1]^T$: the simplex, by descending towards the valley and then following it, happens to avoid the local minima structure that would trap gradient-based methods. For a generic non-convex function, Nelder--Mead would not be guaranteed to find the global minimum.
+
+\subsubsection*{Saddle Points and Newton's Method}
+
+In non-convex optimisation, critical points $\nabla f(x) = 0$ include not only local minima but also \textbf{saddle points} (the Hessian $\nabla^2 f(x)$ has both positive and negative eigenvalues) and local maxima. The classification follows from the second-order sufficient conditions:
+\begin{itemize}[nosep]
+\item \textbf{Local minimum}: $\nabla f(x) = 0$ and $\nabla^2 f(x) \succ 0$ (all eigenvalues $> 0$).
+\item \textbf{Saddle point}: $\nabla f(x) = 0$ and $\nabla^2 f(x)$ has at least one negative eigenvalue.
+\item \textbf{Local maximum}: $\nabla f(x) = 0$ and $\nabla^2 f(x) \prec 0$ (all eigenvalues $< 0$).
+\end{itemize}
+
+Newton's method finds the nearest critical point, regardless of type: if initialised near a saddle point $x_s$, it converges to $x_s$ at the quadratic rate. Gradient descent with appropriate step size and random initialisation \emph{generically escapes saddle points}: the eigenspace corresponding to negative eigenvalues of $\nabla^2 f(x_s)$ is unstable under GD iteration, so any perturbation in that direction grows, repelling the iterates away from $x_s$. This ``strict saddle'' property means that random initialisation followed by gradient descent almost surely converges to a local minimum (not a saddle or maximum), which is provably the case for a broad class of non-convex objectives including neural networks with certain architectures (Du et al.\ 2019; Lee et al.\ 2016).
+
+For the $d = 2$ Rosenbrock function $f(x_1, x_2) = (1 - x_1)^2 + 100(x_2 - x_1^2)^2$, one can verify that the Hessian at the global minimum $(1,1)$ is $\nabla^2 f(1,1) = \begin{bmatrix}802 & -400 \\ -400 & 200\end{bmatrix}$, with eigenvalues $\approx 4.97$ and $\approx 997$, both positive, confirming it is the unique global minimum with no saddle points in $\mathbb{R}^2$. This explains why all methods that converge (GD, Nesterov, Adam, Newton, Nelder--Mead) converge to the correct answer $(1, 1)$: there are no spurious stationary points to get trapped in. Higher-dimensional Rosenbrock ($d \geq 4$) has been reported to have additional local minima near $(-1, 1, \ldots)$, making global convergence harder to guarantee.
 
 \subsection{Failure Modes: When Each Method Can Break}
 \label{subsec:failure_modes}
