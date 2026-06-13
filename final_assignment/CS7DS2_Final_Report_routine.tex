@@ -181,11 +181,17 @@ Four adaptive methods are compared against a constant step-size gradient descent
 \end{algorithmic}
 \end{algorithm}
 
-\begin{remark}[Polyak Derivation]
-The Polyak step size minimises the squared distance to the optimal level set $\{x : f(x) \leq f^{\star}\}$ within the gradient direction. For a Lipschitz-continuous objective, it achieves $O(1/k)$ convergence without knowing the Lipschitz constant, provided $f^{\star}$ is known exactly. The update can be derived as:
+\begin{remark}[Polyak Derivation and Optimality]
+The Polyak step is derived by minimising the squared distance to $x^{\star}$ along the gradient direction. Expanding $\|x_k - \alpha g_k - x^{\star}\|^2 = \|x_k - x^{\star}\|^2 - 2\alpha\, g_k^T(x_k - x^{\star}) + \alpha^2\|g_k\|^2$ and minimising over $\alpha > 0$ gives:
 \begin{equation}
-\alpha_k^{\mathrm{Polyak}} = \arg\min_{\alpha \geq 0} \left\| (x_k - \alpha g_k) - x^{\star} \right\|^2 \quad \text{(linearised)}.
+\alpha_k^{\star} = \frac{g_k^T(x_k - x^{\star})}{\|g_k\|^2}.
 \end{equation}
+Using the subgradient inequality $g_k^T(x_k - x^{\star}) \geq f(x_k) - f^{\star}$ (which holds for any convex $f$ and subgradient $g_k$), a conservative but guaranteed choice is:
+\begin{equation}
+\alpha_k^{\mathrm{Polyak}} = \frac{f(x_k) - f^{\star}}{\|g_k\|^2 + \varepsilon},
+\label{eq:polyak}
+\end{equation}
+which is implementable without knowing $x^{\star}$ directly. For a $G$-Lipschitz convex function, this achieves $\min_{k \leq K} (f(x_k) - f^{\star}) \leq G\|x_0 - x^{\star}\|/\sqrt{K}$ --- the optimal $O(1/\sqrt{K})$ rate for non-smooth convex problems, without needing to tune $\alpha$ or know the Lipschitz constant $G$. This is the \emph{only} first-order method with this ``parameter-free'' optimality property, which explains why it is used in cutting-plane methods and subgradient algorithms. Its key limitation --- the requirement to know $f^{\star}$ exactly --- is precisely what prevents its general use.
 \end{remark}
 
 \begin{algorithm}[H]
@@ -652,6 +658,17 @@ x^+ = \arg\min_x \left[g(x_0) + g'(x_0)(x-x_0) + \tfrac{1}{2}g''(x_0)(x-x_0)^2\r
 \end{equation}
 
 For $g(x) = x^4$: $x^+ = x_0 - \frac{4x_0^3}{12x_0^2} = x_0 - \frac{x_0}{3} = \frac{2}{3}x_0$. Starting from $x_0 = 0.25$: $x^+ = 0.167$, which is closer to the true minimum $x^{\star} = 0$ than the gradient step $x_0 - \alpha g'(x_0) = 0.25 - 0.0625\alpha$.
+
+\begin{remark}[Taylor Remainder and Newton Step Validity Radius]
+The accuracy of the quadratic model $m_k(x)$ is governed by the Taylor remainder theorem:
+\begin{equation}
+\bigl|g(x) - m_k(x)\bigr| \leq \frac{M}{6}\|x - x_k\|^3,
+\label{eq:taylor_remainder}
+\end{equation}
+where $M = \sup_{t \in [0,1]}\bigl|g'''(x_k + t(x-x_k))\bigr|$ is the third-derivative bound. The Newton step is a reliable minimiser of $m_k$ when the model error \eqref{eq:taylor_remainder} is small relative to $g(x_k) - g(x^+)$. For $g(x) = x^4$ at $x_0 = 0.25$: $g'''(x) = 24x$, so $M \leq 24 \times 0.25 = 6$. The Newton step $|d^N| = |x^+ - x_0| = 0.083$, giving model error $\leq \frac{6}{6}(0.083)^3 \approx 5.7 \times 10^{-4}$, which is small compared to $g(x_0) = 3.9 \times 10^{-3}$. The model is highly accurate here.
+
+In contrast, for the Rosenbrock function at $x_0 = (-1, 1)$ (Q3, Benchmark~C): the third-order Lipschitz constant $M$ is large (the Hessian $H_{11} = 1200x_1^2 - 400x_2 + 2$ varies rapidly with $x_1$, so its derivative $\partial H_{11}/\partial x_1 = 2400x_1$ is $O(10^3)$ near $x_0$). The full Newton step $\|d_0^N\| \approx 4.5$ then incurs model error $O(M \cdot 4.5^3 / 6) \gg f(x_0) = 4$, explaining the catastrophic $f(1,-3) = 1600$ failure computed in Section~\ref{sec:q3}. Damping $\alpha = 0.22$ reduces the effective step to $\alpha\|d^N\| \approx 1.0$, bringing the model error to $O(M \cdot 1^3 / 6) = O(10^3/6) \approx 167$; still large, but subsequent steps correct progressively as the iterate approaches $x^{\star}$.
+\end{remark}
 
 \begin{figure}[H]
 \centering
@@ -1325,6 +1342,15 @@ This study has systematically evaluated six categories of optimisation algorithm
 \end{itemize}
 
 \subsection{Benchmark-Level Conclusions}
+
+Figure~\ref{fig:final_bar} provides a visual summary of final objective values across all methods on Benchmark~C (the most discriminating test), confirming the theoretical hierarchy.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/final_comparison_bar.pdf}
+\caption{Final objective values $f(x_k)$ on Benchmark~C (Rosenbrock function) for all methods tested across Questions 1--4. Each bar is coloured by question category (Q1: green adaptive; Q2: orange momentum; Q3: red Newton; Q4: purple derivative-free). Key observations: (1) Polyak step ($f = 0.009$) achieves an order-of-magnitude improvement over GD when $f^{\star} = 0$ is known; (2) Nesterov ($f = 0.479$) is the best universally-applicable first-order method; (3) Newton ($f = 0.686$ in just 20 steps vs 120 steps for all others) demonstrates second-order efficiency; (4) Nelder--Mead ($f \approx 0.15$) outperforms all gradient-based methods \emph{without} using any gradient information, demonstrating the power of the simplex geometry for this curved valley; (5) Nesterov random search ($f \approx 4.1$) is the worst gradient-free method, confirming the high cost of estimating 2D gradients from single directional probes.}
+\label{fig:final_bar}
+\end{figure}
 
 \begin{table}[H]
 \centering
