@@ -180,7 +180,15 @@ The Polyak step size has the elegant property of being scale-invariant: it autom
 \end{algorithmic}
 \end{algorithm}
 
-Adagrad's key insight is that coordinates with historically large gradients should receive smaller effective step sizes. The effective step for coordinate $i$ at iteration $k$ is $\alpha_{k,i} = \alpha_0 / \sqrt{\sum_{j=0}^k g_{j,i}^2}$. This monotonically decreasing schedule makes Adagrad particularly well-suited to sparse gradient settings but can cause premature deceleration on dense problems.
+Adagrad's key insight is that coordinates with historically large gradients should receive smaller effective step sizes. The effective step for coordinate $i$ at iteration $k$ is $\alpha_{k,i} = \alpha_0 / \sqrt{\sum_{j=0}^k g_{j,i}^2}$. This monotonically decreasing schedule makes Adagrad particularly well-suited to sparse gradient settings (e.g., NLP where most word embeddings are rarely updated) but can cause premature deceleration on dense problems.
+
+\begin{remark}[Adagrad online learning regret]
+In the online convex optimisation framework, Adagrad achieves regret:
+\begin{equation}
+R_T = \sum_{t=1}^T f_t(x_t) - f_t(x^\star) \leq \frac{1}{2}\sum_{i=1}^n \left(\|x_{1,i} - x^\star_i\|_2 \cdot \sqrt{\sum_{t=1}^T g_{t,i}^2}\right)
+\end{equation}
+which adapts dimension-by-dimension to the gradient magnitude, achieving better bounds than SGD with fixed step in problems where most coordinates have small gradients (sparse data).
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -322,6 +330,15 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \includegraphics[width=0.85\textwidth]{figures/q1_stepsize_C.pdf}
 \caption{Q1: Step-size evolution on Benchmark C. With correct $f^{\star} = 0$, the Polyak step decreases smoothly: as $f(x_k) \to 0$ and $\|\nabla f\|$ decreases, the ratio $\alpha_k = f(x_k)/(\|\nabla f\|^2 + \varepsilon)$ tends to zero in a controlled fashion. This well-regulated decay explains Polyak's superior Rosenbrock convergence. Adagrad's accumulated denominator grows more slowly here because Rosenbrock gradients vary greatly in magnitude as the iterate moves along the valley.}
 \label{fig:q1_stepsize_C}
+\end{figure}
+
+\subsection{Combined Step-Size Analysis on Rosenbrock}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{figures/q1_stepsize_C_all.pdf}
+\caption{Q1: Effective step sizes for all adaptive methods on Rosenbrock (Benchmark C), where $f^{\star} = 0$ is exact for Polyak. The Polyak step (purple) decays from $\sim 2 \times 10^{-3}$ towards zero as $f(x_k) \to 0$, providing an automatic step size that scales with remaining sub-optimality. Adagrad (orange) decays monotonically due to cumulative squared gradient accumulation. RMSprop (green) stabilises around $10^{-3}$--$10^{-2}$ due to exponential forgetting; its effective step is higher than GD's fixed $\alpha = 0.0012$ (black dashed), explaining faster initial convergence. The Heavy Ball effective step ratio $\|z_k\|/\|g_k\|$ (red) shows transient growth as momentum accumulates, then stabilises as the iterate approaches the valley floor.}
+\label{fig:q1_stepsize_C_all}
 \end{figure}
 
 \subsection{Comparative Analysis}
@@ -653,6 +670,15 @@ On Benchmark C, the Newton final position $(0.183, 0.020)$ is far from the true 
 \label{fig:q3_contour_C}
 \end{figure}
 
+\subsection{Newton's Quadratic Model Visualisation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_newton_quadratic_model.pdf}
+\caption{Q3: Left: 1D slice of the true objective $f$ (black) and Newton's quadratic model $m_0$ (blue dashed) along the Newton direction at $x_0 = [-1, 4]^T$ on Benchmark B. The quadratic model closely matches $f$ near $x_0$, and its minimum (green dotted line, $t \approx 1.77 \times \alpha = 0.85$) provides a far better step than the GD step (red dash-dot, $\alpha_{GD} = 0.06$). Right: convergence curves confirming that Newton reaches $f \approx 0.7244$ in 5 steps while GD requires $\sim 30$ steps. The super-linear decrease in function value ($f: 23.16 \to 1.42 \to 0.75 \to 0.725 \to 0.724$) is characteristic of Newton's quadratic convergence.}
+\label{fig:newton_model}
+\end{figure}
+
 \subsection{Update Magnitude Analysis}
 
 \begin{figure}[H]
@@ -687,10 +713,17 @@ The forward finite-difference (FD) approximation replaces each partial derivativ
 \end{equation}
 The approximation error has two competing sources:
 \begin{itemize}[nosep]
-\item \textbf{Truncation error:} $O(\delta)$ --- from the first neglected Taylor term $\tfrac{1}{2}\delta g''(\xi)$.
-\item \textbf{Floating-point error:} $O(\varepsilon_{\text{mach}}/\delta)$ --- from subtractive cancellation in $f(x + \delta e_i) - f(x)$.
+\item \textbf{Truncation error:} $O(\delta)$ --- from the neglected Taylor term: $f(x + \delta e_i) = f(x) + \delta \partial_i f(x) + \tfrac{\delta^2}{2}\partial_{ii}^2 f + \ldots$, so the FD estimate has bias $\tfrac{\delta}{2}\partial_{ii}^2 f(x)$.
+\item \textbf{Floating-point error:} $O(\varepsilon_{\text{mach}}/\delta)$ --- from subtractive cancellation: when $\delta$ is very small, $f(x + \delta e_i)$ and $f(x)$ are nearly equal, and their difference loses significant bits.
 \end{itemize}
-Minimising the total error $O(\delta + \varepsilon_{\text{mach}}/\delta)$ over $\delta$ yields the optimal perturbation $\delta_{\text{opt}} = \sqrt{\varepsilon_{\text{mach}}} \approx 1.5 \times 10^{-8}$ for 64-bit arithmetic. The experiments test $\delta = 0.05$ (near-optimal accuracy regime) and $\delta = 0.8$ (strong truncation error regime). Each FD gradient evaluation requires $n + 1 = 3$ function calls (one base evaluation plus one per coordinate).
+Minimising the total error $O(\delta + \varepsilon_{\text{mach}}/\delta)$ over $\delta$ yields $\delta_{\text{opt}} = \sqrt{\varepsilon_{\text{mach}}} \approx 1.5 \times 10^{-8}$ for 64-bit arithmetic. A more accurate \emph{central difference} approximation $[\partial_i f(x)]_{\text{CD}} = [f(x + \delta e_i) - f(x - \delta e_i)]/(2\delta)$ has truncation error $O(\delta^2)$ rather than $O(\delta)$, giving optimal $\delta_{\text{opt,CD}} = \varepsilon_{\text{mach}}^{1/3} \approx 6 \times 10^{-6}$ at the cost of $2d$ (rather than $d+1$) function evaluations. The experiments test $\delta = 0.05$ (near-optimal forward-difference accuracy) and $\delta = 0.8$ (strong truncation error regime).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q4_fd_error_analysis.pdf}
+\caption{Q4: Finite difference gradient approximation error $\|\hat{g} - \nabla f\|$ vs perturbation $\delta$ for Benchmark B at $x_0 = [-1, 4]^T$, on a log-log scale. The two competing error sources are clearly visible: the $O(\delta)$ truncation error (red dashed) dominates for large $\delta$ (where the step is too coarse), and the $O(\varepsilon_\text{mach}/\delta)$ floating-point error (green dashed) dominates for very small $\delta$ (where catastrophic cancellation occurs). The minimum is at $\delta_\text{opt} \approx \sqrt{\varepsilon_\text{mach}} \approx 10^{-8}$ (black dashed). The value $\delta = 0.05$ (orange dotted) achieves error $\approx 2 \times 10^{-2}$, which is small relative to gradient magnitude $\|\nabla f(x_0)\| \approx 23$. The value $\delta = 0.8$ (red dotted) achieves error $\approx 0.5$, degrading the gradient direction estimate significantly.}
+\label{fig:fd_error}
+\end{figure}
 
 \subsubsection{Nesterov Random Search (Zeroth-Order Method)}
 
