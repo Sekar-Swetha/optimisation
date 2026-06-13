@@ -14,6 +14,8 @@
 \usepackage{listings}
 \usepackage{fancyhdr}
 \usepackage{microtype}
+\usepackage{array}
+\usepackage{multirow}
 
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
 
@@ -217,7 +219,11 @@ Four adaptive methods are compared against a constant step-size gradient descent
 \end{algorithmic}
 \end{algorithm}
 
-Adagrad scales each coordinate by the inverse square root of all past squared gradients. Coordinates with historically large gradients receive smaller effective step sizes, implementing automatic coordinate-wise learning rate decay. This achieves online regret $O(\sqrt{T})$ for convex Lipschitz functions, optimal among online algorithms. The key limitation is that $G_k \to \infty$ monotonically, so the effective step size vanishes: $\alpha_0/\sqrt{G_k} \to 0$. This can cause premature stagnation on non-stationary or strongly convex problems.
+Adagrad scales each coordinate by the inverse square root of all past squared gradients. Coordinates with historically large gradients receive smaller effective step sizes, implementing automatic coordinate-wise learning rate decay. Formally, the effective step at iteration $k$ for coordinate $i$ is:
+\begin{equation}
+  (\alpha_k)_i = \frac{\alpha_0}{\sqrt{(G_k)_i} + \varepsilon}, \quad (G_k)_i = \sum_{j=0}^{k-1} (g_j)_i^2.
+\end{equation}
+This achieves online regret $O(\sqrt{T})$ for convex Lipschitz functions, which is optimal among online algorithms. Crucially, the implicit per-coordinate curvature adaptation mirrors diagonal preconditioning: if coordinate $i$ has consistently large gradients (high effective curvature), its step is suppressed, while sparse or infrequently updated coordinates receive larger steps. The key limitation is that $G_k$ grows monotonically without bound, so $(\alpha_k)_i \to 0$ for all $i$ as $k \to \infty$. This can cause premature stagnation on strongly convex problems where sustained gradient norms prevent adequate final convergence.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -385,7 +391,11 @@ For an $L$-smooth convex function $f$, Nesterov's accelerated gradient method wi
 This $O(1/k^2)$ rate is optimal for first-order methods on smooth convex functions.
 \end{theorem}
 
-For a strongly convex function with condition number $\kappa$, momentum methods can achieve a linear rate with factor $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ per iteration, compared to $(\kappa-1)/(\kappa+1)$ for GD. For large $\kappa$, this is a substantial improvement: $(\sqrt{2504}-1)/(\sqrt{2504}+1) \approx 0.96$ vs GD's $(\kappa-1)/(\kappa+1) \approx 0.9992$.
+For a strongly convex function with condition number $\kappa$, momentum methods can achieve a linear rate with factor $r_{\mathrm{Nesterov}} = (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ per iteration, compared to $r_{\mathrm{GD}} = (\kappa-1)/(\kappa+1)$ for gradient descent. For large $\kappa$:
+\begin{equation}
+  r_{\mathrm{Nesterov}} = \frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1} \approx 1 - \frac{2}{\sqrt{\kappa}}, \qquad r_{\mathrm{GD}} \approx 1 - \frac{2}{\kappa}.
+\end{equation}
+The number of iterations to reduce the error by factor $\epsilon^{-1}$ is $O(\sqrt{\kappa}\log(1/\epsilon))$ for Nesterov vs $O(\kappa\log(1/\epsilon))$ for GD. For $\kappa = 2504$, Nesterov requires $\sqrt{2504} \approx 50\times$ fewer iterations than GD for the same accuracy. In practice on Benchmark C (150 iterations), Nesterov reaches $f = 0.479$ vs GD's $f = 3.388$, consistent with a meaningful acceleration despite the non-convex nature of the Rosenbrock function away from its minimum.
 
 \subsection{Algorithm Formulations}
 
@@ -522,7 +532,17 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 \end{algorithmic}
 \end{algorithm}
 
-The mini-batch gradient is an unbiased estimate of the full gradient: $\mathbb{E}[g_{\mathcal{B}}] = \nabla J(\theta)$. Its variance is $\mathbb{V}[g_{\mathcal{B}}] = \sigma^2_g / b$, where $\sigma^2_g$ is the per-sample gradient variance. A smaller batch $b$ means more updates per epoch but higher gradient variance, while a larger $b$ gives lower-variance estimates but fewer updates per epoch.
+The mini-batch gradient is an unbiased estimate of the full gradient: $\mathbb{E}[g_{\mathcal{B}}] = \nabla J(\theta)$. Its variance is $\mathbb{V}[g_{\mathcal{B}}] = \sigma^2_g / b$, where $\sigma^2_g$ is the per-sample gradient variance. A smaller batch $b$ gives more updates per epoch (each update costs less) but higher gradient variance; a larger $b$ provides lower-variance estimates at the cost of fewer updates per epoch.
+
+\begin{proposition}[SGD convergence to neighbourhood]\label{prop:sgd}
+For an $L$-smooth strongly convex objective with batch size $b$ and step size $\alpha \leq 1/L$, SGD satisfies
+\[
+  \mathbb{E}[f(\theta_k) - f^\star] \;\leq\; (1 - \alpha\mu)^k (f(\theta_0) - f^\star) + \frac{\alpha L \sigma^2_g}{2\mu b},
+\]
+where $\sigma^2_g$ is the per-sample gradient variance. The iterates converge linearly to a neighbourhood of size $O(\alpha \sigma^2_g / b)$ around $f^\star$. Larger batch $b$ shrinks this neighbourhood; smaller step $\alpha$ also shrinks it but slows convergence.
+\end{proposition}
+
+This explains the noise-floor phenomenon observed in Fig.~\ref{fig:q2_sgd_noisy}: increasing $\sigma$ raises $\sigma^2_g \propto \sigma^2$, directly expanding the irreducible noise floor that SGD converges to.
 
 \begin{figure}[H]
 \centering
@@ -663,15 +683,15 @@ Note: Newton uses a full step ($\alpha = 1.0$) only for Benchmark A (pure quadra
 
 \begin{table}[H]
 \centering
-\caption{Q3: Final objective values and converged positions after the specified iteration budgets.}
+\caption{Q3: Final objective values and converged positions. Newton achieves equal or better accuracy with 4$\times$ fewer iterations on A and B, and dramatically better accuracy on C.}
 \label{tab:q3_final}
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Benchmark} & \textbf{GD $f$ (80 it.)} & \textbf{Newton $f$ (20 it.)} & \textbf{Newton final $x$} & \textbf{Speed gain} \\
+\textbf{Benchmark} & \textbf{GD $f$ (80 it.)} & \textbf{Newton $f$ (20 it.)} & \textbf{Newton final $x$} & \textbf{Improvement} \\
 \midrule
-A & 0.4827 & 0.4826 & $(3.028,\; 4.017)$ & $\sim$80$\times$ (1 iter) \\
-B & 0.7244 & 0.7244 & $(0.582,\; 2.000)$ & $\sim$16$\times$ \\
-C & 3.7319 & 0.6864 & $(0.183,\; 0.020)$ & substantial \\
+A & 0.4827 & \textbf{0.4826} & $(3.028,\; 4.017)$ & Exact in 1 step \\
+B & 0.7244 & \textbf{0.7244} & $(0.582,\; 2.000)$ & ${\sim}4\times$ fewer steps \\
+C & 3.7319 & \textbf{0.6864} & $(0.183,\; 0.020)$ & $5.4\times$ lower $f$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -703,7 +723,17 @@ C & 3.7319 & 0.6864 & $(0.183,\; 0.020)$ & substantial \\
 
 \subsection{Computational Cost Comparison}
 
-Newton's method has a higher per-iteration cost than gradient descent: computing and solving the Hessian system requires $O(d^2)$ memory and $O(d^3)$ operations for Gaussian elimination, versus $O(d)$ for a gradient step. For $d = 2$ these differences are negligible, but for large-scale $d$ (e.g.\ neural networks with millions of parameters), exact Newton is impractical and quasi-Newton methods (L-BFGS) or Gauss-Newton approximations are used instead. Nevertheless, for small $d$, Newton's dramatically fewer iterations (1 vs 80 for Benchmark A) makes it highly efficient in practice.
+Newton's method has a higher per-iteration cost than gradient descent:
+\begin{itemize}[nosep]
+\item \textbf{GD}: $O(d)$ for gradient computation, $O(d)$ for the update step.
+\item \textbf{Newton}: $O(d^2)$ for Hessian storage, $O(d^2)$ for Hessian computation, $O(d^3)$ for solving $H_k p_k = g_k$ via Gaussian elimination (or $O(d^2)$ for triangular systems after Cholesky factorisation).
+\end{itemize}
+For $d = 2$ these differences are negligible, and Newton's 1 iteration versus GD's 80 gives an $80\times$ reduction in total work. For large-scale problems ($d \sim 10^6$--$10^9$ in deep learning), exact Newton is impractical due to $O(d^2)$ storage and $O(d^3)$ solve cost. Practical alternatives include:
+\begin{itemize}[nosep]
+\item \textbf{L-BFGS}: Approximates $H_k^{-1}$ using the last $m$ gradient differences, with $O(md)$ storage and $O(md)$ solve cost per step.
+\item \textbf{Gauss-Newton}: Approximates the Hessian of a least-squares objective as $J^TJ$ (where $J$ is the Jacobian), avoiding second-order derivatives entirely.
+\item \textbf{Hessian-free Newton (truncated CG)}: Solves the Newton system inexactly using conjugate gradient, requiring only Hessian-vector products (computable in $O(d)$ via automatic differentiation) rather than the full Hessian.
+\end{itemize}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -793,22 +823,32 @@ Grid search evaluates the objective on a uniform $55 \times 55 = 3025$-point gri
 
 \begin{table}[H]
 \centering
-\caption{Q4: Comparison of methods in terms of oracle type, evaluations per iteration, and scalability. $d$ = problem dimension.}
+\caption{Q4: Comparison of methods. ``FE/iter'' counts the number of objective function evaluations per iteration; for gradient methods this is equivalent to one backward pass via automatic differentiation. $d$ = problem dimension; $N$ = grid points per dimension for grid search.}
 \label{tab:q4_comparison}
 \begin{tabular}{lccccc}
 \toprule
-\textbf{Method} & \textbf{Oracle} & \textbf{FE/iter} & \textbf{Scalability ($d$)} & \textbf{Convergence} & \textbf{Accuracy} \\
+\textbf{Method} & \textbf{Oracle} & \textbf{FE/iter} & \textbf{Scales in $d$?} & \textbf{Convergence rate} & \textbf{Accuracy} \\
 \midrule
-Exact GD & Gradient & $d+1$* & Good & Linear & High \\
-FD GD ($\delta$ small) & Function & $d+1$ & Moderate & Linear & High \\
-FD GD ($\delta$ large) & Function & $d+1$ & Moderate & Linear & Low \\
-Nesterov Random & Function & 2 & \textbf{Best} & Sublinear & Low \\
-Nelder--Mead & Function & $\leq 3$ & Poor ($d \leq 5$) & None (theoretical) & Moderate \\
-Grid search & Function & $N^d$ total & Very poor & None & Grid-limited \\
+Exact GD & Gradient & 1 (auto-diff) & Yes & $O((1-\mu/L)^k)$ linear & High \\
+FD GD ($\delta$ small) & Function & $d+1$ & Yes (moderate) & Same as GD & High \\
+FD GD ($\delta$ large) & Function & $d+1$ & Yes (moderate) & Degraded & Low \\
+Nesterov Random & Function & 2 & \textbf{Best} & $O(1/\sqrt{k})$ sublinear & Low-moderate \\
+Nelder--Mead & Function & $\leq n+1$ & Poor ($d \leq 5$) & Not guaranteed ($d\geq2$) & Moderate \\
+Grid search & Function & $N^d$ total & Very poor & $O(1/N)$ grid resolution & Grid-limited \\
 \bottomrule
 \end{tabular}
 \end{table}
-\footnotesize{* $d+1$ function evaluations if gradients are not provided analytically; 1 gradient evaluation (equivalent to 1 backward pass) for automatic differentiation.}
+
+\subsection{Oracle Efficiency: Convergence per Function Evaluation}
+
+A critical but often overlooked metric in derivative-free optimisation is \emph{oracle efficiency}: how much progress is made per function evaluation rather than per iteration. Since some methods require many more evaluations per iteration ($d+1$ for FD GD), a per-iteration comparison can be misleading.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/q4_fe_comparison.pdf}
+\caption{Q4: Convergence vs cumulative function evaluations on Benchmark B. Exact GD (1 FE/iter) converges fastest per evaluation. FD GD with $\delta=0.05$ (3 FE/iter) is slightly slower per evaluation than exact GD due to the 3$\times$ evaluation overhead, but still converges well. Nesterov random search (2 FE/iter) can evaluate up to 330 iterations within the 660 FE budget, but each iteration provides only a 1D directional derivative estimate rather than the full 2D gradient. FD GD with $\delta=0.8$ performs poorly regardless of the evaluation budget due to the large truncation error corrupting the gradient direction.}
+\label{fig:q4_fe_comparison}
+\end{figure}
 
 \subsection{Discussion: When to Use Derivative-Free Methods}
 
@@ -917,7 +957,13 @@ Penalty $\lambda=4.5$ ($\alpha=0.03$) & $(0.583,\;2.000)$ & $0.7244$ & $\approx 
 
 \textbf{Projected GD} enforces feasibility as a hard constraint at every iteration via the projection operator. The key advantages are: (1) the iterates are always feasible, allowing early stopping with a feasible solution; (2) the method inherits the same convergence rate as unconstrained GD on the restricted objective. The cost is requiring a projection oracle; for simple constraint sets like half-spaces, this is a $O(1)$ operation, but for semidefinite or combinatorial constraint sets, projection can be as hard as the original problem.
 
-\textbf{Penalty methods} trade exact feasibility for simplicity: only the gradient of $F_\lambda = f + \lambda\max(0, g)$ is needed. Increasing $\lambda$ improves accuracy but: (1) requires smaller step sizes (larger penalty term makes $F_\lambda$ less smooth); (2) creates a badly conditioned landscape for very large $\lambda$. The linear penalty used here is non-smooth at $x_1 = 0.5$ (the gradient is discontinuous), which can cause oscillation of penalty-method iterates near the boundary. A \emph{quadratic} penalty $\lambda\max(0, g)^2$ is smoother but converges more slowly in $\lambda$.
+\textbf{Penalty methods} trade exact feasibility for implementation simplicity: only the gradient of $F_\lambda = f + \lambda\max(0, g)$ is needed. Increasing $\lambda$ improves accuracy but introduces two competing issues. First, larger $\lambda$ makes $F_\lambda$ less smooth: the linear penalty $\lambda\max(0, g)$ is not differentiable at $g = 0$ (i.e.\ at the constraint boundary $x_1 = 0.5$), so subgradient methods are required and smaller step sizes are needed for stability. Second, for very large $\lambda$, the condition number of the penalised problem grows, slowing the gradient method's convergence rate. The resulting trade-off requires careful $\lambda$ tuning: too small gives infeasible solutions; too large creates a stiff problem requiring tiny steps.
+
+A \emph{quadratic penalty} $F_\lambda(x) = f(x) + \lambda\max(0, g(x))^2$ is smooth (differentiable everywhere) and better conditioned, but requires $\lambda \to \infty$ more slowly to achieve high accuracy. The \emph{augmented Lagrangian method} (ALM) improves on both by maintaining dual variables $\nu_k$ and solving a sequence of problems:
+\[
+  x_{k+1} = \arg\min_x\; f(x) + \nu_k g(x) + \frac{\lambda}{2}\max(0, g(x))^2,
+\]
+with $\nu_{k+1} = \nu_k + \lambda \max(0, g(x_{k+1}))$. ALM achieves exact feasibility with bounded $\lambda$, avoiding the ill-conditioning of pure penalty approaches.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1028,7 +1074,9 @@ Boundary & 0.93 & $(0.500,\; {-}0.337)$ & 0.3637 & 0.25 \\
 
 \textbf{Interior optimum:} Frank--Wolfe exhibits the characteristic zig-zag convergence where $z_k$ oscillates between opposite vertices of $\mathcal{X}$. The $O(1/k)$ convergence rate (with decaying step sizes, Theorem~\ref{thm:fw}) is slower than projected gradient descent's linear rate. In practice for interior optima, projected gradient descent is preferred when projection is cheap.
 
-\textbf{Boundary optimum:} Frank--Wolfe is better suited than interior-case analysis suggests. The LP oracle naturally selects the vertex closest to the direction of the constrained optimum, and the iterates approach the boundary vertex monotonically. For constraint sets where boundary optima are common (e.g.\ $\ell_1$ ball constraints promoting sparsity, trace-norm ball constraints promoting low-rank solutions), Frank--Wolfe is a preferred algorithm because the LP oracle is cheap and the boundary-vertex attraction provides implicit regularisation.
+\textbf{Boundary optimum:} Frank--Wolfe is particularly well suited to boundary optima because the LP oracle naturally selects the vertex closest to the direction of the constrained optimum, guiding iterates toward the boundary. For constraint sets where boundary optima are common --- $\ell_1$ balls promoting sparsity, trace-norm balls promoting low rank, or flow polytopes in network optimisation --- Frank--Wolfe is preferred because: (1) the LP oracle is cheap and exploits problem structure; (2) the boundary-vertex attraction provides implicit regularisation (sparse solutions emerge naturally); and (3) no projection is required.
+
+\textbf{Frank--Wolfe gap as a stopping criterion:} The Frank--Wolfe gap $h_k = g_k^T (x_k - z_k)$ is computed for free at each iteration and provides a valid upper bound on the primal gap: $f(x_k) - f^\star \leq h_k$. This gives a practical, anytime stopping criterion --- halt when $h_k \leq \epsilon$ for desired accuracy $\epsilon$. In contrast, projected gradient descent requires an estimate of $f^\star$ or a separate dual certificate for such a guarantee.
 
 \textbf{Practical recommendation:} The decaying step-size schedule $\gamma_k = 2/(k+2)$ should be preferred over fixed $\beta$ for convergence guarantees. In our boundary case, the fixed $\beta = 0.93$ leaves a gap $f = 0.364$ vs $f^\star = 0.25$ that would be closed by allowing smaller steps in later iterations.
 
@@ -1064,6 +1112,39 @@ Nelder--Mead & 160 & --- & --- & $<$3.5 & No \\
 \end{tabular}
 \end{table}
 
+\subsection{Master Convergence Comparison on Benchmark C}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/master_comparison_C.pdf}
+\caption{Master convergence comparison: all investigated first-order and second-order methods on Benchmark C (Rosenbrock, $\kappa \approx 2504$), run for 150 iterations. Newton's method is shown for its active 20 iterations and then extrapolated at the final value. The ranking clearly reflects the theoretical predictions: (1)~Polyak (with correct $f^\star = 0$) achieves the best first-order performance; (2)~Nesterov $O(1/k^2)$ acceleration outperforms GD's $O(1/k)$; (3)~Adam and Heavy Ball occupy intermediate positions; (4)~GD makes the least progress among first-order methods due to the stringent step-size constraint $\alpha < 2/L \approx 0.002$; (5)~Newton dominates all first-order methods by exploiting Hessian curvature information to step along the valley regardless of the extreme condition number.}
+\label{fig:master_C}
+\end{figure}
+
+\subsection{Convergence Rates Summary}
+
+\begin{table}[H]
+\centering
+\caption{Theoretical convergence rates of investigated methods for $L$-smooth $\mu$-strongly convex objectives (condition number $\kappa = L/\mu$). Rates are per-iteration unless noted. ``FE'' = function evaluations per iteration. ``GD rate'' denotes the baseline gradient descent rate.}
+\label{tab:rates}
+\small
+\begin{tabular}{llcc}
+\toprule
+\textbf{Method} & \textbf{Rate (objective gap)} & \textbf{Regime} & \textbf{FE/iter} \\
+\midrule
+Gradient Descent & $(1 - 1/\kappa)^k \cdot \Delta_0$ & SC, $L$-smooth & 1 \\
+Polyak step & $(1 - 1/\kappa)^k \cdot \Delta_0$ (known $f^\star$) & SC, $L$-smooth & 1 \\
+Nesterov accel. & $2L\|x_0-x^\star\|^2/(k+1)^2$ & Convex, $L$-smooth & 1 \\
+Nesterov accel. & $(1 - 1/\sqrt{\kappa})^k \cdot \Delta_0$ & SC, $L$-smooth & 1 \\
+Heavy Ball & $(1 - 1/\sqrt{\kappa})^k \cdot \Delta_0$ (optimal) & SC quadratic only & 1 \\
+Newton & $C\|x_k - x^\star\|^2$ (quadratic) & Local, $C^2$ & $O(d^3)$ \\
+FD Gradient & Same as GD (up to $O(\delta)$ error) & SC, $L$-smooth & $d+1$ \\
+Nesterov Random & $O(d/\sqrt{k})$ (zeroth-order) & Convex, $L$-smooth & 2 \\
+Frank--Wolfe & $2LD^2/(k+2)$ & Convex, $L$-smooth, compact $\mathcal{X}$ & $O(d)$ (LP) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Key Conclusions}
 
 \textbf{Benchmark A (quadratic, $\kappa \approx 1$):} All gradient methods converge to the same floor $J^\star \approx 0.4826$; Newton reaches it in one step. The near-unit condition number makes this benchmark easy for all first-order methods.
@@ -1091,6 +1172,34 @@ For data science practitioners:
 \item For black-box objectives: \textbf{Nelder--Mead} (low dimension), \textbf{Nesterov random search} (high dimension, parallel budget).
 \item For linearly constrained problems: \textbf{Frank--Wolfe} when the LP oracle is cheap; \textbf{projected gradient descent} otherwise.
 \end{itemize}
+
+% ============================================================
+\newpage
+\section*{References}
+\addcontentsline{toc}{section}{References}
+% ============================================================
+
+\begin{enumerate}[label={[\arabic*]},leftmargin=*]
+\item Nesterov, Y. (1983). A method for solving a convex programming problem with convergence rate $O(1/k^2)$. \textit{Soviet Mathematics Doklady}, 27(2):372--376.
+
+\item Polyak, B.~T. (1964). Some methods of speeding up the convergence of iteration methods. \textit{USSR Computational Mathematics and Mathematical Physics}, 4(5):1--17.
+
+\item Duchi, J., Hazan, E., \& Singer, Y. (2011). Adaptive subgradient methods for online learning and stochastic optimization. \textit{Journal of Machine Learning Research}, 12:2121--2159. \textit{[Adagrad]}
+
+\item Kingma, D.~P. \& Ba, J. (2015). Adam: A method for stochastic optimization. \textit{ICLR 2015}. arXiv:1412.6980.
+
+\item Frank, M. \& Wolfe, P. (1956). An algorithm for quadratic programming. \textit{Naval Research Logistics Quarterly}, 3(1--2):95--110.
+
+\item Jaggi, M. (2013). Revisiting Frank-Wolfe: Projection-free sparse convex optimization. \textit{Proceedings of the 30th ICML}, PMLR 28(1):427--435.
+
+\item Nelder, J.~A. \& Mead, R. (1965). A simplex method for function minimization. \textit{The Computer Journal}, 7(4):308--313.
+
+\item Boyd, S. \& Vandenberghe, L. (2004). \textit{Convex Optimization}. Cambridge University Press. \url{https://web.stanford.edu/~boyd/cvxbook/}
+
+\item Bottou, L., Curtis, F.~E., \& Nocedal, J. (2018). Optimization methods for large-scale machine learning. \textit{SIAM Review}, 60(2):223--311.
+
+\item Nesterov, Y. (2018). \textit{Lectures on Convex Optimization} (2nd ed.). Springer.
+\end{enumerate}
 
 % ============================================================
 \newpage
