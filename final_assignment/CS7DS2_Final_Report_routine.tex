@@ -255,6 +255,24 @@ Theory requires $\alpha \leq 2/(\mu + L) \approx 1/L$ for guaranteed convergence
 The fact that Benchmark C requires steps $\approx 1000\times$ smaller than Benchmark A, despite all three functions having the same gradient descent update formula, is the key reason for the dramatically different number of effective steps in 120 iterations.
 \end{remark}
 
+\begin{remark}[Armijo backtracking line search]
+When $L$ is unknown, the \emph{Armijo backtracking} procedure eliminates the need to specify $\alpha$ in advance. Starting from a trial step $\alpha_0$ (e.g.\ $\alpha_0 = 1$), the algorithm halves $\alpha \leftarrow c\alpha$ (with $c \in (0,1)$, typically $c = 0.5$) until the \emph{sufficient decrease condition} (Armijo condition) is satisfied:
+\[
+  f(x_k - \alpha \nabla f(x_k)) \leq f(x_k) - \rho\alpha \|\nabla f(x_k)\|^2
+\]
+for a constant $\rho \in (0, 0.5)$ (typically $\rho = 10^{-4}$). This condition ensures that $f$ decreases by at least a fixed fraction of the prediction from the linear model. The number of halvings is at most $\lceil \log_c(1/(L\alpha_0)) \rceil$ before the stable range $\alpha \leq 1/L$ is reached, so the line search terminates in $O(\log(L\alpha_0))$ extra function evaluations per iteration. The Armijo condition combined with the Wolfe curvature condition $|\nabla f(x_{k+1})^T d_k| \leq \beta_W |\nabla f(x_k)^T d_k|$ (ensuring progress along the direction $d_k$) yields the \emph{strong Wolfe conditions} used in L-BFGS. In our experiments, fixed step sizes are used because $L$ is estimated from the Hessian; backtracking is most useful in practice when the global Lipschitz constant greatly overestimates the local curvature (a common scenario on Benchmark C, where $L$ varies from $\approx 1202$ at the start to $\approx 1001$ at the optimum).
+\end{remark}
+
+\begin{remark}[Diagonal preconditioning: bridge between GD and Newton]
+For a quadratic $f(x) = \frac{1}{2}x^THx - b^Tx$ with $H = \mathrm{diag}(\lambda_1, \ldots, \lambda_d)$ (diagonal Hessian), the optimal preconditioned gradient step is
+\[
+  x_{k+1} = x_k - P^{-1}\nabla f(x_k), \quad P = H = \mathrm{diag}(\lambda_1, \ldots, \lambda_d),
+\]
+which gives $x_1 = x^\star$ in one step --- exactly Newton's method. The key insight: \emph{preconditioning transforms a poorly conditioned problem into a well-conditioned one} by changing the geometry of the gradient step. With preconditioner $P$, the effective condition number is $\kappa(P^{-1}H)$; using $P = H$ gives $\kappa = 1$.
+
+\textbf{Connection to adaptive methods:} Adagrad implicitly uses the diagonal preconditioner $P_k = \mathrm{diag}(\sqrt{G_k})$ where $G_k = \sum_{j=0}^{k-1}g_j^2$. In a stationary regime, $G_k \approx k \cdot \mathrm{diag}(H)$ (since $\mathbb{E}[g_j^2] \approx \lambda_j^2 \tilde{x}_j^2$), giving $P_k \approx \sqrt{k}\,\mathrm{diag}(\lambda)^{1/2}$ --- a diagonal approximation of $H^{1/2}$. Adam's second-moment EMA $v_t$ similarly approximates $\mathrm{diag}(H)$ but with exponential forgetting. Full Newton uses $P = H$ (the exact Hessian); L-BFGS approximates $H^{-1}$ using secant equations. The spectrum of adaptive methods can thus be understood as varying degrees of Hessian approximation: GD ($P = \alpha^{-1}I$) uses zero Hessian information; diagonal methods (Adagrad, Adam) use diagonal Hessian information; L-BFGS uses a rank-$m$ correction to a scaled identity; Newton uses the full Hessian. Each step along this spectrum reduces the required number of iterations at the cost of more computation per iteration.
+\end{remark}
+
 \begin{theorem}[Polyak step convergence]\label{thm:polyak}
 If $f$ is $L$-smooth and $\mu$-strongly convex with known $f^\star$, the Polyak step $\alpha_k = (f(x_k) - f^\star)/\|\nabla f(x_k)\|^2$ satisfies
 \[
@@ -726,6 +744,20 @@ Proposition~\ref{prop:sgd} reveals a fundamental limitation of fixed-step SGD: i
   \item \textbf{SAGA} (Defazio et al., 2014): Maintains a table of the $m$ most recent per-sample gradients. The variance of the SAGA estimator goes to zero as the iterate converges. SAGA has the same asymptotic rate as SVRG but is better suited for streaming settings (no snapshot epoch required).
 \end{itemize}
 For Benchmark A with $m=1000$, $\kappa \approx 1$: SVRG needs $O((1000+1)\log(1/\epsilon)) \approx 1000\log(1/\epsilon)$ per-sample gradient evaluations, comparable to full-batch GD ($1000$ evaluations per step $\times$ $\log(1/\epsilon)$ steps). Variance reduction becomes most beneficial for large $m$ with moderate $\kappa$: SVRG's $O(m + \kappa)$ vs SGD's $O(m\kappa)$ epoch cost gives a $\kappa$-factor speedup.
+\end{remark}
+
+\begin{remark}[The interpolation regime: when SGD noise vanishes]
+The SGD noise floor from Proposition~\ref{prop:sgd} is $O(\alpha\sigma^2_g/b)$, where $\sigma^2_g = \mathbb{E}_i[\|\nabla f_i(x^\star)\|^2]$ is the gradient variance at the minimiser $x^\star$. In the \emph{interpolation regime} --- when the model is expressive enough to perfectly fit every training sample, so $f_i(x^\star) = 0$ for all $i$ --- the per-sample gradient at $x^\star$ vanishes: $\nabla f_i(x^\star) = 0$, and therefore $\sigma^2_g = 0$. In this regime, fixed-step SGD achieves \emph{linear convergence} to the exact minimiser (matching full GD) even with batch size $b = 1$, because the noise floor is exactly zero.
+
+This situation arises in modern overparameterised neural networks (many more parameters than training samples), where the training loss can be driven to essentially zero on every sample simultaneously. For such models, the Polyak step applied per-mini-batch ($\alpha_k = f_{\mathcal{B}}(x_k)/\|\nabla f_{\mathcal{B}}(x_k)\|^2$ where $f_{\mathcal{B}}$ is the mini-batch loss, which satisfies $f^\star_{\mathcal{B}} = 0$) achieves the same convergence as the full-batch Polyak step at a fraction of the cost. Our Benchmark A experiments are \emph{not} in the interpolation regime (since observation noise $\varepsilon \sim \mathcal{N}(0,1)$ prevents $f_i(x^\star) = 0$), explaining why the SGD noise floor is nonzero. If we removed the noise ($y = X\theta^\star$ exactly), Benchmark A would enter the interpolation regime and mini-batch SGD with any batch size would converge linearly to $J^\star = 0$.
+\end{remark}
+
+\begin{remark}[Gradient clipping and the heavy tail problem]
+In training deep neural networks, gradients can occasionally be extremely large due to long-range temporal dependencies (in RNNs) or steep loss landscapes. \emph{Gradient clipping} caps the gradient norm before each update:
+\[
+  \tilde{g}_k = \begin{cases} g_k & \text{if } \|g_k\| \leq \tau, \\ \tau \cdot g_k/\|g_k\| & \text{if } \|g_k\| > \tau. \end{cases}
+\]
+This is equivalent to using a step size $\min(\alpha, \alpha\tau/\|g_k\|)$, i.e.\ an adaptive step that is smaller when the gradient is large. Gradient clipping introduces bias (the clipped gradient is no longer $\mathbb{E}[\tilde{g}_k] = \nabla f(x_k)$ in general) but prevents instability from gradient explosions. None of our benchmark experiments require gradient clipping: Rosenbrock's gradients are bounded at $\|\nabla f(-1,1)\| = \sqrt{4 + 200^2} \approx 200$, and with $\alpha = 0.0012$ the step norm is $\approx 0.24$ --- well within stable range. However, the RMSprop and Adam normalisation ($g/\sqrt{v+\varepsilon}$) acts as a soft form of gradient clipping: the effective step per coordinate is bounded by $\alpha/\varepsilon$, preventing catastrophic updates even when individual gradient components are large.
 \end{remark}
 
 \subsection{SGD with Increased Noise}
