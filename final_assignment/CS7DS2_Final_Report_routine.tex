@@ -769,6 +769,43 @@ C & 3.7319 & 0.6864 & $(0.183, 0.020)$ & $5.4\times$ \\
 
 Newton's method requires computing and factorising the $d \times d$ Hessian at each iteration, costing $O(d^3)$ per step (plus $O(d^2)$ for the solve). For small $d = 2$, this is negligible. However, for high-dimensional problems ($d \sim 10^6$ in deep learning), the Hessian is too expensive to store ($O(d^2)$ memory) or compute, motivating quasi-Newton methods (L-BFGS) that approximate $H^{-1}$ using gradient differences.
 
+\subsection{Newton's Method: Global vs.\ Local Convergence}
+
+Newton's method exhibits a fundamental two-phase convergence behaviour not shared by first-order methods.
+
+\textbf{Phase~1 --- Global phase (damped Newton).} Far from $x^{\star}$, the local quadratic model $m_k(d) = f(x_k) + \nabla f(x_k)^T d + \frac{1}{2}d^T H(x_k)\, d$ may not accurately represent $f$ over the full Newton step $d_k^N = H^{-1}(x_k)\nabla f(x_k)$. A concrete example on Benchmark~C illustrates the danger. At $x_0 = (-1, 1)$ the Rosenbrock function evaluates to $f(x_0) = 100(1 - 1)^2 + (1+1)^2 = 4$, and:
+\begin{align}
+\nabla f(x_0) &= \bigl(-400(-1)(1-1) - 2(1-(-1)),\; 200(1-1)\bigr)^T = (-4,\;0)^T, \\
+H(x_0) &= \begin{pmatrix} 1200(-1)^2 - 400(1) + 2 & -400(-1) \\ -400(-1) & 200 \end{pmatrix} = \begin{pmatrix} 802 & 400 \\ 400 & 200 \end{pmatrix}.
+\end{align}
+Solving $H(x_0)\,d = \nabla f(x_0)$ gives $d_0^N = (-2,\, 4)^T$, placing the full Newton iterate at $x_1^N = x_0 - d_0^N = (1,\,-3)$, where
+\[
+f(1,-3) = 100(-3 - 1)^2 + (1-1)^2 = 1600,
+\]
+an \emph{increase} of $400\times$ over $f(x_0) = 4$. This catastrophic failure demonstrates that the quadratic model is valid only within a small neighbourhood of $x_k$; the full step of magnitude $\|d_0^N\| = \sqrt{4+16} \approx 4.5$ far exceeds this neighbourhood.
+
+The damping factor $\alpha = 0.22$ prevents this failure by confining the step to a region of model accuracy. A rigorous alternative is \emph{Armijo backtracking}: choose the largest $\alpha_k \in \{1, \rho, \rho^2, \ldots\}$ satisfying
+\begin{equation}
+f(x_k - \alpha_k d_k^N) \leq f(x_k) - c\,\alpha_k\,\nabla f(x_k)^T d_k^N, \quad c \in (0, \tfrac{1}{2}),\; \rho \in (0,1),
+\label{eq:armijo}
+\end{equation}
+which guarantees $f(x_{k+1}) < f(x_k)$ for all $k$ and global convergence to a stationary point at a linear rate during the global phase.
+
+\textbf{Phase~2 --- Local phase (pure Newton, quadratic convergence).} Once $x_k$ enters the basin of attraction of $x^{\star}$ --- the region where the Hessian mapping $\nabla^2 f$ is Lipschitz-continuous with constant $M$ over the full Newton step --- the pure Newton step ($\alpha_k = 1$) achieves:
+\begin{equation}
+\|x_{k+1} - x^{\star}\| \leq \frac{M}{2\,\lambda_{\min}(H(x^{\star}))}\,\|x_k - x^{\star}\|^2,
+\label{eq:newton_quadratic_cv}
+\end{equation}
+where $\lambda_{\min}(H(x^{\star}))$ is the smallest eigenvalue of the Hessian at the optimum. The quadratic bound means the number of correct significant digits \emph{doubles} at each iteration: if $\|x_k - x^{\star}\| \sim 10^{-3}$, then $\|x_{k+1} - x^{\star}\| \lesssim 10^{-6}$. In our Benchmark~C experiments (20 iterations, $\alpha = 0.22$ throughout), the iterates do not reach this local phase --- the starting point $x_0 = (-1,1)$ is far from $x^{\star} = (1,1)$, and heavy damping keeps the method in the global phase for all 20 steps, explaining the approximately \emph{linear} (rather than quadratic) observed convergence in Figure~\ref{fig:q3_fval_C}.
+
+\begin{remark}[Newton Decrement as Stopping Criterion]
+The Newton decrement $\lambda(x)^2 = \nabla f(x)^T H^{-1}(x)\nabla f(x)$ provides a scale-invariant proximity-to-optimum certificate:
+\begin{equation}
+f(x) - f^{\star} \lesssim \frac{\lambda(x)^2}{2} \qquad (\text{tight as } x \to x^{\star}).
+\end{equation}
+Stopping when $\lambda(x)^2/2 < \varepsilon_{\mathrm{tol}}$ certifies $\varepsilon_{\mathrm{tol}}$-optimality without knowledge of $f^{\star}$ --- a major advantage over the gradient norm $\|\nabla f(x_k)\|$, which is not scale-invariant. For a poorly scaled function (e.g., $f(x) = 10^6 g(x)$), the gradient can be large even near the minimum, but $\lambda(x)^2$ correctly identifies proximity by accounting for the Hessian scaling.
+\end{remark}
+
 % ============================================================
 \newpage
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -947,6 +984,26 @@ Projected GD solves the original constrained problem exactly (maintains hard fea
 \end{remark}
 
 Settings: Projected GD ($\alpha = 0.08$, 100 iterations); Penalty GD ($\lambda \in \{0.15, 1.8, 4.5\}$, step sizes $\alpha = 0.05$ for $\lambda \leq 1.8$, $\alpha = 0.03$ for $\lambda = 4.5$, 100 iterations); Unconstrained GD ($\alpha = 0.07$, 100 iterations).
+
+\subsection{Convergence Guarantees}
+
+\begin{theorem}[Projected Gradient Descent Convergence]
+\label{thm:pgd}
+Let $f : \mathbb{R}^d \to \mathbb{R}$ be $L$-smooth and convex, and let $\mathcal{C}$ be a closed convex set with constrained minimiser $x^{\star} = \arg\min_{x \in \mathcal{C}} f(x)$. Projected GD with step size $\alpha \in (0, 1/L]$ satisfies:
+\begin{equation}
+f(x_k) - f(x^{\star}) \leq \frac{\|x_0 - x^{\star}\|^2}{2\alpha k}.
+\label{eq:pgd_rate}
+\end{equation}
+If additionally $f$ is $\mu$-strongly convex on $\mathcal{C}$ (with $\kappa = L/\mu$), convergence is linear:
+\begin{equation}
+\|x_k - x^{\star}\|^2 \leq \left(1 - \frac{\mu}{L}\right)^k \|x_0 - x^{\star}\|^2.
+\label{eq:pgd_linear}
+\end{equation}
+\end{theorem}
+
+\textit{Proof sketch.} From $L$-smoothness: $f(x_{k+1}) \leq f(x_k) + \nabla f(x_k)^T(x_{k+1}-x_k) + \frac{L}{2}\|x_{k+1}-x_k\|^2$. The projection optimality condition $(\nabla f(x_k) + \frac{1}{\alpha}(x_{k+1}-x_k))^T(z - x_{k+1}) \geq 0$ for all $z \in \mathcal{C}$ and non-expansiveness of $\Pi_{\mathcal{C}}$ yield $\nabla f(x_k)^T(x_{k+1}-x^{\star}) \leq \frac{1}{2\alpha}(\|x_k - x^{\star}\|^2 - \|x_{k+1}-x^{\star}\|^2 - \|x_{k+1}-x_k\|^2)$. Summing over $k=0,\ldots,K-1$ and applying convexity ($f(x_k) - f^{\star} \leq \nabla f(x_k)^T(x_k-x^{\star})$) gives \eqref{eq:pgd_rate}. Strong convexity adds $-\frac{\mu}{2}\|x_k-x^{\star}\|^2$ to the descent lemma, giving the geometric bound \eqref{eq:pgd_linear}. $\square$
+
+\textbf{Application to our experiment:} Benchmark~B has smoothness constant $L = \max(2 + \sin(0.582), 10) \approx 10$ (the $5(x_2-2)^2$ term dominates) and strong convexity $\mu \approx 2$ (from the $(x_1-1)^2$ and $5(x_2-2)^2$ terms far from the constraint). The starting distance $\|x_0 - x^{\star}\| = \|(0.2, 4.0) - (0.582, 2.0)\| \approx 2.05$. With $\alpha = 0.08$ (slightly below $1/L = 0.1$), \eqref{eq:pgd_rate} guarantees $f(x_{100}) - f^{\star} \leq \frac{2.05^2}{2 \times 0.08 \times 100} \approx 0.263$. The observed gap is $< 10^{-4}$ (essentially converged), far better than the bound predicts --- the strong convexity of Benchmark~B activates the linear rate \eqref{eq:pgd_linear}, which converges exponentially in $k$ rather than as $O(1/k)$.
 
 \subsection{Results: Objective Value Convergence}
 
@@ -1142,11 +1199,43 @@ where $D = \max_{x, y \in \mathcal{X}} \|x - y\|$ is the diameter of the feasibl
 
 \subsection{Interior vs Boundary Convergence Analysis}
 
-\textbf{Interior optimum:} Frank--Wolfe exhibits slow convergence for interior optima due to the ``zig-zag'' phenomenon: the LP oracle maps the current gradient to an extreme point of $\mathcal{X}$, which oscillates between different vertices as the gradient direction changes near the minimum. The iterate $x_k$ averages these vertex jumps through the convex combination update. The general convergence rate is $O(1/k)$, which is slower than gradient descent's $O(1/k)$ on strongly convex functions (which achieves linear rate $O(\rho^k)$). The adaptive step size schedule $1-\beta_k = 2/(k+2)$ (standard Frank--Wolfe) would achieve the optimal $O(1/k)$ rate; our fixed $\beta$ approximates this.
+\subsubsection{Mathematical Analysis of the Zig-Zag Phenomenon}
 
-\textbf{Boundary optimum:} Frank--Wolfe is well-suited for boundary optima. The LP oracle consistently selects the vertex closest to the true optimum (here, the vertex with $z_1 = 0.5$), resulting in more coherent iteration. The iterate converges toward the boundary naturally as $z_{1,k} = 0.5$ dominates. After 140 iterations with $\beta = 0.93$, the residual gap $f(x_{140}) - f^{\star} = 0.114$ reflects the slow convergence rate; more iterations or a decreasing $\beta_k$ schedule would reduce this further.
+The zig-zag failure of Frank--Wolfe for interior optima has a precise mathematical explanation rooted in the discontinuity of the LP oracle near zero-gradient points.
 
-The key practical advantage of Frank--Wolfe over projected gradient descent is the \emph{oracle}: for complex constraint sets where projection is expensive (e.g., nuclear norm ball, spectrahedra in semidefinite programming), solving the LP subproblem is often far cheaper than computing the projection.
+\textbf{Oracle map for box constraints.} For $\mathcal{X} = [l_1,u_1]\times[l_2,u_2]$, the LP solution is:
+\begin{equation}
+(z_k)_i = \begin{cases} l_i & \text{if } \partial_i f(x_k) > 0, \\ u_i & \text{if } \partial_i f(x_k) \leq 0. \end{cases}
+\end{equation}
+This sign-dependent map is \emph{discontinuous} at $\nabla f = 0$: any infinitesimal perturbation in the gradient direction at the optimum can flip $z_k$ from one vertex to the diametrically opposite vertex.
+
+\textbf{Oscillation mechanics for Case~II.} Consider the $x_1$ coordinate with $f(x) = (x_1-1)^2 + (x_2-5)^2$ and $x^{\star}_1 = 1 \in (0.5, 5)$ strictly interior. At iterate $x_k$ near $x^{\star}_1 = 1$:
+\[
+\partial_1 f(x_k) = 2(x_{1,k} - 1) \begin{cases} > 0 & \Rightarrow z_{1,k} = 0.5 \\ < 0 & \Rightarrow z_{1,k} = 5. \end{cases}
+\]
+The update $x_{1,k+1} = \beta x_{1,k} + (1-\beta)z_{1,k}$ creates a fixed-point analysis. Let $\delta_k = x_{1,k} - 1$ (signed deviation). If $\delta_k > 0$ (right of optimum):
+\[
+\delta_{k+1} = \beta(1+\delta_k) + (1-\beta)\cdot 0.5 - 1 = \beta\,\delta_k - \frac{1-\beta}{2}.
+\]
+The deviation crosses zero (triggers vertex flip) when $\delta_k < \delta^{\star} := \frac{(1-\beta)/2}{\beta}$. For $\beta = 0.90$: $\delta^{\star} = 0.05/0.90 \approx 0.056$. Once $\delta_k < \delta^{\star}$, the iterate crosses $x_1^{\star}=1$ and now $\delta_{k+1} < 0$, so the oracle switches to $z_{1,k+1} = 5$:
+\[
+\delta_{k+1} = \beta\delta_k + (1-\beta)(5-1) = \beta\,\delta_k + 4(1-\beta).
+\]
+Starting from $\delta_k \approx -\delta^{\star} \approx -0.056$: $\delta_{k+1} \approx 0.90\times(-0.056) + 0.4 \approx 0.35$.
+
+Thus after each crossing event, the iterate \emph{overshoots} by $\approx 4(1-\beta)$ in the opposite direction. For $\beta = 0.90$ this gives an overshoot of $0.4$, meaning $x_{1,k}$ oscillates between roughly $x_1 \approx 0.944$ and $x_1 \approx 1.35$ in steady state. The residual squared deviation $(x_1-1)^2 \approx (0.2)^2 = 0.04$ contributes significantly to the final objective $f \approx 0.0089$.
+
+For $\beta = 0.985$: $\delta^{\star} \approx \frac{0.015/2}{0.985} \approx 0.0076$ and overshoot $\approx 4(1-0.985) = 0.06$. The oscillation amplitude is $\approx 0.03$, yielding $(x_1-1)^2 \approx 10^{-3}$, consistent with the observed $f \approx 0.0046$. This quantitative analysis confirms that larger $\beta$ (smaller step towards vertices) dramatically reduces zig-zag amplitude.
+
+\textbf{Remedies.} The \emph{Away-Step Frank--Wolfe} variant (Lacoste-Julien \& Jaggi, 2015) adds a component that moves away from the vertex contributing most to the current iterate, breaking the oscillation cycle and achieving \emph{linear} convergence on strongly convex functions over polytopes:
+\[
+x_{k+1} = x_k + \gamma_k (s_k - x_k) - \eta_k (v_k - x_k),
+\]
+where $s_k$ is the standard FW step (towards LP solution) and $v_k$ is the ``away'' step (away from the active vertex). This modification avoids the zig-zag by maintaining a ``drop condition'' that permanently reduces the weight on vertices contributing to oscillation.
+
+\textbf{Boundary optimum:} Frank--Wolfe excels for boundary optima. When the unconstrained minimum lies outside $\mathcal{X}$ (Case~III, $x^{\star}_{\mathrm{unc}} = (0,0) \notin \mathcal{X}$), the gradient $\partial_1 f(x_k) = 2x_{1,k} > 0$ for all feasible $x_{1,k} \geq 0.5$, so the LP oracle \emph{consistently} selects $z_{1,k} = 0.5$ without oscillation. The iterate converges monotonically toward the boundary $x_1 = 0.5$ at rate $|x_{1,k} - 0.5| = \beta^k|x_{1,0} - 0.5|$ (geometric with rate $\beta = 0.93$). This eliminates the zig-zag entirely, explaining the smoother convergence curve in Figure~\ref{fig:q6_evolution} (bottom-left).
+
+The key practical advantage of Frank--Wolfe over projected gradient descent is the \emph{oracle}: for complex constraint sets where projection is expensive (e.g., nuclear norm ball, spectrahedra in semidefinite programming), solving the LP subproblem is often far cheaper than computing the projection. The zig-zag issue is a known limitation specifically for interior optima and can be addressed by the away-step variant or by using a decreasing $1-\beta_k = 2/(k+2)$ schedule.
 
 % ============================================================
 \newpage
@@ -1205,6 +1294,17 @@ Benchmark C (Rosenbrock) is the most discriminating test function, and Figure~\r
 \includegraphics[width=\textwidth]{figures/comparison_rosenbrock.pdf}
 \caption{Cross-question comparison on Benchmark C (Rosenbrock). Left: all methods over 150 iterations. The dashed vertical line at iteration 20 marks where Newton's method stops. Right: zoomed first 25 iterations, clearly showing Newton's quadratic convergence dominance. Key observations: (1) Polyak ($f = 0.021$) is the best first-order method when $f^{\star}$ is known; (2) Nesterov ($f = 0.479$) achieves the best result among universally-applicable first-order methods, significantly outperforming GD ($f = 3.388$); (3) Newton ($f = 0.686$ in just 20 steps) achieves comparable results with far fewer iterations than first-order methods require; (4) Heavy Ball ($f = 0.701$) is competitive with Newton at 150 iterations, showing that momentum-based methods partially compensate for the lack of curvature information. GD (baseline) consistently performs the worst among all categories, confirming that algorithmic improvements are crucial for ill-conditioned problems.}
 \label{fig:comparison_rosenbrock}
+\end{figure}
+
+\subsection{Convergence Rate Visualisation}
+
+Figure~\ref{fig:conv_rates} illustrates the theoretical convergence rates on a synthetic strongly convex quadratic ($\kappa = 100$), confirming the rate hierarchy predicted by theory.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/convergence_rates.pdf}
+\caption{Convergence rate comparison on a synthetic strongly convex quadratic $f(x) = \tfrac{1}{2}(x_1^2 + 100 x_2^2)$ with condition number $\kappa = 100$. \textbf{Left (semi-log):} Both GD and Nesterov converge geometrically (linear on the log scale), consistent with the strongly convex linear-rate bound~\eqref{eq:pgd_linear}. GD with step $\alpha = 2/(L+\mu)$ achieves rate $((\kappa-1)/(\kappa+1))^2 \approx 0.98^k$; Nesterov achieves $((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^k \approx 0.9^k$ (10$\times$ faster slope). The $O(1/k)$ and $O(1/k^2)$ polynomial reference lines (dashed) are much slower than either method for large $k$, confirming that strong convexity provides a significant advantage over the polynomial-rate worst case. \textbf{Right (log-log):} GD is clearly faster than $O(1/k)$ (slope $\gg -1$) and Nesterov faster still. The two polynomial reference lines (slopes $-1$ and $-2$ on the log-log axes) represent the convergence rates of GD and Nesterov, respectively, in the absence of strong convexity. The convergence rate hierarchy thus observed is: random search $\prec$ Frank--Wolfe $\approx$ GD (convex) $\prec$ GD (strongly convex) $\prec$ Nesterov (strongly convex) $\prec$ Newton (local quadratic).}
+\label{fig:conv_rates}
 \end{figure}
 
 \subsection{Theoretical Connections}
