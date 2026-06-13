@@ -58,7 +58,7 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a comprehensive comparative study of six categories of optimisation algorithms applied to three benchmark problems: a linear regression quadratic loss (Benchmark A), a toy neural network loss with sinusoidal perturbation (Benchmark B), and the ill-conditioned Rosenbrock function (Benchmark C). The methods investigated are: \emph{(i)} adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball), \emph{(ii)} momentum-based and stochastic methods (Nesterov acceleration, Adam, mini-batch SGD), \emph{(iii)} Newton's method with local quadratic approximation, \emph{(iv)} derivative-free approaches (finite differences, Nesterov random search, Nelder--Mead, grid search), \emph{(v)} constrained optimisation via projected gradient descent and penalty methods, and \emph{(vi)} the Frank--Wolfe conditional gradient algorithm for linear-constrained problems. Key findings include: Newton's method solves the quadratic problem in one iteration and achieves $f = 0.686$ on Rosenbrock in only 20 steps; Nesterov acceleration yields a $7\times$ improvement over gradient descent on Rosenbrock; Polyak step size is highly sensitive to knowledge of $f^{\star}$ (diverging when misspecified but converging fastest when exact); and projected gradient descent enforces feasibility as a hard constraint from iteration one, outperforming penalty methods in constraint satisfaction. Each method is evaluated in terms of convergence speed, trajectory behaviour, stability, and computational trade-offs, with connections drawn to the theoretical guarantees developed in the course.
+This report presents a comprehensive comparative study of six categories of optimisation algorithms applied to three benchmark problems of increasing difficulty: a linear regression quadratic loss (Benchmark A, $\kappa \approx 1.12$), a toy neural network loss with sinusoidal perturbation (Benchmark B, $\kappa \approx 3.5$--$6.9$), and the ill-conditioned Rosenbrock function (Benchmark C, $\kappa \approx 2508$). The methods investigated are: \emph{(i)} adaptive step-size methods (Polyak, Adagrad, RMSprop, Heavy Ball) with backtracking Armijo line search; \emph{(ii)} momentum-based and stochastic methods (Nesterov acceleration, Adam with bias correction and AMSGrad comparison, mini-batch SGD with noise-floor analysis); \emph{(iii)} Newton's method with Hessian regularisation, Conjugate Gradient (exact $n$-step convergence), and quasi-Newton L-BFGS; \emph{(iv)} derivative-free approaches (forward/central finite differences, Nesterov random search, Nelder--Mead with simplex evolution, grid search) with curse-of-dimensionality analysis; \emph{(v)} constrained optimisation via projected gradient descent, penalty methods, and augmented Lagrangian / ADMM with KKT numerical verification; and \emph{(vi)} the Frank--Wolfe conditional gradient algorithm for LP-constrained problems with duality gap analysis and optimal vs.\ fixed step schedule comparison. Key findings: Newton solves the quadratic problem in one iteration and converges quadratically on Benchmark B ($f: 23.2 \to 0.724$ in 5 steps); Nesterov achieves $7\times$ improvement over GD on Rosenbrock (confirmed against the theoretical $O(1/k^2)$ bound with $L=1001.6$); Nelder--Mead achieves exact Rosenbrock convergence ($f \approx 0$) without gradient information while using $640$ function evaluations vs.\ $\leq 360$ for FD GD with $500\times$ better accuracy; Polyak diverges when $f^{\star}$ is misspecified but achieves $370\times$ improvement when exact; and projected gradient descent enforces hard feasibility from iteration one, confirmed by KKT multiplier $\lambda^{\star} = 0$ (inactive constraint). Theoretical lower bounds, convergence proof sketches, preconditioning analysis, and computational scalability analysis are provided throughout.
 \end{abstract}
 
 \tableofcontents
@@ -368,6 +368,18 @@ without requiring knowledge of $L$. The automatically chosen step satisfies $\al
 \caption{Q1: Armijo backtracking line search on Benchmark B ($c_1 = 0.5$, $\rho = 0.5$, $\alpha_0 = 2.0$). Left: 1D slice of $f$ along the gradient direction at $x_0 = [-1, 4]^T$. The Armijo condition requires $f(x_0 - t g) \leq f(x_0) - c_1 t \|g\|^2$ (below the red dashed line). The backtracking selects $\alpha = 0.125$ (starting from $\alpha_0 = 2.0$ and halving 4 times), while the fixed step $\alpha = 0.06$ (orange dot) also lies in the acceptable region but is much smaller. Centre: convergence curves. Armijo GD converges slightly faster than fixed-step GD ($\alpha = 0.06$) because it uses larger steps in regions of low curvature. Right: step size evolution---the Armijo step size adapts dynamically, starting large (near $x_0$, far from the minimum) and decreasing as curvature increases near $x^{\star}$. This automatic adaptation eliminates the need to tune $\alpha$ while providing convergence guarantees equivalent to constant-step GD.}
 \label{fig:armijo}
 \end{figure}
+
+\textbf{Wolfe conditions:} The Armijo condition alone can accept step sizes that are too small. The \emph{Wolfe conditions} add a curvature requirement that ensures a minimum step length:
+\begin{align}
+f(x_k - \alpha g_k) &\leq f(x_k) - c_1\, \alpha\, \|g_k\|^2 \quad \text{(sufficient decrease)}, \label{eq:armijo_wolfe} \\
+-\nabla f(x_k - \alpha g_k)^T g_k &\leq -c_2\, \|g_k\|^2 \quad \text{(curvature condition, } 0 < c_1 < c_2 < 1), \label{eq:curvature}
+\end{align}
+The curvature condition \eqref{eq:curvature} ensures the directional derivative at $x_{k+1}$ is less negative than $-c_2\|g_k\|^2$, preventing the step from stopping at a point where the function is still rapidly decreasing. Together, the Wolfe conditions are:
+\begin{itemize}[nosep]
+\item Satisfiable for any $L$-smooth function (a Wolfe step always exists for $c_1 < c_2$).
+\item Necessary for BFGS quasi-Newton updates to maintain positive-definiteness of the Hessian approximation.
+\item The basis for the Nocedal-Wright strong Wolfe conditions that are standard in production optimisers.
+\end{itemize}
 
 \subsection{Adagrad as Adaptive Preconditioning}
 \label{subsec:adagrad_precond}
@@ -1340,6 +1352,15 @@ followed by the dual update $\mu_{k+1} = \max(0, \mu_k + \rho \max(0, 0.5 - x_{1
 
 The dual update $\mu_{t+1} = \mu_t + \rho\,c(x_{t+1})$ (where $c(x) = \max(0, 0.5 - x_1)$ is the constraint violation) is a gradient ascent step on the Lagrangian dual. The augmented quadratic term $\tfrac{\rho}{2}c^2$ is crucial: it adds curvature that accelerates the inner minimisation and enables exact primal feasibility at finite $\mu$. The ADMM (Alternating Direction Method of Multipliers) extends this to \emph{separable} objectives $f(x) + g(z)$ with constraint $Ax + Bz = c$, alternating between minimising over $x$ and $z$ before updating the dual variable. ADMM is widely used in distributed optimisation, signal processing (basis pursuit, LASSO), and machine learning (SVM training, consensus optimisation).
 
+\subsection{Connection to Proximal Gradient Methods}
+\label{subsec:proximal}
+
+Projected gradient descent generalises naturally to the \textbf{proximal gradient method}, which handles composite objectives $f(x) + g(x)$ where $f$ is smooth and $g$ is convex but possibly non-smooth:
+\begin{equation}
+x_{k+1} = \text{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)), \quad \text{prox}_{\alpha g}(z) = \argmin_{x} \left\{g(x) + \frac{1}{2\alpha}\|x-z\|^2\right\}.
+\end{equation}
+When $g = \iota_{\mathcal{C}}$ (the indicator function of a convex set, $= 0$ on $\mathcal{C}$, $+\infty$ outside), the proximal operator reduces to the projection $\Pi_{\mathcal{C}}$, recovering PGD exactly. For $g = \lambda\|x\|_1$ (LASSO), the proximal operator is the soft-thresholding function $(\text{prox}_{\alpha g})_i = \text{sign}(z_i)\max(|z_i| - \alpha\lambda, 0)$, giving the ISTA (Iterative Shrinkage-Thresholding Algorithm). The accelerated variant (FISTA) applies Nesterov momentum to achieve $O(1/k^2)$ convergence for the composite problem, exactly as Nesterov acceleration does for the smooth case. For Benchmark B with $x_1 \geq 0.5$, ISTA/FISTA reduces to PGD with projection, which is what we implemented.
+
 % ============================================================
 \section{\texorpdfstring{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}{Question 6: Linear Programmes and Frank-Wolfe Algorithm [30 marks]}}
 \label{sec:q6}
@@ -1902,6 +1923,10 @@ def frank_wolfe(grad_fn, loss_fn, x0, bounds, beta, n_iters):
 \item Rosenbrock, H.H. (1960). \textit{An automatic method for finding the greatest or least value of a function}. The Computer Journal, 3(3), 175--184.
 
 \item Nesterov, Y. (2011). \textit{Random gradient-free minimization of convex functions}. CORE Discussion Papers.
+
+\item Hestenes, M.R., \& Stiefel, E. (1952). \textit{Methods of Conjugate Gradients for Solving Linear Systems}. Journal of Research of the National Bureau of Standards, 49(6), 409--436.
+
+\item Beck, A., \& Teboulle, M. (2009). \textit{A fast iterative shrinkage-thresholding algorithm for linear inverse problems}. SIAM Journal on Imaging Sciences, 2(1), 183--202. [FISTA/proximal gradient]
 \end{enumerate}
 
 \end{document}
