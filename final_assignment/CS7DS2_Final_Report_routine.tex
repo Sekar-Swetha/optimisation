@@ -578,6 +578,16 @@ Adam's per-coordinate scaling $\hat{m}_t / (\sqrt{\hat{v}_t} + \varepsilon)$ bea
 \end{equation}
 where $F(\theta)$ is the Fisher information matrix. The natural gradient steepest-descent step is invariant to reparameterisation of $\theta$ (a desirable property for neural networks where many parameterisations describe the same function), while the Euclidean gradient step depends on the specific coordinate system chosen. Adam approximates the natural gradient by using the diagonal of $F(\theta) \approx \text{diag}(\hat{v}_t)$ (the expected squared gradient, estimated via EMA), making it a \emph{diagonal natural gradient method}. This connection explains Adam's empirical robustness to scale and learning rate changes: the diagonal Fisher approximation precodicitions the gradient to be (approximately) invariant to coordinate-wise rescaling of the parameters.
 
+\subsubsection*{Gradient Clipping}
+
+A practical technique for training recurrent neural networks (RNNs) and transformers with gradient-based methods is \textbf{gradient clipping}, which limits the gradient norm before the update step:
+\begin{equation}
+\hat{g} = \begin{cases} g & \text{if } \|g\| \leq \tau \\ \tau\, g / \|g\| & \text{if } \|g\| > \tau \end{cases}, \qquad x_{k+1} = x_k - \alpha \hat{g}.
+\end{equation}
+The clipped gradient $\hat{g}$ lies on the sphere of radius $\tau$ whenever $\|g\| > \tau$, effectively imposing $\|\hat{g}\| = \tau$ (rather than growing arbitrarily large). This is equivalent to a Polyak-type adaptive step: $\alpha_k^{\text{eff}} = \alpha \cdot \min(1, \tau/\|g\|)$, which automatically reduces the step size when the gradient is large. For sequence models, gradient norms can spike exponentially as the sequence length grows (the \emph{exploding gradient} problem), making a fixed step size violate the stability condition $\alpha < 2/L$. Gradient clipping bounds the effective Lipschitz constant seen by the step from above, restoring stability.
+
+Value clipping ($\hat{g}_i = \text{clip}(g_i, -\tau, \tau)$) clips each coordinate independently, potentially changing the gradient direction, which is generally undesirable. Norm clipping preserves the gradient direction while controlling its magnitude, and is the standard choice. For deterministic smooth objectives (like our benchmarks), gradients do not explode because the Lipschitz constant $L$ is bounded, so gradient clipping would have no effect if $\tau > L \|x_k - x^{\star}\|$.
+
 \subsection{Adam Bias Correction: Mathematical Rationale}
 \label{subsec:adam_bias}
 
@@ -1522,6 +1532,25 @@ Projected gradient descent generalises naturally to the \textbf{proximal gradien
 x_{k+1} = \text{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)), \quad \text{prox}_{\alpha g}(z) = \argmin_{x} \left\{g(x) + \frac{1}{2\alpha}\|x-z\|^2\right\}.
 \end{equation}
 When $g = \iota_{\mathcal{C}}$ (the indicator function of a convex set, $= 0$ on $\mathcal{C}$, $+\infty$ outside), the proximal operator reduces to the projection $\Pi_{\mathcal{C}}$, recovering PGD exactly. For $g = \lambda\|x\|_1$ (LASSO), the proximal operator is the soft-thresholding function $(\text{prox}_{\alpha g})_i = \text{sign}(z_i)\max(|z_i| - \alpha\lambda, 0)$, giving the ISTA (Iterative Shrinkage-Thresholding Algorithm). The accelerated variant (FISTA) applies Nesterov momentum to achieve $O(1/k^2)$ convergence for the composite problem, exactly as Nesterov acceleration does for the smooth case. For Benchmark B with $x_1 \geq 0.5$, ISTA/FISTA reduces to PGD with projection, which is what we implemented.
+
+\subsection{Coordinate Descent for Separable Problems}
+\label{subsec:coord_descent}
+
+\textbf{Coordinate descent (CD)} minimises $f$ one coordinate at a time, holding all others fixed. At each step, a coordinate $j \in \{1, \ldots, n\}$ is selected (cyclically or at random) and updated:
+\begin{equation}
+x_j^{k+1} = \argmin_t\; f(x_1^k, \ldots, x_{j-1}^k,\, t,\, x_{j+1}^k, \ldots, x_n^k).
+\end{equation}
+For smooth $f$, this reduces to $x_j^{k+1} = x_j^k - \frac{1}{L_j}\frac{\partial f}{\partial x_j}(x^k)$ (gradient step in coordinate $j$ with Lipschitz constant $L_j$ of $\nabla_j f$), requiring $O(1)$ partial gradient per step vs $O(n)$ for full gradient descent. For a $\mu$-strongly convex, $L$-smooth $f$ with $n$ coordinates and cyclic updates, the convergence rate per epoch (all $n$ coordinates updated once) satisfies:
+\begin{equation}
+f(x^{k+1}) - f^{\star} \leq \left(1 - \frac{\mu}{nL}\right)^n (f(x^k) - f^{\star}) \approx e^{-\mu/L} (f(x^k) - f^{\star}),
+\end{equation}
+which is the same per-epoch rate as gradient descent with $\alpha = 1/L$, while each iteration costs $O(1)$ vs $O(n)$.
+
+For the LASSO objective $f(x) = \tfrac{1}{2m}\|Ax - b\|^2 + \lambda\|x\|_1$, each coordinate update is closed-form via soft-thresholding:
+\begin{equation}
+x_j^{k+1} = \mathcal{S}\!\left(\frac{(A^T(b - A_{-j}x_{-j}))_j}{m \cdot L_j},\; \frac{\lambda}{L_j}\right), \quad \mathcal{S}(z, \tau) = \text{sign}(z)\max(|z| - \tau, 0),
+\end{equation}
+where $L_j = \|A_j\|^2/m$. This is the \textbf{lasso shooting algorithm}, which can outperform proximal gradient (ISTA) by $O(n/s)$ when the solution is $s$-sparse (only $s \ll n$ coordinates are non-zero), since only the active set needs updating. For our Benchmark A (linear regression with $n = 2$ and no sparsity), coordinate descent offers no advantage over full GD.
 
 \subsection{Subgradient Methods for Non-Smooth Objectives}
 \label{subsec:subgradient}
