@@ -1042,7 +1042,15 @@ The trade-off is cost: central differences require $2d$ function evaluations vs 
 \end{algorithmic}
 \end{algorithm}
 
-The Nesterov random search estimator $\hat{g}_k$ is related to the gradient of the \emph{smoothed function} $f_\delta(x) = \mathbb{E}_{u \sim \text{Uniform}(\mathcal{S}^{n-1})}[f(x + \delta u)]$. One can show that $\mathbb{E}[\hat{g}_k] = \nabla f_\delta(x_k)$, so the method performs stochastic gradient descent on the smoothed objective. The variance of $\hat{g}_k$ is $O(n \|\nabla f\|^2 / \delta^2)$, requiring $\delta$ to be balanced between approximation accuracy (small $\delta$) and variance reduction (large $\delta$). Crucially, it requires only \emph{two} function evaluations per iteration regardless of dimension $n$, and Nesterov (2011) shows convergence at rate $O(n/\sqrt{k})$ for non-smooth convex $f$---slower than GD by a factor of $n$, but with dimension-independent per-iteration cost.
+The Nesterov random search estimator $\hat{g}_k$ is related to the gradient of the \emph{smoothed function} $f_\delta(x) = \mathbb{E}_{u \sim \text{Uniform}(\mathcal{S}^{n-1})}[f(x + \delta u)]$. One can show that $\mathbb{E}[\hat{g}_k] = \nabla f_\delta(x_k)$, so the method performs stochastic gradient descent on the smoothed objective.
+
+\textbf{Convergence rate derivation sketch:} The gradient estimator has bias $\mathbb{E}[\hat{g}_k] - \nabla f(x_k) = O(\delta)$ (from the smoothing) and variance $\text{Var}(\hat{g}_k) = O(n\|\nabla f\|^2/\delta^2)$ (from the random direction). Applying the stochastic subgradient convergence theorem with step $\alpha_k = C/\sqrt{k}$:
+\begin{equation}
+\mathbb{E}[f(\bar{x}_k)] - f^{\star} \leq \frac{R^2 + \sum_{k=1}^{K}\alpha_k^2 \mathbb{E}[\|\hat{g}_k\|^2]}{2\sum_{k=1}^K \alpha_k} = O\!\left(\frac{n}{\sqrt{k}}\right),
+\end{equation}
+where $R = \|x_0 - x^{\star}\|$ and the $n$ factor comes from $\text{Var}(\hat{g}_k) \propto n$. In contrast, exact GD on a smooth function achieves $O(1/k)$ (or $O(1/k^2)$ with Nesterov). The $n$-fold penalty is the fundamental cost of working with zeroth-order information: each function evaluation provides only a scalar, not a vector, so effectively $n$ evaluations are needed to match one gradient computation. Crucially, it requires only \emph{two} function evaluations per iteration regardless of dimension $n$, and Nesterov (2011) shows convergence at rate $O(n/\sqrt{k})$ for non-smooth convex $f$---slower than GD by a factor of $n$, but with dimension-independent per-iteration cost.
+
+\textbf{Practical $\delta$ selection:} The optimal $\delta$ balances bias ($O(\delta)$) against variance ($O(n/\delta^2)$) in the gradient estimator. Minimising $O(\delta + n/\delta^2)$ gives $\delta_{\text{opt}} = (2n)^{1/3} / (\partial^2 f / \partial^2 u)^{1/3}$. For our experiments, $\delta = 0.08$ was chosen empirically; the high variance from $n = 2$ dimensions contributes relatively little overhead compared to high-dimensional settings where $n = 10^3$--$10^6$ would make the $O(n/\sqrt{k})$ rate prohibitive.
 
 \subsubsection{Hyperparameter Settings for Q4A}
 
@@ -1570,6 +1578,31 @@ Figure~\ref{fig:perf_matrix} provides a complete overview of all methods' final 
 \caption{Complete performance matrix. Left: colour-coded heat map of $\log_{10}(f - f^{\star})$ for all tested methods and benchmarks. Green indicates better convergence, red worse. Grey hatched cells mark methods not applied to that benchmark. Right: methods ranked by final objective value on Benchmark C (Rosenbrock, $f^{\star} = 0$), the most discriminating benchmark. Polyak (with exact $f^{\star} = 0$) achieves $f = 0.0094$, narrowly ahead of Nesterov ($f = 0.479$) and Newton ($f = 0.686$), confirming that oracle information enables the best first-order convergence but gradient-based methods are close. Nelder--Mead achieves $f \approx 0$ (exact convergence) without gradient information, placing first despite using no derivatives. Grid search achieves $f = 0.0016$ (excellent, given its $55 \times 55 = 3025$ evaluations vs Nelder--Mead's $\leq 640$).}
 \label{fig:perf_matrix}
 \end{figure}
+
+\subsection{Global Convergence: Which Methods Find the Global Optimum?}
+\label{subsec:global_conv}
+
+A subtle but important distinction: most methods guarantee convergence to a \emph{local} minimum or stationary point, not necessarily the global minimum. Table~\ref{tab:global_conv} summarises the global convergence properties.
+
+\begin{table}[H]
+\centering
+\caption{Global convergence guarantees. SC = strongly convex, C = convex, nc = nonconvex.}
+\label{tab:global_conv}
+\begin{tabular}{llll}
+\toprule
+\textbf{Method} & \textbf{Global min} & \textbf{Conditions} & \textbf{Notes} \\
+\midrule
+GD, Nesterov, Adam & Yes (C) / No (nc) & Convex $f$ & Rosenbrock: local/stationary only \\
+Newton's method & No & Always & Basin of attraction only \\
+Nelder--Mead & No & Heuristic & Accidentally finds global on Rosenbrock \\
+Grid search & Yes & $\Delta x \leq$ resolution & Global $\varepsilon$-minimum guaranteed \\
+PGD, Frank--Wolfe & Yes (C) & Convex $f$, closed $\mathcal{C}$ & Same as GD with constraints \\
+Polyak step & Yes (C, exact $f^{\star}$) & Known $f^{\star}$ & Fails if $f^{\star}$ estimated \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For our experiments on Rosenbrock (non-convex), all first-order methods find only local minima or stationary points. The remarkable performance of Nelder--Mead ($f \approx 0$, exact global minimum) is not guaranteed by theory --- it is a consequence of the specific geometry of Rosenbrock at the starting point $x_0 = [-1, 1]^T$: the simplex, by descending towards the valley and then following it, happens to avoid the local minima structure that would trap gradient-based methods. For a generic non-convex function, Nelder--Mead would not be guaranteed to find the global minimum.
 
 \subsection{Failure Modes: When Each Method Can Break}
 \label{subsec:failure_modes}
