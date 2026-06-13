@@ -476,6 +476,8 @@ Adam combines \textbf{two distinct mechanisms}: (1) gradient momentum via $m_t$ 
 
 \textbf{Why Adam underperforms Nesterov on Rosenbrock:} Adam's per-coordinate scaling $\hat{m}_t / \sqrt{\hat{v}_t}$ normalises the gradient magnitude independently in each coordinate. On Rosenbrock, this has a counterproductive effect: near the curved valley floor, the dominant gradient component is perpendicular to the valley (the $x_2 - x_1^2$ direction), which is large and thus receives a small effective step in $x_2$; the along-valley component is small and thus receives a large effective step---but the large step conflicts with the valley's curved geometry, causing Adam to ``bounce'' off the valley walls rather than following the floor. Nesterov, without per-coordinate scaling, accumulates directional momentum along the consistent valley-floor direction, allowing the iterate to ``surf'' along the floor with increasing speed. This illustrates a fundamental limitation of adaptive coordinate-wise scaling: it destroys the directional correlation structure of the gradient trajectory that momentum methods exploit.
 
+\textbf{Rosenbrock valley traversal: two-timescale analysis:} Progress along the Rosenbrock valley can be decomposed into two distinct phases with different timescales. Define the \emph{valley floor coordinates}: $u = x_2 - x_1^2$ (perpendicular to valley, large gradient $\approx 200u$) and $v = 1 - x_1$ (along valley, small gradient $\approx 2v$). Near the valley floor ($u \approx 0$), the gradient has components $\partial f/\partial u \approx 200u$ (fast timescale) and $\partial f/\partial v \approx 2v - 400u \cdot 2x_1 \approx 2v$ (slow timescale). Phase 1 (``getting on the valley floor''): $u \to 0$ at rate $\approx e^{-200\alpha k}$, completing in $O(1/\alpha)$ steps. With $\alpha = 0.0012$: $200 \times 0.0012 = 0.24$, so $u$ decays to $e^{-0.24k}$---Phase 1 completes in $\approx 20$ iterations ($e^{-0.24 \times 20} \approx 0.008$). Phase 2 (``traversing along the floor''): $v \to 0$ at rate $\approx e^{-2\alpha k}$, requiring $O(1/\alpha)$ more steps. With $\alpha = 0.0012$: $2 \times 0.0012 = 0.0024$, Phase 2 requires $\approx \log(1/0.01)/0.0024 \approx 1900$ steps to reach $v = 0.01$ (GD is indeed far from convergence at 150 iterations). Nesterov's momentum shortens Phase 2 by building speed along the $v$ direction: the effective step size in $v$ is $\approx \alpha/(1-\beta_{\max}) \approx 0.0007/0.10 = 0.007$, reducing the required iterations to $\approx \log(1/0.01)/0.007 \approx 660$---consistent with the observed $f(x_{150}) = 0.479$ for Nesterov vs $3.388$ for GD. This two-timescale analysis explains why all first-order methods struggle on Rosenbrock: Phase 1 is fast but Phase 2 is bottlenecked by the small gradient of $(1-x_1)^2$ relative to the large curvature penalty $100(x_2-x_1^2)^2$. Newton's method breaks this bottleneck by computing the valley-floor direction explicitly via $H^{-1}g$, taking large directed steps regardless of the coordinate-axis decomposition.
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1174,6 +1176,21 @@ For box constraints, the LP subproblem decomposes per coordinate in $O(d)$ opera
 This is because minimising a linear function $\nabla f(x_k)^T x$ over $[l_i, u_i]$ in coordinate $i$ independently selects the bound with opposite sign to the gradient component.
 
 \textbf{Note:} The implementation uses a fixed $\beta$ (equivalent to step size $1 - \beta$) rather than the standard $\gamma_k = 2/(k+2)$ schedule. Fixed $\beta$ simplifies the algorithm but does not guarantee the $O(1/k)$ convergence rate; the standard schedule would be more principled.
+
+\textbf{Worked example: one Frank--Wolfe iteration for the interior optimum at $x_k = (2.0, 3.0)$, $\beta = 0.90$:}
+\begin{enumerate}[nosep]
+\item \textbf{Gradient}: $\nabla f(x_k) = [2(2.0 - 1),\, 2(3.0 - 5)] = [2.0,\, -4.0]^T$.
+\item \textbf{LP oracle}: minimise $\nabla f(x_k)^T z$ over the box $[0.5, 5] \times [-5, 10]$:
+  \begin{itemize}[nosep]
+  \item $z_1$: gradient component $+2.0 > 0$ $\Rightarrow$ select lower bound: $z_1 = 0.5$;
+  \item $z_2$: gradient component $-4.0 < 0$ $\Rightarrow$ select upper bound: $z_2 = 10$.
+  \end{itemize}
+  LP optimum: $z_k = (0.5,\, 10)$, with $\nabla f^T z_k = 2(0.5) + (-4)(10) = 1 - 40 = -39$.
+\item \textbf{FW gap}: $g_k = \nabla f(x_k)^T(x_k - z_k) = [2, -4][(2-0.5), (3-10)] = [2](1.5) + [-4](-7) = 3 + 28 = 31$. The gap $g_k = 31 > 0$ provides an upper bound on suboptimality: $f(x_k) - f^{\star} \leq g_k = 31$ (which is loose since $f(2,3) = 1 + 4 = 5$, but the gap is loose due to the large domain).
+\item \textbf{Update}: $x_{k+1} = \beta x_k + (1-\beta)z_k = 0.90(2.0, 3.0) + 0.10(0.5, 10) = (1.80 + 0.05,\, 2.70 + 1.0) = (1.85,\, 3.70)$.
+\item \textbf{New objective}: $f(1.85, 3.70) = (1.85-1)^2 + (3.70-5)^2 = 0.7225 + 1.69 = 2.41$ (reduced from 5.0, a 52\% decrease).
+\end{enumerate}
+This worked example illustrates: (a) the LMO selects opposite-corner vertices based on gradient sign; (b) the FW gap provides a valid (if loose) suboptimality bound; (c) the convex combination step is feasible by construction since both $x_k = (2.0, 3.0) \in \mathcal{X}$ and $z_k = (0.5, 10) \in \mathcal{X}$ with $\beta, 1-\beta \geq 0$ and $\beta + (1-\beta) = 1$.
 
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
