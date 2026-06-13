@@ -548,11 +548,24 @@ More precisely, the stochastic gradient for a mini-batch $\mathcal{B}$ is:
 \begin{equation}
 \hat{g}(\theta; \mathcal{B}) = \frac{1}{b} X_{\mathcal{B}}^T(X_{\mathcal{B}}\theta - y_{\mathcal{B}}) \approx \nabla J(\theta) + \underbrace{\xi}_{\text{noise}}, \quad \mathbb{E}[\xi] = 0, \quad \mathbb{E}[\|\xi\|^2] = O(\sigma^2/b).
 \end{equation}
-The \emph{irreducible noise floor} of SGD is:
+
+For a $\mu$-strongly convex loss with $L$-smooth gradient, mini-batch SGD with constant step $\alpha \in (0, 1/L]$ satisfies at epoch $e$ (each epoch = $m/b$ updates):
 \begin{equation}
-\liminf_{k \to \infty} J(\theta_k) \geq J^{\star} + \frac{\alpha \sigma^2}{2\mu b},
+\mathbb{E}\bigl[J(\theta_{e \cdot m/b}) - J^{\star}\bigr] \leq \underbrace{\left(1 - \alpha\mu\right)^{e \cdot m/b}\!\!\bigl(J(\theta_0) - J^{\star}\bigr)}_{\text{transient (geometrically decaying)}} + \underbrace{\frac{\alpha\sigma^2}{2\mu b}}_{\text{noise floor (irreducible)}}.
+\label{eq:sgd_bound}
 \end{equation}
-where $\mu$ is the strong convexity constant and $\alpha$ is the learning rate. This shows that to reduce the noise floor by half, one can either: (i) halve the learning rate $\alpha$ (but this also halves the convergence speed), (ii) double the batch size $b$, or (iii) use a decaying learning rate schedule (which trades off convergence speed for a lower final noise floor). With fixed $\alpha = 0.06$ and $b \in \{5, 40\}$, both reach the same ultimate floor because $J^{\star}_{\mathrm{true}} = J(\theta_{\mathrm{OLS}})$ is the irreducible floor set by the observation noise, not the mini-batch variance.
+The two terms in \eqref{eq:sgd_bound} govern a fundamental trade-off:
+\begin{itemize}[nosep]
+\item \textbf{Small batch ($b = 5$):} Each epoch performs $m/b = 1000/5 = 200$ updates. The transient decays as $(1-\alpha\mu)^{200}$ per epoch (fast). But the noise floor $\propto 1/b$ is $8\times$ larger than for $b = 40$.
+\item \textbf{Large batch ($b = 40$):} Each epoch performs $m/b = 25$ updates. The transient decays $(1-\alpha\mu)^{25}$ per epoch (slow, $8\times$ fewer updates). The noise floor is $8\times$ smaller.
+\end{itemize}
+This explains the experimental observation: with $b = 5$, the loss drops rapidly in early epochs (200 gradient steps per epoch vs 25), but the two batches converge to the same ultimate value because both noise floors equal $J^{\star}_{\mathrm{true}} = J(\theta_{\mathrm{OLS}})$ (the irreducible observation-noise floor, independent of $b$). The observation noise $\sigma^2$ dominates the mini-batch sampling noise $\sigma^2/b$ in this experiment, so further increasing $b$ would not reduce the final loss.
+
+The \emph{irreducible noise floor} is thus:
+\begin{equation}
+\liminf_{k \to \infty} J(\theta_k) \geq J^{\star} + \frac{\alpha \sigma^2}{2\mu b} \xrightarrow[\text{Bench.\ A}]{} J(\theta_{\mathrm{OLS}}) \approx 0.483.
+\end{equation}
+To reduce the floor by half: either halve $\alpha$ (but slower transient) or double $b$ (but more computation per update). In the high-noise ($\sigma = 6$) case, the floor rises to $\approx 17.4 \propto \sigma^2$, consistent with Figure~\ref{fig:q2_sgd_noisy}.
 
 \begin{figure}[H]
 \centering
@@ -1096,7 +1109,13 @@ Updating $\mu_{k+1} = \mu_k + \lambda \max(0, 0.5 - x_{1,k})$ allows the multipl
 
 \textbf{Projected GD} is provably correct: every iterate is feasible by construction, and convergence theory guarantees $f(x_k) \to f^{\star}_{\mathcal{C}}$ for appropriate $\alpha$. The projection cost is $O(1)$ for this simple constraint ($\max$ operation), but can be $O(d^3)$ for general polytopes (via linear programming).
 
-\textbf{Penalty methods} offer simplicity (only a gradient modification is needed), but sacrifice exact feasibility for finite $\lambda$. The penalty parameter $\lambda$ controls a trade-off: smaller $\lambda$ allows larger step sizes but weaker constraint enforcement; larger $\lambda$ tightens feasibility but stiffens the problem, reducing the stable step size. The need to decrease $\alpha$ as $\lambda$ increases (from 0.05 to 0.03) reflects this ill-conditioning: the penalty term introduces a gradient discontinuity at $x_1 = 0.5$, creating a large local Lipschitz constant that requires smaller steps.
+\textbf{Penalty methods} offer simplicity (only a gradient modification is needed), but sacrifice exact feasibility for finite $\lambda$. A key theoretical trade-off is the growth of the Lipschitz constant of $\nabla F_\lambda$ with $\lambda$.
+
+The penalised gradient is $\nabla F_\lambda(x) = \nabla f(x) - \lambda\,\mathbf{1}[x_1 < 0.5]\,e_1$. The penalty component $P(x_1) = \lambda\max(0, 0.5 - x_1)$ has gradient $\partial_1 P = -\lambda\mathbf{1}[x_1<0.5]$, which is piecewise constant with a jump of magnitude $\lambda$ at $x_1 = 0.5$. When iterates straddle the constraint boundary (one step inside, next outside the feasible region), GD sees an \emph{effective} gradient change of magnitude $\lambda$ in one step, equivalent to a local Lipschitz constant of approximately $L_\lambda \approx L_f + \lambda/\alpha$ (per step). Stable iteration requires:
+\begin{equation}
+\alpha \leq \frac{2}{L_f + \lambda}, \quad \text{or more conservatively } \alpha \leq \frac{2}{L_f + c\lambda} \text{ for some constant } c > 1.
+\end{equation}
+For $L_f \approx 10$: with $\lambda = 1.8$, $\alpha_{\max} \approx 2/11.8 \approx 0.169$; with $\lambda = 4.5$, $\alpha_{\max} \approx 2/14.5 \approx 0.138$. The chosen steps ($\alpha = 0.05$ for $\lambda \leq 1.8$; $\alpha = 0.03$ for $\lambda = 4.5$) are substantially more conservative, reflecting the gradient discontinuity at $x_1 = 0.5$ which creates large local variation. As $\lambda \to \infty$, $\alpha \to 0$ and the iteration becomes infeasible in finite steps, which is why the augmented Lagrangian method (Remark above) is preferred: it achieves exact feasibility without requiring $\lambda \to \infty$.
 
 % ============================================================
 \newpage
@@ -1156,7 +1175,28 @@ For the box constraint, the LP subproblem has the closed-form solution:
 \begin{equation}
 (z_k)_i = \begin{cases} l_i & \text{if } (\nabla f(x_k))_i > 0 \\ u_i & \text{if } (\nabla f(x_k))_i \leq 0 \end{cases}
 \end{equation}
-requiring only $O(d)$ operations per iteration.
+requiring only $O(d)$ operations per iteration. The choice between Frank--Wolfe and projected GD depends critically on the relative cost of the LP oracle vs.\ the projection for the specific constraint set:
+
+\begin{table}[H]
+\centering
+\caption{Per-iteration oracle costs for Frank--Wolfe (LP) and Projected GD (Proj.) on common constraint sets.}
+\label{tab:fw_vs_pgd}
+\begin{tabular}{lccl}
+\toprule
+\textbf{Constraint set} & \textbf{LP oracle} & \textbf{Projection} & \textbf{Preferred method} \\
+\midrule
+Box $[l,u]^d$ & $O(d)$ & $O(d)$ & Either (same cost) \\
+Probability simplex $\{x \geq 0,\, \mathbf{1}^Tx=1\}$ & $O(d)$ & $O(d\log d)$ & Frank--Wolfe \\
+$\ell_1$ ball $\{\|x\|_1 \leq r\}$ & $O(d)$ & $O(d\log d)$ & Frank--Wolfe \\
+Nuclear norm ball $\{\|X\|_* \leq r\}$ & $O(\min(m,n)^2)$ (top SVD) & $O(\min(m,n)^3)$ (full SVD) & Frank--Wolfe \\
+Flow polytope (network) & $O(E\log V)$ (shortest path) & Expensive & Frank--Wolfe \\
+General polytope $\{Ax \leq b\}$ & $O(d^3)$ (simplex method) & $O(d^3)$ (QP) & Projected GD \\
+Euclidean ball $\{\|x\| \leq r\}$ & $O(d)$ (scale gradient) & $O(d)$ (scale point) & Either \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For our box constraint ($d = 2$), both methods have $O(d)$ oracle cost and Frank--Wolfe offers no computational advantage. Its value is pedagogical: it demonstrates projection-free feasibility maintenance and provides the FW gap certificate.
 
 \subsection{Case II: Interior Optimum -- $f(x) = (x_1-1)^2 + (x_2-5)^2$}
 
