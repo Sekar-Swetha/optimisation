@@ -471,6 +471,24 @@ Adam & 0.4826 & 0.7244 & 1.5785 \\
 \end{tabular}
 \end{table}
 
+\begin{table}[H]
+\centering
+\caption{Q2: Final objective values comparison (150 iterations each). Bold = best per benchmark. For context, Heavy Ball (Q1, 150 iters) is included.}
+\label{tab:q2_final_extended}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} \\
+\midrule
+GD (baseline, Q1) & 0.4826 & 0.7244 & 3.388 \\
+Heavy Ball (Q1) & 0.4826 & 0.7244 & 0.701 \\
+Nesterov (Q2) & 0.4826 & 0.7244 & \textbf{0.479} \\
+Adam (Q2) & 0.4826 & 0.7244 & 1.579 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Notably, \textbf{Nesterov} achieves the best result on Rosenbrock among all first-order methods with guaranteed convergence, outperforming Heavy Ball despite using a smaller step size ($\alpha = 0.0007$ vs $\alpha = 0.0008$). This confirms the theoretical superiority of the lookahead correction. Adam, despite combining momentum and adaptivity, does not match Nesterov on this deterministic nonconvex problem.
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -849,9 +867,14 @@ Grid search & None & 1 & $N^d=3025$ & 0.00156 & \textbf{Worst} \\
 
 Minimise Benchmark B subject to the half-space constraint $x_1 \geq 0.5$, starting from the infeasible point $x_0 = (0.2, 4.0)$:
 \begin{equation}
-\min_{x \in \mathbb{R}^2}\; f(x) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1) \quad \text{s.t.} \quad x_1 \geq 0.5.
+\min_{x \in \mathbb{R}^2}\; f(x) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1) \quad \text{s.t.} \quad g(x) = 0.5 - x_1 \leq 0.
 \end{equation}
-Since the unconstrained minimum $(0.582, 2.0)$ satisfies $x_1 = 0.582 > 0.5$, it is feasible, and the constrained and unconstrained optima coincide at $x^{\star} = (0.582, 2.0)$, $f^{\star} = 0.7244$. The challenge here lies in handling the infeasible starting point and maintaining feasibility throughout optimisation.
+The \textbf{KKT conditions} for this problem are:
+\begin{align}
+\nabla f(x^{\star}) + \lambda \nabla g(x^{\star}) &= 0, \\
+\lambda g(x^{\star}) &= 0, \quad \lambda \geq 0, \quad g(x^{\star}) \leq 0.
+\end{align}
+Since the unconstrained minimum $x^{\star}_{\text{unc}} = (0.582, 2.0)$ satisfies $g(x^{\star}_{\text{unc}}) = 0.5 - 0.582 = -0.082 < 0$ (strictly feasible), complementary slackness implies $\lambda = 0$, and the first KKT condition reduces to $\nabla f(x^{\star}) = 0$. Therefore the \emph{constraint is not active} at the optimum, and the constrained and unconstrained optima coincide at $x^{\star} = (0.582, 2.0)$, $f^{\star} = 0.7244$. The algorithmic challenge lies in handling the infeasible starting point $x_0$ and ensuring feasibility is maintained or enforced throughout optimisation.
 
 \subsection{Algorithm Formulations}
 
@@ -982,7 +1005,13 @@ Since $f(x) = x_1 + 2x_2$ is separable and the coefficients $a_1 = 1 > 0$, $a_2 
 \begin{equation}
 x^{\star} = \argmin_{x \in \mathcal{X}}\; (x_1 + 2x_2) = (0.5,\, -5), \qquad f^{\star} = 0.5 + 2(-5) = -9.5.
 \end{equation}
-This vertex solution can be found in $O(d) = O(2)$ operations for box constraints. For a general polytope with $m$ constraints, the LP subproblem is solved in $O(\min(m, n^{1.5}) \cdot n \log(1/\varepsilon))$ using interior-point methods, but remains polynomial in problem size.
+This vertex solution can be found in $O(d)$ operations for box constraints.
+
+\begin{remark}[Degenerate LP]
+If the objective direction $a$ is parallel to a face of $\mathcal{X}$ (e.g., $a = [0, 1]^T$, so $a_1 = 0$), the minimum is attained along an entire face (a continuum of solutions), not a single vertex. In this degenerate case, the simplex method returns one vertex on the optimal face. For the box $\mathcal{X}$, this occurs when any component of $a$ is zero.
+\end{remark}
+
+For a general polytope with $m$ constraints, the LP can be solved in polynomial time (e.g., Ellipsoid or interior-point methods), but the Frank--Wolfe approach uses the LP oracle only to find the minimum of $\nabla f(x_k)^T z$ over $\mathcal{X}$, leveraging the LP structure to avoid projections entirely.
 
 \begin{figure}[H]
 \centering
@@ -1172,6 +1201,20 @@ SGD (mini-batch) & C smooth & $O(1/\sqrt{k} + \sigma^2/b)$ & Plus noise floor \\
 \caption{Hessian condition number $\kappa(\nabla^2 f(x_k))$ along the GD and Nesterov trajectories (left), and the trajectories themselves overlaid on the Rosenbrock valley $x_2 = x_1^2$ (right). The condition number remains around $2500$ throughout both trajectories, confirming that the ill-conditioning is a persistent geometric property of the Rosenbrock function rather than a localised artefact. Nesterov's trajectory progresses substantially further along the valley (reaching closer to $(1,1)$) compared to GD in the same number of iterations, while maintaining similar conditioning.}
 \label{fig:hessian_condition}
 \end{figure}
+
+\subsection{Why Rosenbrock Is Hard: A Mathematical Explanation}
+
+The Rosenbrock function is exceptionally challenging for first-order methods due to three compounding factors:
+
+\begin{enumerate}[nosep]
+\item \textbf{Extreme ill-conditioning ($\kappa \approx 2508$):} The Hessian eigenvalue ratio means that GD must take steps $\alpha < 2/L \approx 0.002$, which are barely perceptible in the flat direction (eigenvalue $\lambda_{\min} \approx 0.4$). The condition number determines the linear convergence rate ratio: GD converges at rate $(\kappa - 1)/(\kappa + 1) \approx 0.9992$ per step --- extremely slow.
+
+\item \textbf{Curved valley ($x_2 = x_1^2$):} The constraint manifold curves away from any fixed gradient direction. Gradient descent, which follows straight lines, must ``steer'' by repeatedly correcting direction, taking many small zigzag steps along the valley.
+
+\item \textbf{Non-quadratic coupling:} The term $100(x_2 - x_1^2)^2$ creates a cubic off-diagonal Hessian term $-400 x_1$ that changes sign as $x_1$ passes through zero. This means the Newton quadratic model becomes inaccurate over large step sizes, necessitating damping ($\alpha = 0.22$).
+\end{enumerate}
+
+The combination of these factors creates the ``banana-shaped'' landscape visible in the contour plots: the iterates must navigate a thin, curved corridor where the walls are $100\times$ steeper than the floor, and where the direction of steepest ascent (perpendicular to the valley) changes continuously.
 
 \subsection{Method Selection Guidelines}
 
