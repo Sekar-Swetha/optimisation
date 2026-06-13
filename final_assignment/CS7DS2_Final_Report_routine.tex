@@ -778,6 +778,45 @@ The noise floor analysis (Section~\ref{subsec:sgd_noise_floor}) shows that a fix
 
 For Benchmark A with $m = 1000$ and $\sigma = 1$, the optimal fixed step size that minimises the noise floor vs convergence speed trade-off is approximately $\alpha^{\text{opt}} \approx \varepsilon \mu / (\sigma^2 \text{tr}(H)) \approx \varepsilon \times 0.80 / (1.0 \times 1.69)$ where $\varepsilon$ is the target accuracy. This means for target accuracy $\varepsilon = 10^{-3}$, the optimal fixed step is $\alpha \approx 4.7 \times 10^{-4}$---much smaller than our choice of $\alpha = 0.06$, which is optimised for fast convergence rather than exact minimisation.
 
+\subsection{Variance Reduction: Stochastic Variance Reduced Gradient (SVRG)}
+\label{subsec:svrg}
+
+The fundamental SGD dilemma is the variance--convergence trade-off: a fixed step size $\alpha$ produces an irreducible noise floor $O(\alpha \sigma^2 / b)$, while diminishing step sizes $\alpha_k \to 0$ eliminate the floor but reduce asymptotic convergence to $O(1/\sqrt{k})$. \textbf{Variance reduction} methods break this trade-off, achieving \emph{linear} convergence with SGD's per-iteration cost.
+
+\textbf{SVRG (Johnson \& Zhang, 2013)} works in two nested loops. The outer loop (every $m$ inner iterations) computes a full-gradient \emph{snapshot} $\tilde{\mu} = \nabla f(\tilde{x})$ at the current reference iterate $\tilde{x}$. The inner loop updates:
+\begin{equation}
+x_{k+1} = x_k - \alpha\,\underbrace{\bigl(g_i(x_k) - g_i(\tilde{x}) + \tilde{\mu}\bigr)}_{\text{SVRG gradient estimate}},
+\end{equation}
+where $g_i(x) = \nabla f_i(x)$ is the gradient of the $i$-th sample function. The key insight is that the correction $g_i(x_k) - g_i(\tilde{x})$ is an unbiased estimator of $\nabla f(x_k) - \nabla f(\tilde{x})$, so the SVRG estimate is an unbiased estimator of $\nabla f(x_k)$ with variance:
+\begin{equation}
+\text{Var}[\text{SVRG estimate}] = \mathbb{E}\|g_i(x_k) - g_i(\tilde{x})\|^2 \leq 2L \cdot (f(x_k) - f^{\star} + f(\tilde{x}) - f^{\star}),
+\end{equation}
+which vanishes as both $x_k \to x^{\star}$ and $\tilde{x} \to x^{\star}$. This self-diminishing variance enables linear convergence at a fixed step size.
+
+For $\mu$-strongly convex and $L$-smooth $f$, SVRG with step $\alpha = 1/(10L)$ and inner loop length $m = 20n$ satisfies:
+\begin{equation}
+\mathbb{E}[f(\tilde{x}^{s+1}) - f^{\star}] \leq \rho\,(f(\tilde{x}^s) - f^{\star}), \quad \rho \approx \frac{5L}{4\mu n} = \frac{5\kappa}{4n}.
+\end{equation}
+For $n > 5\kappa/4$, the contraction $\rho < 1$ guarantees linear convergence, matching full-batch GD's rate but at a fraction of the per-epoch cost.
+
+\begin{table}[H]
+\centering
+\caption{Gradient evaluation cost to reach $\varepsilon$-accuracy for strongly convex $f$ with $n$ samples.}
+\label{tab:svrg_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Rate} & \textbf{Grad.\ evals / step} & \textbf{Total to $\varepsilon$} \\
+\midrule
+Full-batch GD & Linear: $e^{-k/\kappa}$ & $n$ & $O(n\kappa \log 1/\varepsilon)$ \\
+SGD (fixed $\alpha$) & Noise floor (stuck) & 1 & $\infty$ \\
+SGD (decaying $\alpha_k \propto 1/k$) & Sub-linear: $O(1/k)$ & 1 & $O(\kappa/\varepsilon)$ \\
+SVRG & Linear: $e^{-k/\kappa}$ (approx.) & 1 (inner) & $O((n + \kappa)\log 1/\varepsilon)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SVRG achieves full-batch GD's linear rate at $O((n+\kappa)\log 1/\varepsilon)$ total gradient evaluations versus $O(n\kappa \log 1/\varepsilon)$ for full-batch GD, a factor-$\kappa$ speedup when $n \gg \kappa$. For Benchmark A ($n=1000$, $\kappa \approx 1.12$), the advantage is minimal since $\kappa$ is already near 1. The benefit is largest for ill-conditioned large-scale problems (e.g., kernel SVMs with $n = 10^6$, $\kappa = 10^4$), which is where SVRG, SAGA, and related variance-reduced methods have had significant practical impact in machine learning.
+
 \subsection{SGD with Increased Observation Noise}
 
 The experiment is repeated with output noise scaled by a factor of 6 ($y_{\text{noisy}}^{(i)} = {\theta^{\star}}^T x^{(i)} + 6\varepsilon^{(i)}$, so $\sigma = 6$).
@@ -1384,6 +1423,40 @@ x_{k+1} = \text{prox}_{\alpha g}(x_k - \alpha \nabla f(x_k)), \quad \text{prox}_
 \end{equation}
 When $g = \iota_{\mathcal{C}}$ (the indicator function of a convex set, $= 0$ on $\mathcal{C}$, $+\infty$ outside), the proximal operator reduces to the projection $\Pi_{\mathcal{C}}$, recovering PGD exactly. For $g = \lambda\|x\|_1$ (LASSO), the proximal operator is the soft-thresholding function $(\text{prox}_{\alpha g})_i = \text{sign}(z_i)\max(|z_i| - \alpha\lambda, 0)$, giving the ISTA (Iterative Shrinkage-Thresholding Algorithm). The accelerated variant (FISTA) applies Nesterov momentum to achieve $O(1/k^2)$ convergence for the composite problem, exactly as Nesterov acceleration does for the smooth case. For Benchmark B with $x_1 \geq 0.5$, ISTA/FISTA reduces to PGD with projection, which is what we implemented.
 
+\subsection{Subgradient Methods for Non-Smooth Objectives}
+\label{subsec:subgradient}
+
+When the objective $f$ is non-differentiable (e.g., $\|x\|_1$ for LASSO, $\max(0, 1 - y\langle w, x\rangle)$ for hinge loss, or absolute value $|x|$), the gradient does not exist at non-smooth points, so standard gradient descent is inapplicable. The \textbf{subgradient} generalises the gradient: a vector $s \in \mathbb{R}^n$ is a subgradient of $f$ at $x$ if
+\begin{equation}
+f(y) \geq f(x) + s^T(y - x) \quad \text{for all } y.
+\end{equation}
+The \emph{subdifferential} $\partial f(x)$ is the set of all subgradients at $x$. For $f(x) = |x|$: $\partial f(0) = [-1, 1]$, $\partial f(x) = \{\text{sign}(x)\}$ for $x \neq 0$. For $f(x) = \|x\|_1$: $(\partial f(x))_i = \text{sign}(x_i)$ if $x_i \neq 0$ and $[-1,1]$ if $x_i = 0$.
+
+The \textbf{subgradient method} iterates $x_{k+1} = x_k - \alpha_k s_k$, $s_k \in \partial f(x_k)$. A critical difference from gradient descent: $-s_k$ is \emph{not} guaranteed to be a descent direction, so $f(x_{k+1})$ may exceed $f(x_k)$. The algorithm must therefore track the \textbf{best iterate} $x_k^{\text{best}} = \argmin_{j \leq k} f(x_j)$. The convergence bound for convex $f$ with subgradients bounded by $G$ is:
+\begin{equation}
+f(x_k^{\text{best}}) - f^{\star} \leq \frac{\|x_0 - x^{\star}\|^2 + G^2 \sum_{j=0}^{k}\alpha_j^2}{2\sum_{j=0}^{k}\alpha_j}.
+\end{equation}
+The optimal schedule $\alpha_k = \|x_0 - x^{\star}\|/(G\sqrt{k+1})$ gives $f(x_k^{\text{best}}) - f^{\star} \leq G\|x_0 - x^{\star}\|/\sqrt{k+1} = O(1/\sqrt{k})$, which is \textbf{optimal for non-smooth convex functions}: no first-order method can improve on $\Omega(G\|x_0 - x^{\star}\|/\sqrt{k})$ (Nesterov 1983 lower bound for the non-smooth class).
+
+\begin{table}[H]
+\centering
+\caption{Convergence rates for smooth vs non-smooth objectives. The structural assumption on $f$ determines the achievable rate.}
+\label{tab:smooth_nonsmooth}
+\begin{tabular}{llll}
+\toprule
+\textbf{Objective type} & \textbf{Method} & \textbf{Rate} & \textbf{Note} \\
+\midrule
+$L$-smooth convex & Gradient Descent & $O(1/k)$ & Step $\alpha = 1/L$ \\
+$L$-smooth convex & Nesterov & $O(1/k^2)$ & Optimal 1st-order \\
+Lipschitz convex (non-smooth) & Subgradient & $O(1/\sqrt{k})$ & Optimal non-smooth \\
+Composite: $f_{\text{smooth}} + g_{\text{non-smooth}}$ & Prox.\ GD (ISTA) & $O(1/k)$ & Requires $\text{prox}_g$ \\
+Composite: $f_{\text{smooth}} + g_{\text{non-smooth}}$ & FISTA & $O(1/k^2)$ & Nesterov + prox \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The $O(1/\sqrt{k})$ vs $O(1/k^2)$ gap between subgradient and FISTA is a factor of $k^{1.5}$: after $k = 10^4$ iterations, FISTA achieves $10^{-8}$ accuracy while the subgradient method reaches only $10^{-2}$. This dramatic difference motivates the proximal gradient framework (Section~\ref{subsec:proximal}), which exploits the composite structure $f + g$ to achieve the faster FISTA rate whenever $g$ has a computable proximal operator (LASSO: soft-thresholding; $\ell_2$ ball: scaling; simplex: sorting algorithm). On our benchmarks---all differentiable---the subgradient method is not needed, but understanding its $O(1/\sqrt{k})$ limitation explains why non-smooth objectives in machine learning (L1 regularisation, SVMs, group sparsity) are invariably formulated using proximal operators rather than naive subgradient updates.
+
 % ============================================================
 \section{\texorpdfstring{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}{Question 6: Linear Programmes and Frank-Wolfe Algorithm [30 marks]}}
 \label{sec:q6}
@@ -1460,6 +1533,19 @@ f(x_k) - f^{\star} \leq \frac{2 L_f D^2}{k + 2} = O\!\left(\frac{1}{k}\right).
 \end{equation}
 The fixed-$\beta$ variant used here does not achieve this rate but is easier to implement.
 \end{theorem}
+
+\textbf{Convergence proof sketch.} The key object is the \emph{Frank--Wolfe duality gap}:
+\begin{equation}
+g_k^{\text{FW}} = \max_{z \in \mathcal{X}}\; \nabla f(x_k)^T(x_k - z) = \nabla f(x_k)^T(x_k - z_k) \geq 0,
+\end{equation}
+which is always non-negative (the LMO finds the most negative directional derivative over $\mathcal{X}$). By first-order convexity, $f(z) \geq f(x_k) + \nabla f(x_k)^T(z - x_k)$ for all $z \in \mathcal{X}$, so choosing $z = x^{\star}$ gives $g_k^{\text{FW}} \geq f(x_k) - f^{\star}$. Hence the duality gap is a computable \emph{upper bound on sub-optimality} --- no knowledge of $f^{\star}$ is required.
+
+For the step $x_{k+1} = (1-\gamma_k)x_k + \gamma_k z_k$ with $\gamma_k = 2/(k+2)$, $L$-smoothness gives:
+\begin{align}
+f(x_{k+1}) &\leq f(x_k) + \gamma_k \nabla f(x_k)^T(z_k - x_k) + \tfrac{L\gamma_k^2}{2}\|z_k - x_k\|^2 \\
+&\leq f(x_k) - \gamma_k g_k^{\text{FW}} + \tfrac{L\gamma_k^2 D^2}{2}.
+\end{align}
+Letting $h_k = f(x_k) - f^{\star}$ and using $g_k^{\text{FW}} \geq h_k$, the recursion $h_{k+1} \leq (1-\gamma_k)h_k + \tfrac{L\gamma_k^2 D^2}{2}$ with $\gamma_k = 2/(k+2)$ telescopes to $h_k \leq 2LD^2/(k+2)$ by induction. For our problem, $D = \sqrt{(5-0.5)^2 + (10-(-5))^2} \approx 15.7$, $L = 2$ (for the interior-optimum function), giving $h_k \leq 981/(k+2)$.
 
 For box constraints, the LMO decomposes per coordinate:
 \begin{equation}
