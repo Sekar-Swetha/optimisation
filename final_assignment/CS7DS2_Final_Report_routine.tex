@@ -228,6 +228,10 @@ which adapts dimension-by-dimension to the gradient magnitude, achieving better 
 
 RMSprop addresses Adagrad's over-decay by replacing the cumulative sum with an exponential moving average (EMA) with decay $\beta$. The effective memory window is approximately $1/(1-\beta)$ iterations. With $\beta = 0.9$, recent gradients receive an effective weight of $0.9^k$ at lag $k$, so information older than $\sim 10$ iterations is largely discarded.
 
+\textbf{When RMSprop underperforms Adagrad:} On Benchmark A (well-conditioned, stable gradients), Adagrad reaches a higher steady-state effective step $\bar{\alpha}_{\rm Ada} = \alpha_0 / \sqrt{k\cdot\|g\|^2}$ at intermediate iterations, while RMSprop's EMA saturates at $v_\infty = \mathbb{E}[g^2]$ giving $\bar{\alpha}_{\rm RMS} = \alpha_0/\sqrt{v_\infty}$. When gradient magnitudes are consistent and small (near the optimum), Adagrad's cumulative denominator grows without bound, causing over-decay; but the EMA in RMSprop also cannot forget past large-gradient steps taken far from the optimum, leading to an elevated steady-state denominator that stalls convergence. The net effect for Benchmark A is that RMSprop converges to $f = 0.5027 > J^{\star} = 0.4826$ due to this oscillation issue.
+
+\textbf{When RMSprop outperforms Adagrad:} In non-stationary settings (changing objective, noisy gradients), RMSprop's forgetting mechanism allows the effective step to recover when gradients become small again. In deep learning where gradient magnitudes change dramatically between training phases (e.g., learning rate warm-up), RMSprop adapts more gracefully than Adagrad's monotonically shrinking steps.
+
 \begin{algorithm}[H]
 \caption{Heavy Ball (Polyak Momentum)}
 \label{alg:heavyball}
@@ -733,6 +737,19 @@ This reveals three key relationships: (i) larger $\alpha$ raises the noise floor
 \caption{Q2: SGD noise floor analysis on Benchmark A ($\sigma = 1$, $\alpha = 0.06$). Left: convergence curves for batch sizes $b \in \{5, 10, 20, 40, 100, 200, 500, 1000\}$. All batch sizes converge rapidly in early epochs, but plateau at batch-size-dependent noise floors. Larger batches achieve lower noise floors due to lower gradient variance. The noise floor for $b = 1000$ (full batch) is near zero, confirming that full-batch GD converges to $J^{\star}$. Right: final loss (above $J^{\star}$) vs batch size on a log-log scale. The empirical fit gives slope $\approx -1.25$ (close to the theoretical $-1$), confirming the $O(1/b)$ noise floor scaling. Deviations from exact $-1$ arise because all batch sizes have not yet fully converged (80 epochs is sufficient for large $b$ but marginal for small $b$).}
 \label{fig:sgd_noise}
 \end{figure}
+
+\subsection{Learning Rate Schedules for SGD}
+\label{subsec:lr_schedule}
+
+The noise floor analysis (Section~\ref{subsec:sgd_noise_floor}) shows that a fixed step size $\alpha$ produces irreducible variance. Three principal approaches eliminate this:
+
+\begin{enumerate}[nosep]
+\item \textbf{Diminishing schedule:} $\alpha_k = \alpha_0 / (1 + \gamma k)$ or $\alpha_k = c/\sqrt{k}$. For the Robbins-Monro conditions ($\sum \alpha_k = \infty$, $\sum \alpha_k^2 < \infty$), SGD converges to $\theta^{\star}$ with rate $O(1/\sqrt{k})$ for non-smooth convex or $O(1/k)$ for smooth strongly convex. The disadvantage is the need to tune $\alpha_0$ and $\gamma$.
+\item \textbf{Epoch-based decay:} $\alpha_k = \alpha_0 \cdot \rho^{\lfloor k/T \rfloor}$ (multiply by $\rho < 1$ every $T$ epochs). Used in practice for deep learning (cosine annealing, step decay). Provides a compromise between convergence and solution quality.
+\item \textbf{Averaging (Polyak-Ruppert):} Use fixed $\alpha$ but return the average $\bar{\theta}_k = \frac{1}{k}\sum_{j=0}^{k-1}\theta_j$ as the estimate. Under smoothness, $f(\bar{\theta}_k) - f^{\star} = O(1/\sqrt{k})$ regardless of the noise level, effectively achieving variance reduction without step size decay. This is the basis for algorithms like SVRG (Stochastic Variance Reduced Gradient).
+\end{enumerate}
+
+For Benchmark A with $m = 1000$ and $\sigma = 1$, the optimal fixed step size that minimises the noise floor vs convergence speed trade-off is approximately $\alpha^{\text{opt}} \approx \varepsilon \mu / (\sigma^2 \text{tr}(H)) \approx \varepsilon \times 0.80 / (1.0 \times 1.69)$ where $\varepsilon$ is the target accuracy. This means for target accuracy $\varepsilon = 10^{-3}$, the optimal fixed step is $\alpha \approx 4.7 \times 10^{-4}$---much smaller than our choice of $\alpha = 0.06$, which is optimised for fast convergence rather than exact minimisation.
 
 \subsection{SGD with Increased Observation Noise}
 
@@ -1692,6 +1709,10 @@ This report has presented a systematic comparative study of twelve optimisation 
 \end{enumerate}
 
 A consistent theme across all questions is the \emph{no-free-lunch} principle: no single method dominates all problem types. The best algorithm depends critically on the problem structure (convexity, conditioning, separability), the information available (gradients, Hessians, $f^\star$), the constraint geometry, and computational budget. The course-spanning comparison provided by these experiments reinforces why practitioners need a broad repertoire of optimisation tools.
+
+The information-theoretic lower bound of $\Omega(1/k^2)$ for first-order smooth-convex optimisation (Section~\ref{subsec:lower_bounds}) explains why the experiments are arranged as they are: first-order methods (Q1--Q2) are fundamentally limited, second-order methods (Q3) escape this limit at the cost of $O(n^3)$ per iteration, and derivative-free methods (Q4) pay an additional factor of $n$ in convergence rate. The constrained methods (Q5--Q6) each solve a specific structural problem---hard constraints (PGD) or projection-free convergence (Frank--Wolfe)---that cannot be handled by the unconstrained methods alone.
+
+\textbf{Limitations and future directions:} Several natural extensions were not explored due to scope: (i) \emph{variable metric methods} (L-BFGS, CG) that approximate Newton's direction without explicit Hessian formation would bridge the gap between first- and second-order methods more gracefully; (ii) \emph{stochastic variance reduction} (SVRG, SAGA) would allow SGD to escape the noise floor without step size decay; (iii) \emph{non-smooth objectives} (LASSO, hinge loss) would require subgradient methods or proximal operators, bringing the $O(1/\sqrt{k})$ rate into play; and (iv) \emph{distributed optimisation} with ADMM would be relevant for the large-scale Benchmark A setting. Each of these extensions connects to active research areas in optimisation for machine learning.
 
 From a theoretical perspective, the experiments validate several key results from the course:
 \begin{itemize}[nosep]
