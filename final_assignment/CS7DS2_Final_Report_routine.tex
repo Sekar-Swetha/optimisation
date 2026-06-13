@@ -481,6 +481,10 @@ with the ratio bounded in magnitude by 1, so the effective step per coordinate i
 
 The bias-correction terms $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ are critical at early iterations. At $t=1$ with $\beta_2 = 0.999$, the uncorrected $v_1 = (1-0.999)g_1^2 = 0.001g_1^2$ underestimates the true squared gradient by $1000\times$, giving an effective step $\sqrt{1000}\approx 32\times$ too large without correction. As $t \to \infty$, both corrections approach 1 and Adam reduces to RMSprop with gradient momentum. The convention $\beta_1 < \beta_2$ (here 0.80 vs 0.999) ensures the gradient EMA adapts faster than the variance EMA, giving responsive gradient direction with stable curvature estimates.
 
+\begin{remark}[Adam's convergence and AMSGrad]
+Reddi et al.\ (2018) showed that Adam can \emph{fail to converge} on simple convex online problems, because the exponential moving average of $g_t^2$ can decrease (if gradients alternate between large and small), causing the effective step $\alpha/\sqrt{\hat{v}_t}$ to \emph{increase} over time in some coordinate --- violating the descent property. This non-monotone step behaviour can prevent convergence to the optimum on non-smooth convex problems. The fix, \emph{AMSGrad}, replaces $\hat{v}_t$ with a monotone maximum: $\hat{v}_t^{\max} = \max(\hat{v}_{t-1}^{\max}, \hat{v}_t)$, ensuring the effective step never increases. In practice on smooth strongly convex problems (as in our experiments), Adam does converge; the non-convergence is a pathological case involving oscillating stochastic gradients. Nevertheless, in training large language models, careful Adam hyperparameter tuning (especially $\epsilon$ to prevent division by near-zero values) remains critical.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -606,6 +610,15 @@ The fundamental insight is that SGD with fixed step size trades convergence prec
 \caption{Q2: Mini-batch SGD with different batch sizes on Benchmark A. With $b = 5$, each epoch performs $m/b = 200$ updates; with $b = 40$, only 25 updates per epoch. Per Proposition~\ref{prop:sgd}, both methods converge to a neighbourhood of size $O(\alpha\sigma^2_g/b)$ around $J^\star$. Since the observation noise dominates the mini-batch noise for this problem (the per-sample residual variance $\approx 1$, independent of $b$), both batch sizes converge to approximately the same floor $J^\star \approx 0.4826$ --- the irreducible loss due to observation noise. The smaller batch ($b = 5$) converges faster in epoch count (more gradient steps) but oscillates more visibly near the floor.}
 \label{fig:q2_sgd_batch}
 \end{figure}
+
+\begin{remark}[Variance reduction: SVRG and SAGA]
+Proposition~\ref{prop:sgd} reveals a fundamental limitation of fixed-step SGD: it converges only to a neighbourhood of radius $O(\alpha\sigma^2_g/b)$ around $f^\star$, not to $f^\star$ itself. \emph{Variance reduction methods} eliminate this noise floor while maintaining cheap per-iteration cost:
+\begin{itemize}[nosep]
+  \item \textbf{SVRG} (Johnson \& Zhang, 2013): Periodically computes the full gradient $\tilde{g} = \nabla f(x_s)$ at a snapshot $x_s$. The update is $\hat{g}_k = \nabla f_i(x_k) - \nabla f_i(x_s) + \tilde{g}$, which is unbiased with variance $O(\|x_k - x_s\|^2) \to 0$ as $x_k \to x^\star$. SVRG achieves \emph{linear convergence} to $f^\star$ (not just a neighbourhood) at an epoch cost of $O((m + \kappa)\log(1/\epsilon))$ gradient evaluations.
+  \item \textbf{SAGA} (Defazio et al., 2014): Maintains a table of the $m$ most recent per-sample gradients. The variance of the SAGA estimator goes to zero as the iterate converges. SAGA has the same asymptotic rate as SVRG but is better suited for streaming settings (no snapshot epoch required).
+\end{itemize}
+For Benchmark A with $m=1000$, $\kappa \approx 1$: SVRG needs $O((1000+1)\log(1/\epsilon)) \approx 1000\log(1/\epsilon)$ per-sample gradient evaluations, comparable to full-batch GD ($1000$ evaluations per step $\times$ $\log(1/\epsilon)$ steps). Variance reduction becomes most beneficial for large $m$ with moderate $\kappa$: SVRG's $O(m + \kappa)$ vs SGD's $O(m\kappa)$ epoch cost gives a $\kappa$-factor speedup.
+\end{remark}
 
 \subsection{SGD with Increased Noise}
 
@@ -781,6 +794,16 @@ C & 3.7319 & \textbf{0.6864} & $(0.183,\; 0.020)$ & $5.4\times$ lower $f$ \\
 \label{fig:q3_update}
 \end{figure}
 
+\subsection{Newton Decrement and Progress Certificate}
+
+\begin{remark}[Newton decrement as a stopping criterion]
+The \emph{Newton decrement} $\lambda(x_k) = \sqrt{\nabla f(x_k)^T [\nabla^2 f(x_k)]^{-1} \nabla f(x_k)}$ measures the magnitude of the Newton step and provides a tight bound on the suboptimality:
+\[
+  f(x_k) - f^\star \leq \tfrac{1}{2}\lambda(x_k)^2.
+\]
+This gives a primal certificate without knowing $f^\star$: halt when $\lambda(x_k)^2/2 \leq \epsilon$. Unlike gradient norm $\|\nabla f(x_k)\|$, the Newton decrement is \emph{affine invariant} (unchanged under coordinate reparametrisations) and accounts for the local curvature. For Benchmark A (quadratic), $\lambda(x_0)^2/2 = f(x_0) - f^\star$ exactly, so one step reduces $\lambda$ to zero. For Benchmark C, even with $\alpha = 0.22$, the decrement decreases rapidly in early iterations as the Hessian guides large curvature-corrected steps.
+\end{remark}
+
 \subsection{Computational Cost Comparison}
 
 Newton's method has a higher per-iteration cost than gradient descent:
@@ -794,6 +817,16 @@ For $d = 2$ these differences are negligible, and Newton's 1 iteration versus GD
 \item \textbf{Gauss-Newton}: Approximates the Hessian of a least-squares objective as $J^TJ$ (where $J$ is the Jacobian), avoiding second-order derivatives entirely.
 \item \textbf{Hessian-free Newton (truncated CG)}: Solves the Newton system inexactly using conjugate gradient, requiring only Hessian-vector products (computable in $O(d)$ via automatic differentiation) rather than the full Hessian.
 \end{itemize}
+
+\begin{remark}[Iteration complexity: Newton vs first-order methods]
+For a $\mu$-strongly convex $L$-smooth function with $M$-Lipschitz Hessian, reaching $\epsilon$-accuracy ($f(x_k) - f^\star \leq \epsilon$) requires:
+\begin{itemize}[nosep]
+  \item \textbf{GD}: $O(\kappa \log(1/\epsilon))$ iterations, each costing $O(d)$ $\Rightarrow$ total $O(\kappa d \log(1/\epsilon))$.
+  \item \textbf{Newton} (local phase): $O(\log\log(1/\epsilon))$ iterations (double-exponential convergence), each costing $O(d^3)$ $\Rightarrow$ total $O(d^3 \log\log(1/\epsilon))$.
+  \item \textbf{Newton} (global phase from damped Newton): $O(\kappa \cdot f_0/\mu)$ damped steps to enter the local convergence region, each $O(d^3)$.
+\end{itemize}
+For $d = 2$ and $\kappa = 2504$: GD needs $2504\log(1/\epsilon)$ iterations vs Newton's effectively $O(1)$ once in the local region (e.g., 5 iterations for $\epsilon = 10^{-6}$ vs GD's $\approx 35{,}000$). This shows why Newton is dramatically faster for small-to-medium $d$ but the advantage reverses for large $d$ where $O(d^3)$ per step dominates.
+\end{remark}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -957,6 +990,10 @@ The KKT conditions for this inequality-constrained problem are: there exists $\m
 Since $\nabla g = (-1, 0)^T$, the stationarity condition gives $[2(x_1^\star - 1) + \cos(x_1^\star) - \mu,\; 10(x_2^\star - 2)] = 0$.
 
 The unconstrained minimum at $x_1^\star \approx 0.582 > 0.5$ is \emph{feasible}. Therefore the constraint is \emph{inactive} ($g(x^\star) < 0$), complementary slackness forces $\mu = 0$, and the KKT conditions reduce to $\nabla f(x^\star) = 0$. The constrained and unconstrained minima \emph{coincide}. Algorithms that enforce feasibility throughout converge to this same point; those that tolerate infeasibility (penalty methods) must be driven there by a sufficiently strong penalty.
+
+\begin{remark}[Slater's condition and KKT necessity]
+The KKT conditions are necessary for optimality under a \emph{constraint qualification} (CQ). The most commonly used CQ for inequality constraints is \emph{Slater's condition}: there exists a strictly feasible point $\bar{x}$ with $g(\bar{x}) < 0$ (i.e.\ $\bar{x}_1 > 0.5$). For our problem, any $x$ with $x_1 > 0.5$ satisfies Slater's condition, so the KKT conditions are both necessary and sufficient (since $f$ is locally convex near $x^\star$) for the constrained minimum. This guarantees that our KKT analysis correctly identifies $x^\star$. Without a CQ (e.g.\ for problems where all feasible points lie on the active constraint boundary), the KKT multipliers may not exist even at the minimum, making the KKT system uninformative. For linear constraints (as in Frank--Wolfe's box constraint), Slater's condition always holds as long as the feasible set has non-empty interior.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Projected Gradient Descent}
@@ -1173,6 +1210,15 @@ This tells us $f(x_0) - f^\star \leq 72$. Indeed $f(x_0) = 0 + 16 = 16$ and $f^\
 \end{remark}
 
 \textbf{Practical recommendation:} The decaying step-size schedule $\gamma_k = 2/(k+2)$ should be preferred over fixed $\beta$ for convergence guarantees. In our boundary case, the fixed $\beta = 0.93$ leaves a gap $f = 0.364$ vs $f^\star = 0.25$ that would be closed by allowing smaller steps in later iterations.
+
+\begin{remark}[Frank--Wolfe vs projected gradient: oracle complexity comparison]
+For a box-constrained problem as in Q6, both Frank--Wolfe and projected gradient descent achieve linear convergence to $f^\star$ for strongly convex $f$ (PGD) and $O(1/k)$ for only convex $f$ (FW). However, the \emph{per-iteration cost} differs:
+\begin{itemize}[nosep]
+  \item \textbf{Projected GD}: LP step costs $O(d)$; projection onto box also costs $O(d)$ (per-coordinate clipping). Both are equally cheap for box constraints.
+  \item \textbf{Frank--Wolfe}: LP step costs $O(d)$; no projection needed. But for a nuclear norm ball $\{X : \|X\|_* \leq 1\}$ (rank-$r$ matrix $X \in \mathbb{R}^{p\times q}$), the LP oracle (computing the top singular vectors of $\nabla f$) costs $O(pqr)$ via truncated SVD vs projection (which requires a full SVD at $O(pq\min(p,q))$). This makes FW $O(\min(p,q)/r)$ times cheaper per iteration for low-rank matrices --- a critical advantage in collaborative filtering.
+\end{itemize}
+For our box constraint, both methods are equally cheap per iteration, and PGD's superior convergence rate (linear vs $O(1/k)$) makes it preferable. Frank--Wolfe's advantage emerges only for structured constraint sets where the LP oracle is substantially cheaper than projection.
+\end{remark}
 
 % ============================================================
 \section{Conclusion}
