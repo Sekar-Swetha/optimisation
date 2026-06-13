@@ -128,7 +128,7 @@ f(x_1, x_2) = (x_1 - 1)^2 + 5(x_2 - 2)^2 + \sin(x_1).
 \end{equation}
 The gradient is $\nabla f = [2(x_1 - 1) + \cos(x_1),\ 10(x_2 - 2)]^T$ and the Hessian is $H(x) = \mathrm{diag}(2 - \sin(x_1),\ 10)$. Because $\sin(x_1) \in [-1, 1]$, the curvature in $x_1$ is bounded in $[1, 3]$, giving $L = 10$ and local strong convexity $\mu \approx 1$ near the minimum, so $\kappa \approx 10$. The function is non-convex globally (the $\sin$ term creates multiple local minima for large $|x_1|$) but is locally strongly convex near its minimum.
 
-The unconstrained minimum lies where $2(x_1 - 1) + \cos(x_1) = 0$ and $x_2 = 2$; solving numerically gives $x_1^\star \approx 0.582$, so $x^\star \approx (0.582,\, 2.0)$ with $f^\star \approx 0.7235$. Starting point: $x_0 = [-1, 4]^T$.
+The unconstrained minimum lies where $\partial f/\partial x_1 = 2(x_1 - 1) + \cos(x_1) = 0$ and $x_2 = 2$. Solving numerically (bisection on $h(x) = 2x-2+\cos x$) gives $x_1^\star \approx 0.582$, so $x^\star \approx (0.582,\, 2.0)$ with $f^\star = (0.582-1)^2 + \sin(0.582) \approx 0.1745 + 0.5490 \approx 0.7235$. Starting point: $x_0 = [-1, 4]^T$. The value $f \approx 0.7244$ consistently observed in experiments represents near-convergence within the iteration budget, not exact convergence to $f^\star$.
 
 \subsection{Benchmark C: Rosenbrock Function}
 \begin{equation}
@@ -368,10 +368,15 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \subsection{Comparative Discussion}
 
 \begin{itemize}[nosep]
-\item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest (Rosenbrock: $f = 0.009$). Otherwise, Adagrad and Heavy Ball match or exceed the GD baseline.
-\item \textbf{Smoothness:} RMSprop produces the smoothest convergence curves due to exponential averaging. Heavy Ball exhibits characteristic overshoot followed by damped oscillation.
-\item \textbf{Stability:} GD baseline is most stable but slowest. Polyak is unstable when $f^{\star}$ is misspecified. Adagrad is uniformly stable (monotonically decreasing step size guarantees descent), but this causes premature convergence on ill-conditioned or non-stationary problems.
-\item \textbf{Practical recommendation:} Since exact $f^{\star}$ is rarely known in practice, Polyak's applicability is limited. For data science applications, RMSprop or Adam (Q2) are preferred due to their robust adaptive behaviour without requiring $f^\star$.
+\item \textbf{Convergence speed:} When $f^{\star}$ is known exactly, Polyak converges fastest (Rosenbrock: $f = 0.009$). Otherwise, Adagrad and Heavy Ball match or exceed the GD baseline. On the most difficult benchmark (Rosenbrock), the ranking is: Polyak $>$ Heavy Ball $>$ Adagrad $>$ RMSprop $\approx$ GD.
+
+\item \textbf{Heavy Ball on quadratics:} For the strictly quadratic Benchmark A (where $\kappa \approx 1$), Heavy Ball with $\beta = 0.88$ shows no advantage over GD. This matches theory: the optimal Heavy Ball rate $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ approaches $(\kappa-1)/(\kappa+1) \approx 0$ for $\kappa \approx 1$. On Rosenbrock (large $\kappa$), momentum accumulation along the curved valley helps, but Heavy Ball's non-lookahead gradient can cause instability on strongly non-quadratic objectives. This explains why Heavy Ball outperforms GD on Benchmark C but by less than Nesterov (Q2).
+
+\item \textbf{Smoothness:} RMSprop produces the smoothest convergence curves due to exponential averaging. Heavy Ball shows characteristic overshoot followed by damped oscillation in the final convergence phase.
+
+\item \textbf{Stability:} GD is most stable but slowest. Polyak is unstable when $f^{\star}$ is misspecified. Adagrad is uniformly stable (monotonically decreasing step size guarantees descent) but may stagnate prematurely. RMSprop can oscillate near the minimum due to a non-vanishing effective step.
+
+\item \textbf{Practical recommendation:} Exact $f^{\star}$ is rarely known in practice, limiting Polyak's applicability. For data science applications where robustness is paramount, RMSprop or Adam (Q2) are preferred. When the problem structure suggests the optimal value is known (e.g.\ feasibility problems, or via duality), the Polyak step is theoretically optimal.
 \end{itemize}
 
 % ============================================================
@@ -433,7 +438,13 @@ The critical distinction from Heavy Ball is the \emph{lookahead}: the gradient i
 \end{algorithmic}
 \end{algorithm}
 
-Adam (Kingma \& Ba, 2015) combines Nesterov-style gradient momentum (via $m_t$) with per-coordinate adaptive scaling (via $v_t$, inheriting RMSprop's exponential averaging). The bias-correction terms $1/(1-\beta_1^t)$ and $1/(1-\beta_2^t)$ account for the warm-up period where the EMA estimates are initialised at zero; without correction, early iterates would be biased towards zero regardless of the true gradient. The effective step per coordinate is approximately $\alpha / \sqrt{\mathbb{E}[g^2]}$, automatically normalising by the RMS gradient magnitude.
+Adam (Kingma \& Ba, 2015) unifies two ideas: (1)~RMSprop's per-coordinate adaptive scaling via EMA of $g^2$, and (2)~Polyak-style gradient momentum via EMA of $g$. The unified update performs an approximately normalised gradient step:
+\begin{equation}
+  x_{t+1} \approx x_t - \alpha \cdot \frac{\mathbb{E}[g_t]}{\sqrt{\mathbb{E}[g_t^2]} + \varepsilon},
+\end{equation}
+with the ratio bounded in magnitude by 1, so the effective step per coordinate is always at most $\alpha$.
+
+The bias-correction terms $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ are critical at early iterations. At $t=1$ with $\beta_2 = 0.999$, the uncorrected $v_1 = (1-0.999)g_1^2 = 0.001g_1^2$ underestimates the true squared gradient by $1000\times$, giving an effective step $\sqrt{1000}\approx 32\times$ too large without correction. As $t \to \infty$, both corrections approach 1 and Adam reduces to RMSprop with gradient momentum. The convention $\beta_1 < \beta_2$ (here 0.80 vs 0.999) ensures the gradient EMA adapts faster than the variance EMA, giving responsive gradient direction with stable curvature estimates.
 
 \subsection{Hyperparameter Settings}
 
@@ -782,7 +793,7 @@ This zeroth-order method estimates only a single directional derivative $\nabla 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q4_fval_B.pdf}
-\caption{Q4A: Convergence comparison on Benchmark B. Exact GD converges fastest. FD GD with $\delta = 0.05$ closely tracks exact GD, confirming that the truncation error is negligible for this $\delta$ relative to Benchmark B's curvature scale (Proposition~\ref{prop:fd}: truncation error $\approx M\delta/2 = 5 \times 0.05/2 = 0.125$ per coordinate, already modest). FD GD with $\delta = 0.8$ converges poorly: the truncation error $O(0.8)$ dominates and the gradient direction is corrupted beyond the scale of the local geometry. Nesterov random search converges slowest due to the 1D projection of the gradient (noise in $d-1$ dimensions), but notably still makes progress using only 2 function evaluations per step.}
+\caption{Q4A: Convergence comparison on Benchmark B. Exact GD converges fastest. FD GD with $\delta = 0.05$ closely tracks exact GD, confirming that the truncation error is small relative to the gradient magnitude. For Benchmark B the maximum second derivative is 10 (the $x_2$ curvature), giving truncation error $\approx M\delta/2 = 10 \times 0.05/2 = 0.25$ per coordinate. Near the starting point where $\|\nabla f\| \approx 20$, the relative error is only $0.25/20 = 1.25\%$ --- negligible. FD GD with $\delta = 0.8$ converges poorly: truncation error $\approx 10 \times 0.8/2 = 4.0$ per coordinate, a 20\% relative error at the start and overwhelming near the minimum where $\|\nabla f\| \to 0$. Nesterov random search converges slowest due to using only a 1D projection of the gradient, but makes steady progress with only 2 function evaluations per step.}
 \label{fig:q4_fval_B}
 \end{figure}
 
@@ -1026,7 +1037,7 @@ In contrast, projecting onto a general convex set can require solving a QP. For 
 
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
-The unconstrained minimum $(1, 5)$ lies inside $\mathcal{X} = [0.5, 5] \times [-5, 10]$. Since $(1, 5)$ is in the interior, the LP oracle $z_k$ repeatedly selects extreme points of $\mathcal{X}$ that oscillate as $\nabla f(x_k)$ changes direction, producing the characteristic ``zig-zag'' pattern of Frank--Wolfe. Two mixing parameters are tested: $\beta = 0.90$ (step size $1-\beta = 0.10$) and $\beta = 0.985$ (step size $0.015$).
+The unconstrained minimum $(1, 5)$ lies inside $\mathcal{X} = [0.5, 5] \times [-5, 10]$. Starting from $x_0 = (1, 1)$ with $\beta = 0.90$, we can trace the first two iterations explicitly. At $x_0 = (1, 1)$: $\nabla f(x_0) = (0, -8)$. Since $g_1 = 0 \leq 0$ and $g_2 = -8 \leq 0$, the LP oracle selects $z_0 = (u_1, u_2) = (5, 10)$ (upper bounds). Then $x_1 = 0.90(1, 1) + 0.10(5, 10) = (1.4, 1.9)$. At $x_1$: $\nabla f = (0.8, -6.2)$. Now $g_1 = 0.8 > 0$ so $z_1^{(1)} = l_1 = 0.5$; $g_2 = -6.2 \leq 0$ so $z_1^{(2)} = u_2 = 10$. Thus $z_1 = (0.5, 10)$, jumping to the opposite corner. This alternation between $(5, 10)$ and $(0.5, 10)$ as the sign of $g_1$ switches is the mechanism behind the zig-zag. Two mixing parameters are tested: $\beta = 0.90$ (step size $1-\beta = 0.10$) and $\beta = 0.985$ (step size $0.015$).
 
 \begin{figure}[H]
 \centering
