@@ -168,7 +168,9 @@ Four adaptive methods are compared against a constant step-size gradient descent
 \end{algorithmic}
 \end{algorithm}
 
-\textbf{Theoretical basis:} Adagrad's effective learning rate for coordinate $i$ is $\alpha_k^{(i)} = \alpha_0 / (\sqrt{\sum_{j=0}^{k} g_j^{(i)2}} + \varepsilon)$, which decreases monotonically. This provides large steps along coordinates with small historical gradients (rare but important features) and small steps along frequently-updated coordinates. In the online convex setting, Adagrad achieves regret $O(\sqrt{T})$. The drawback is that the rate decays to zero for all coordinates, even those still needing updates.
+\textbf{Theoretical basis:} Adagrad's effective learning rate for coordinate $i$ is $\alpha_k^{(i)} = \alpha_0 / (\sqrt{\sum_{j=0}^{k} g_j^{(i)2}} + \varepsilon)$, which decreases monotonically. This provides large steps along coordinates with small historical gradients (sparse/rare features) and small steps along frequently-updated coordinates. In the online convex setting, Adagrad achieves optimal regret $O(\sqrt{T})$ against the best fixed comparator, compared to $O(T)$ for constant step size and $O(\sqrt{T})$ only with an oracle step schedule. The drawback in batch settings is that the accumulator $G_k$ grows monotonically, so the rate decays to zero for all coordinates even when the gradient is still informative.
+
+\textit{Connection to natural gradient:} Adagrad implicitly approximates the \emph{natural gradient descent} by pre-conditioning the gradient with $\operatorname{diag}(G_k)^{-1/2}$, an approximation to the inverse Fisher information matrix. This is why it performs well when coordinates have heterogeneous gradient statistics, as in sparse feature settings.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -575,6 +577,8 @@ The last equality shows that a \emph{single} Newton step from \emph{any} startin
 \end{itemize}
 The iteration complexity to reach $\varepsilon$-accuracy is $O(\log\log(1/\varepsilon))$ for Newton versus $O(\kappa \log(1/\varepsilon))$ for GD. The $\kappa$-fold advantage of Newton is most pronounced on ill-conditioned problems (large $\kappa$).
 
+\textbf{Practical considerations and quasi-Newton alternatives:} The main cost of Newton's method is computing and factoring the Hessian at each step: $O(d^2)$ to compute $H$ and $O(d^3)$ to solve $H p = g$ by Cholesky factorisation. For large $d$, this becomes prohibitive. \emph{Quasi-Newton methods} (e.g., BFGS, L-BFGS) approximate $H^{-1}$ from gradient differences using the secant equation $H_k (x_k - x_{k-1}) \approx \nabla f(x_k) - \nabla f(x_{k-1})$, achieving \emph{superlinear} convergence (between linear GD and quadratic Newton) with $O(d^2)$ per iteration. L-BFGS stores only the $m$ most recent gradient differences ($O(md)$ memory), making it practical for $d \sim 10^6$ in machine learning applications.
+
 \subsection{Hyperparameters}
 
 \begin{table}[H]
@@ -682,6 +686,12 @@ The approximation error decomposes into two competing terms:
 Minimising over $\delta$ gives optimal $\delta^{\star} \sim \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-8}$ for 64-bit arithmetic. In practice, $\delta = 0.05$ is a safe choice for smooth functions with bounded second derivatives (truncation-dominated regime), while $\delta = 0.8$ introduces a truncation error of order $0.8 \times \frac{1}{2}|f''| \approx 0.4 |f''|$, which significantly corrupts the gradient direction on curved functions.
 
 Cost: $d + 1 = 3$ function evaluations per iteration (for $d = 2$), compared to 1 for exact gradient computation. The ratio grows linearly with $d$, making FD costly in high dimensions.
+
+\textbf{Quantitative error for Benchmark B at $x = (-1, 4)$:} Computing $\frac{\partial^2 f}{\partial x_1^2} = 2 - \sin(x_1) \approx 2.84$ and $\frac{\partial^2 f}{\partial x_2^2} = 10$:
+\begin{itemize}[nosep]
+  \item With $\delta = 0.05$: truncation error $\leq 0.05/2 \times \max(2.84, 10) = 0.025 \times 10 = 0.25$, which is small relative to the gradient magnitude ($\|\nabla f(x_0)\| \approx \sqrt{(-4)^2 + 20^2} \approx 20.4$). Relative error $\leq 0.25/20.4 \approx 1.2\%$.
+  \item With $\delta = 0.8$: truncation error $\leq 0.8/2 \times 10 = 4.0$, giving relative error $\leq 4.0/20.4 \approx 19.6\%$. At this level, the FD gradient direction is corrupted by $\sim 20\%$, explaining the significantly degraded convergence.
+\end{itemize}
 
 \subsubsection{Nesterov Random Search}
 
@@ -936,7 +946,11 @@ requiring only $O(d)$ operations per iteration --- much cheaper than projection 
 \begin{equation}
 f(x_k) - f^{\star} \leq \frac{2LC^2}{k+1} = O\!\left(\frac{1}{k}\right),
 \end{equation}
-where $C = \max_{x,y \in \mathcal{X}} \|x - y\|$ is the diameter of $\mathcal{X}$. The \emph{Frank--Wolfe gap} $g_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ provides a computable upper bound on the suboptimality and serves as a stopping criterion. With a fixed $\beta$ (as used here, $\beta = 0.90$ or $0.985$), the effective step size $\gamma = 1-\beta$ is constant, leading to less smooth convergence but potentially faster initial progress.
+where $C = \max_{x,y \in \mathcal{X}} \|x - y\|$ is the diameter of $\mathcal{X}$. The \emph{Frank--Wolfe gap} (or duality gap) $g_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ provides a computable upper bound on the suboptimality ($f(x_k) - f^\star \leq g_k$) and serves as a stopping criterion.
+
+\textbf{Why FW does not accelerate:} Unlike projected GD where Nesterov momentum achieves $O(1/k^2)$, Frank--Wolfe's $O(1/k)$ rate is \emph{optimal} among conditional gradient methods on smooth convex problems (matching the lower bound). This is because the LP subproblem only provides \emph{linear} information about the function: even though the iterates are feasible, they cannot exploit second-order curvature information that acceleration methods use. For polytope constraints with sparse solutions, FW has the advantage of producing \emph{sparse iterates} (since convex combinations of vertices have bounded support), which projected GD does not.
+
+With a fixed $\beta$ (as used here, $\beta = 0.90$ or $0.985$), the effective step size $\gamma = 1-\beta$ is constant, leading to less smooth convergence but potentially faster initial progress.
 
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
