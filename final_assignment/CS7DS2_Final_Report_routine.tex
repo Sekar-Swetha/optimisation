@@ -105,6 +105,20 @@ H_C(1,1) = \begin{bmatrix} 2 + 1200\cdot1^2 - 400\cdot1 & -400\cdot1 \\ -400\cdo
 \end{equation}
 with $\mathrm{tr}(H_C) = 1002$ and $\det(H_C) = 802 \cdot 200 - 400^2 = 400$. The eigenvalues are $\lambda_{1,2} = \frac{1002 \pm \sqrt{1002^2 - 4 \cdot 400}}{2} \approx 1001.6$ and $0.4$, yielding a condition number $\kappa \approx 2504$. This extreme ill-conditioning forces any gradient-based method to use tiny step sizes ($\alpha < 2/1001.6 \approx 0.002$) for stability, explaining the very slow convergence rates observed. The curved valley along $x_2 \approx x_1^2$ makes Rosenbrock the standard stress test for second-order and accelerated methods. Starting point: $x_0 = [-1, 1]^T$.
 
+\textbf{Key structural property:} The condition number $\kappa \approx 2504$ is the \emph{same at every point on the valley} $x_2 = x_1^2$.  On the valley, substituting $x_2 = x_1^2$:
+\begin{equation}
+H_C(x_1, x_1^2) = \begin{bmatrix} 2 + 1200x_1^2 - 400x_1^2 & -400x_1 \\ -400x_1 & 200 \end{bmatrix} = \begin{bmatrix} 2 + 800x_1^2 & -400x_1 \\ -400x_1 & 200 \end{bmatrix}.
+\end{equation}
+The determinant along the valley is:
+\[
+\det(H_C) = (2+800x_1^2)(200) - (-400x_1)^2 = 400 + 160000x_1^2 - 160000x_1^2 = 400 \quad \forall\, x_1.
+\]
+Since $\det = \lambda_1\lambda_2 = 400$ is constant and $\mathrm{tr} = \lambda_1+\lambda_2 = 2+800x_1^2+200$ varies, the eigenvalues at the starting point $(-1,1)$ are:
+\[
+\lambda_{1,2}(-1,1) = \frac{1002 \pm \sqrt{1002^2 - 4\cdot400}}{2} \approx 1001.6 \text{ and } 0.4,
+\]
+identical to the values at the optimum $(1,1)$! Both are on the valley ($1 = (-1)^2 = 1^2$), so $\kappa \approx 2504$ everywhere on the path from start to optimum along the valley. This also implies the ill-conditioning challenge for GD is just as severe at the start as at the finish — no ``warm-up'' benefit exists from reducing $\kappa$ as the iterates approach $(1,1)$.
+
 \subsection{Feasible Set for Constrained Problems}
 \begin{equation}
 \mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\ -5 \leq x_2 \leq 10\}.
@@ -413,7 +427,9 @@ Theorem~\ref{thm:nesterov} requires $\alpha = 1/L$ for the $O(1/k^2)$ guarantee.
 \end{algorithmic}
 \end{algorithm}
 
-Adam synthesises RMSprop's per-coordinate second-moment scaling with gradient momentum ($m_t$). The bias correction factors $(1 - \beta_i^t)$ compensate for the fact that $m_0 = v_0 = 0$: at $t=1$, $\hat{m}_1 = g_1$ and $\hat{v}_1 = g_1^2$, recovering the correct gradient signal despite the zero initialisation. Without bias correction, the first several iterations use severely under-estimated step sizes.
+Adam synthesises RMSprop's per-coordinate second-moment scaling with gradient momentum ($m_t$). The bias correction factors $(1 - \beta_i^t)$ compensate for the fact that $m_0 = v_0 = 0$: at $t=1$, $\hat{m}_1 = g_1$ and $\hat{v}_1 = g_1^2$, recovering the correct gradient signal despite the zero initialisation. Without bias correction, the first several iterations use severely under-estimated step sizes: the effective learning rate at step $t$ would be $\alpha / \sqrt{v_t + \varepsilon} = \alpha(1-\beta_2)^{1/2}/\sqrt{(1-\beta_2^t)(g_t^2+\varepsilon)}$, which at $t=1$ with $\beta_2=0.999$ gives effective $\alpha_1^{\mathrm{eff}} \approx \alpha\sqrt{1-\beta_2}/|g_1| = \alpha\sqrt{0.001}/|g_1|$ — a factor $\sqrt{0.001} \approx 0.032$ smaller than the desired effective rate $\alpha/|g_1|$.  The bias correction exactly recovers this factor via the $(1-\beta_2^t)^{-1/2}$ term.
+
+\textbf{Bias correction transient duration:} The correction $(1-\beta_i^t)$ approaches 1 as $t$ grows; the rate depends on $\beta_i$.  For $\beta_1 = 0.80$: $1-0.80^t$ reaches $0.99$ at $t \approx \log(0.01)/\log(0.80) \approx 21$ steps — correction is negligible after $\sim 20$ iterations.  For $\beta_2 = 0.999$: $1-0.999^t$ reaches $0.99$ at $t \approx 4605$ steps — the second-moment correction remains significant throughout all 150 training iterations!  This means Adam's effective step size $\alpha/\sqrt{\hat{v}_t}$ is systematically inflated by the second-moment correction factor $(1-\beta_2^t)^{-1/2}$ throughout training (at $t=150$: correction factor $= (1-0.999^{150})^{-1/2} = (1-0.860)^{-1/2} = 0.14^{-1/2} \approx 2.67$), making the actual effective learning rate approximately $2.67\alpha/\sqrt{v_t}$ — substantially larger than $\alpha/\sqrt{v_t}$.  This is intentional and beneficial: the inflated step counteracts the slow initial build-up of the second moment estimate.
 
 \subsection{Hyperparameter Settings}
 
@@ -1330,6 +1346,14 @@ The central theme of this report is that \emph{local curvature information deter
 \item Frank--Wolfe (no curvature): $O(1/k)$ convergence, curvature-agnostic by design, but maintains feasibility automatically.
 \end{itemize}
 The ``no free lunch'' principle holds: Newton's quadratic convergence costs $O(d^3)$ per step; Nelder--Mead's geometric adaptivity fails to scale to high dimensions; Nesterov's $O(1/k^2)$ rate requires convexity; Polyak's optimal step requires exact $f^{\star}$. The practical optimiser matches algorithm to landscape structure.
+
+\textbf{Optimality of convergence rates:}  The rates in Table~\ref{tab:rates} are not accidental — most are \emph{provably optimal} within their algorithmic class.  For first-order methods accessing only $f(x_k)$ and $\nabla f(x_k)$, the minimax lower bounds (Nesterov 1983, Nemirovskii--Yudin 1983) establish:
+\begin{itemize}[nosep]
+\item Smooth convex: $\Omega(L\|x_0-x^*\|^2/k^2)$ — matched by Nesterov.
+\item Smooth strongly convex: $\Omega\!\left((1-1/\sqrt{\kappa})^k\right)$ — matched by Nesterov/HB with optimal tuning.
+\item Plain GD on SC: $\Theta((1-1/\kappa)^k)$ — a factor $\sqrt{\kappa}$ slower than optimal, confirming Nesterov's $\sqrt{\kappa}$-improvement.
+\end{itemize}
+These lower bounds apply to \emph{any} first-order algorithm (not just GD/Nesterov) and cannot be overcome without additional structure (second-order information, problem-specific oracles like the Polyak step).  The $O(1/k^2)$ Nesterov rate is therefore the best any first-order algorithm can achieve on smooth convex problems, and GD's $O(1/k)$ rate cannot be improved without momentum or second-order information.
 
 \subsection{Limitations and Extensions}
 
