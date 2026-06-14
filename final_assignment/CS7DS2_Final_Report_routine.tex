@@ -307,7 +307,11 @@ Heavy Ball     & \textbf{0.4826} & \textbf{0.7244} & 1.4003 & 2nd \\
 \subsection{Comparative Analysis and Discussion}
 
 \begin{itemize}[nosep]
-\item \textbf{Polyak sensitivity to $f^{\star}$:} The Polyak formula $\alpha_k = (f(x_k) - f^{\star})/(\|g_k\|^2 + \varepsilon)$ requires exact knowledge of $f^{\star}$. When $f^{\star}$ is underestimated (specified as 0 but true minimum is $\approx 0.48$), the step grows as $\|\nabla f\| \to 0$ and the method oscillates. This is a fundamental limitation: in most practical problems, $f^{\star}$ is unknown, limiting the Polyak step to problems where it can be estimated (e.g., from a lower bound or dual problem).
+\item \textbf{Polyak divergence mechanism (formal):} When $f^{\star}_{\text{specified}} < f^{\star}_{\text{true}}$ (as occurs here for Benchmarks~A and~B where $f^{\star}_{\text{specified}}=0$ but $f^{\star}_{\text{true}}>0$), the Polyak step can diverge. Near the true minimum where $x_k \approx x^*$ and $\nabla f(x_k) \approx 0$:
+\[
+\alpha_k = \frac{f(x_k) - 0}{\|\nabla f(x_k)\|^2 + \varepsilon} \approx \frac{f^*_{\text{true}}}{\|\nabla f(x_k)\|^2} \to \infty \quad \text{as } \nabla f(x_k) \to 0.
+\]
+The update becomes $x_{k+1} = x_k - \alpha_k \nabla f(x_k) \approx x_k - \frac{f^*_\text{true}}{\|\nabla f\|^2}\nabla f$, taking a huge step away from $x^*$. This is precisely the divergence observed in Figures~\ref{fig:q1_fval_A} and~\ref{fig:q1_fval_B}.
 \item \textbf{Adagrad vs RMSprop:} Both apply per-coordinate scaling, but Adagrad's monotone accumulation $G_k = \sum g_j^2$ eventually stalls convergence, while RMSprop's exponential window $v_k = \beta v_{k-1} + (1-\beta)g_k^2$ maintains adaptivity throughout. On well-conditioned problems (Benchmarks A and B), both perform similarly. On ill-conditioned Rosenbrock, the small base rate required for RMSprop stability removes its advantage.
 \item \textbf{Heavy Ball on Rosenbrock:} Momentum $\beta=0.86$ builds velocity along the valley's longitudinal direction (along $x_2 \approx x_1^2$), achieving $f=1.40$ versus GD's $f=3.51$. This demonstrates that momentum is highly effective when the gradient direction is consistent over many iterations.
 \item \textbf{Practical recommendation:} For problems where $f^{\star}$ is unavailable (most applications), Heavy~Ball or RMSprop provide the best balance of speed and robustness. Adagrad is preferred when coordinates have highly heterogeneous gradient magnitudes (e.g., sparse features in NLP). Polyak is most powerful when $f^{\star}$ is accurately known.
@@ -370,6 +374,12 @@ compared to $O(1/k)$ for standard gradient descent.
 \end{algorithm}
 
 Adam unifies momentum (via $m_t \approx$ running mean of gradients) with per-coordinate adaptive scaling (via $v_t \approx$ running mean of squared gradients), inheriting advantages of both Nesterov and RMSprop. The bias corrections $(1-\beta_j^t)$ compensate for the zero initialisation of $m_0$ and $v_0$, ensuring that early estimates are not biased towards zero. Without bias correction, the effective step size in early iterations would be $\alpha \cdot (1-\beta_1^t)/\sqrt{(1-\beta_2^t)}$, which would be inappropriately small.
+
+The effective per-coordinate step size in Adam is:
+\begin{equation}
+\tilde{\alpha}_{t,i} = \frac{\alpha}{\sqrt{\hat{v}_{t,i}} + \varepsilon} \approx \frac{\alpha}{\sqrt{\mathbb{E}[g_{t,i}^2]} + \varepsilon},
+\end{equation}
+which normalises by the root-mean-square of recent gradients, keeping steps in $[\varepsilon, \alpha/\varepsilon]$. This bounds the effective step regardless of gradient magnitude, providing implicit regularisation of the step size across coordinates. The parameter $\varepsilon = 10^{-8}$ prevents division by zero and also sets a maximum effective step of $\alpha/\varepsilon$ for near-zero-gradient coordinates.
 
 \subsection{Hyperparameter Settings}
 
@@ -480,6 +490,14 @@ where $\sigma_g^2$ is the per-sample gradient variance. Larger batches reduce va
 \label{fig:q2_sgd_batch}
 \end{figure}
 
+\subsection{SGD Convergence Theory}
+
+For mini-batch SGD on a $\mu$-strongly convex, $L$-smooth objective with gradient noise variance $\sigma_g^2$ and batch size $b$, the expected suboptimality satisfies:
+\begin{equation}
+\mathbb{E}[f(\theta_k)] - f^* \leq (1 - \mu\alpha)^k (f(\theta_0) - f^*) + \frac{\alpha L \sigma_g^2}{2\mu b}.
+\end{equation}
+The first term decays geometrically; the second is an irreducible \emph{noise floor} proportional to $\alpha/b$. Setting $\alpha = c/k$ (decaying step) allows both terms to vanish, recovering $O(1/k)$ convergence. With fixed step $\alpha = 0.06$ (as here), the method converges to a ball of radius $O(\alpha\sigma_g^2/b)$ around $f^*$, visible as the flat floor in Figure~\ref{fig:q2_sgd_batch}.
+
 \subsection{Effect of Increased Observation Noise}
 
 The experiment is repeated with output noise scaled by a factor of 6: $y^{(i)} = \theta^{\star T}x^{(i)} + 6\varepsilon^{(i)}$.
@@ -489,6 +507,15 @@ The experiment is repeated with output noise scaled by a factor of 6: $y^{(i)} =
 \includegraphics[width=\textwidth]{figures/q2_sgd_noisy.pdf}
 \caption{Q2: Effect of noise on SGD convergence. Left: original noise ($\sigma=1$, $J^{\star} \approx 0.4826$). Right: high noise ($\sigma=6$, $J^{\star} \approx 0.4826 \times 36 \approx 17.4$). Scaling noise by 6 raises the irreducible loss by $6^2 = 36$ because $J^{\star} = \sigma^2/2$. Under high noise, both batch sizes converge to the elevated floor $J^{\star} \approx 17.4$, and the relative advantage of smaller batches diminishes --- the dominant source of gradient noise shifts from mini-batch sampling to the observation model itself.}
 \label{fig:q2_sgd_noisy}
+\end{figure}
+
+\subsection{Combined Benchmark C Comparison (All Q1 and Q2 Methods)}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q_combined_C.pdf}
+\caption{Q1+Q2 combined: all methods from Questions~1 and~2 on Benchmark~C (Rosenbrock), run for 150 iterations from $x_0=(-1,1)$. This provides a fair unified comparison. Nesterov ($f=0.479$) leads among gradient-based methods. Polyak ($f=0.021$ at 150 iterations, vs $f=0.009$ at 120 iterations) exhibits non-monotone behaviour due to step-size oscillation: the ratio $(f(x_k) - 0)/\|\nabla f(x_k)\|^2$ fluctuates near the minimum as both numerator and denominator tend to zero at different rates. Heavy~Ball improves substantially with the extra 30 iterations ($f=0.70$ vs $f=1.40$ at 120 iterations), demonstrating that momentum accumulates benefit over time.}
+\label{fig:combined_C}
 \end{figure}
 
 \subsection{Discussion: Nesterov vs Adam on Non-Quadratic Problems}
@@ -879,6 +906,15 @@ Penalty $\lambda=0.15$ & $(0.55\pm,\, 2.0\pm)$ & $>$0.725 & $>$0 & No \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Penalty Landscape Visualisation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_landscape.pdf}
+\caption{Q5: The penalised objective $F_\lambda(x) = f(x) + \lambda\max(0,\, 0.5 - x_1)$ for three penalty weights. Left ($\lambda=0.15$): the penalty is weak; the minimum of $F_\lambda$ lies in the infeasible region, so the method converges to a constraint-violating point. Centre ($\lambda=1.8$): the barrier strengthens and the minimum of $F_\lambda$ approaches the constraint boundary. Right ($\lambda=4.5$): the minimum of $F_\lambda$ is at $x_1 \approx 0.5824$ (feasible), effectively recovering the constrained optimum. The kink at $x_1=0.5$ (from the $\max$ function) creates a non-smooth landscape for the penalty method's gradient computation.}
+\label{fig:q5_penalty_landscape}
+\end{figure}
 
 \subsection{Comparative Discussion}
 
