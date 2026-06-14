@@ -255,6 +255,14 @@ Heavy Ball & $\alpha$ & 0.045 & 0.035 & 0.0008 \\
 
 Note: For Benchmark A with $L \approx 1.033$ and $\mu \approx 0.925$, the theoretically optimal GD step is $\alpha^{\star} = 2/(L+\mu) \approx 1.02$, giving convergence rate $((\kappa-1)/(\kappa+1))^k \approx 0.057^k$. The chosen $\alpha = 0.08$ is conservative (rate $\approx 0.926^k$) but ensures stability across all three benchmarks where $L$ varies dramatically: on Benchmark~C, the Hessian has $\lambda_{\max} \approx 1002$ near the starting point, so any $\alpha > 2/\lambda_{\max} \approx 0.002$ risks instability. Using separate, tuned step sizes for each benchmark reveals the expected ordering of convergence speeds.
 
+\textbf{Step size selection principle:} For a generic $L$-smooth function, the stability condition is $\alpha \leq 2/L$ (else GD diverges). For strongly convex functions, the optimal step $\alpha^{\star} = 2/(L + \mu)$ (the ``balanced'' step) gives the best convergence rate $\rho^{\star} = (L-\mu)/(L+\mu) = (\kappa-1)/(\kappa+1)$. The gap between $\alpha^{\star}$ and $2/L$ reflects the room for a more aggressive step without instability:
+\begin{itemize}[nosep]
+  \item Benchmark A: $\alpha^{\star} \approx 1.02$, $2/L \approx 1.94$; the gap $(2/L - \alpha^{\star} \approx 0.92)$ is large due to $\kappa \approx 1$.
+  \item Benchmark B: $\alpha^{\star} = 2/(10 + 1.45) \approx 0.175$, $2/L = 0.2$ (at optimum where $L = 10$).
+  \item Benchmark C: $\alpha^{\star}$ would be $\approx 0.002$ (equal to $2/L$ since near the starting point $\mu \ll L$).
+\end{itemize}
+The implemented step sizes $(0.08, 0.06, 0.0012)$ are conservative fractions of these optimal values, which is prudent for ensuring stability without extensive tuning.
+
 \textbf{Predicted vs observed iteration counts for $\varepsilon = 10^{-3}$ accuracy:}
 \begin{itemize}[nosep]
   \item Benchmark~A ($\kappa \approx 1.12$): predicted $O(\kappa \log(1/\varepsilon)) \approx 1.12 \times 7 = 8$ iters; observed $\approx 20$ (slightly slower due to conservative $\alpha$).
@@ -489,6 +497,13 @@ These estimates confirm that for Benchmark~C, GD requires thousands more iterati
 
 \textbf{Why Nesterov outperforms Adam on Rosenbrock:} Nesterov's theoretical advantage is clearest on smooth convex functions with high condition number. The Rosenbrock function, while not globally strongly convex, is locally convex near the valley floor with high anisotropy. Nesterov's lookahead mechanism --- computing the gradient at the anticipated next position rather than the current position --- allows it to take more informed steps that align with the valley floor direction. Adam's per-coordinate scaling is well-suited for problems where different coordinates have very different gradient magnitudes, but on Rosenbrock the gradient magnitudes in $x_1$ and $x_2$ directions are coupled through the $100(x_2 - x_1^2)^2$ term, which Adam cannot exploit through coordinate-wise scaling alone. Furthermore, Adam's conservative bias correction and EMA of squared gradients tend to produce more cautious, regularised steps that limit aggressive acceleration along the valley.
 
+\textbf{Gradient coupling analysis for Rosenbrock:} The gradients are:
+\begin{align}
+\frac{\partial f}{\partial x_1} &= -2(1-x_1) - 400 x_1(x_2 - x_1^2), \\
+\frac{\partial f}{\partial x_2} &= 200(x_2 - x_1^2).
+\end{align}
+At any point in the valley (where $x_2 \approx x_1^2$), the $x_2$ gradient is small ($\approx 0$) but the $x_1$ gradient is $\approx -2(1-x_1)$. Adam's second moment $v_t^{(2)} \approx \mathbb{E}[(200(x_2-x_1^2))^2] \approx 0$ would cause a very large step in the $x_2$ direction, potentially destabilising the valley traversal. Nesterov's isotropic treatment avoids this coordinate-wise instability, using the same (appropriately chosen) step size in both directions, and relying on the lookahead to correctly account for the coupling between $x_1$ and $x_2$ in the valley geometry.
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -634,7 +649,9 @@ The last equality shows that a \emph{single} Newton step from \emph{any} startin
 
 The iteration complexity to reach $\varepsilon$-accuracy is $O(\log\log(1/\varepsilon))$ for Newton versus $O(\kappa \log(1/\varepsilon))$ for GD. The $\kappa$-fold advantage of Newton is most pronounced on ill-conditioned problems (large $\kappa$).
 
-\textbf{Practical considerations and quasi-Newton alternatives:} The main cost of Newton's method is computing and factoring the Hessian at each step: $O(d^2)$ to compute $H$ and $O(d^3)$ to solve $H p = g$ by Cholesky factorisation. For large $d$, this becomes prohibitive. \emph{Quasi-Newton methods} (e.g., BFGS, L-BFGS) approximate $H^{-1}$ from gradient differences using the secant equation $H_k (x_k - x_{k-1}) \approx \nabla f(x_k) - \nabla f(x_{k-1})$, achieving \emph{superlinear} convergence (between linear GD and quadratic Newton) with $O(d^2)$ per iteration. L-BFGS stores only the $m$ most recent gradient differences ($O(md)$ memory), making it practical for $d \sim 10^6$ in machine learning applications.
+\textbf{Backtracking line search:} In this implementation, a fixed step size $\alpha$ is used. A more robust approach uses \emph{Armijo backtracking}: starting from $\alpha_0 = 1$, reduce by factor $\tau \in (0,1)$ until the sufficient decrease condition $f(x_k - \alpha H_k^{-1} g_k) \leq f(x_k) - c\alpha \|g_k\|^2$ holds (Armijo condition, $c \approx 10^{-4}$). This automatically selects the largest safe step size at each iteration, typically starting with the full Newton step ($\alpha = 1$) in the quadratic convergence phase and reducing as needed in the damped phase. In our experiment, the manually tuned fixed $\alpha$ achieves a similar effect but requires problem-specific knowledge to set correctly ($\alpha = 0.22$ for Benchmark~C).
+
+\textbf{Practical considerations and quasi-Newton alternatives:} The main cost of Newton's method is computing and factoring the Hessian at each step: $O(d^2)$ to compute $H$ and $O(d^3)$ to solve $H p = g$ by Cholesky factorisation. For large $d$, this becomes prohibitive. \emph{Quasi-Newton methods} (e.g., BFGS, L-BFGS) approximate $H^{-1}$ from gradient differences using the secant equation $H_k (x_k - x_{k-1}) \approx \nabla f(x_k) - \nabla f(x_{k-1})$, achieving \emph{superlinear} convergence (between linear GD and quadratic Newton) with $O(d^2)$ per iteration. L-BFGS stores only the $m$ most recent gradient differences ($O(md)$ memory), making it practical for $d \sim 10^6$ in machine learning applications. On 2D problems like our benchmarks, BFGS would converge to machine precision in $\leq 5$ iterations typically, as the approximation $H_k^{-1}$ reaches its true value $H^{-1}$ (exact for quadratics) within $d = 2$ updates.
 
 \subsection{Hyperparameters}
 
@@ -1024,6 +1041,8 @@ f(x_k) - f^{\star} \leq \frac{2LC^2}{k+1} = O\!\left(\frac{1}{k}\right),
 where $C = \max_{x,y \in \mathcal{X}} \|x - y\|$ is the diameter of $\mathcal{X}$. The \emph{Frank--Wolfe gap} (or duality gap) $g_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ provides a computable upper bound on the suboptimality ($f(x_k) - f^\star \leq g_k$) and serves as a stopping criterion.
 
 \textbf{Why FW does not accelerate:} Unlike projected GD where Nesterov momentum achieves $O(1/k^2)$, Frank--Wolfe's $O(1/k)$ rate is \emph{optimal} among conditional gradient methods on smooth convex problems (matching the lower bound). This is because the LP subproblem only provides \emph{linear} information about the function: even though the iterates are feasible, they cannot exploit second-order curvature information that acceleration methods use. For polytope constraints with sparse solutions, FW has the advantage of producing \emph{sparse iterates} (since convex combinations of vertices have bounded support), which projected GD does not.
+
+\textbf{Frank--Wolfe sparsity:} After $k$ iterations starting from a vertex, $x_k$ is a convex combination of at most $k+1$ vertices of $\mathcal{X}$. For a simplex constraint $\sum_i x_i = 1$, $x_i \geq 0$ (the probability simplex), this means $x_k$ has at most $k$ nonzero components, generating \emph{sparse} solutions automatically. This sparsity property makes FW particularly attractive for problems such as sparse attention mechanisms, matrix factorisation with nuclear norm constraints, and LASSO-type problems where interpretability of the sparse solution is desired. Projected GD onto the simplex (via the efficient $O(d \log d)$ projection of Duchi et al., 2008) does not share this sparsity property --- it typically produces dense iterates.
 
 With a fixed $\beta$ (as used here, $\beta = 0.90$ or $0.985$), the effective step size $\gamma = 1-\beta$ is constant, leading to less smooth convergence but potentially faster initial progress.
 
