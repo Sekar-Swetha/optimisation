@@ -256,13 +256,14 @@ eventually becomes negligibly small, preventing continued adaptation.
 \end{algorithmic}
 \end{algorithm}
 
-\begin{remark}
-RMSprop replaces Adagrad's cumulative sum with an exponential moving average (decay $\beta = 0.9$),
-giving more weight to recent gradients.  This \emph{forgetting} mechanism prevents the effective
-step size from vanishing, maintaining adaptivity throughout training.  The stationary solution
-of the EMA satisfies $v_\infty \approx \mathbb{E}[g^2]$, so the effective step
-$\alpha_0/\sqrt{v_\infty}$ approximates $\alpha_0/\sqrt{\mathbb{E}[g^2]}$, normalising
-by root-mean-squared gradient magnitude.
+\begin{remark}[Adagrad vs RMSprop: memory length]
+Adagrad is a special case of RMSprop with $\beta = 1$ (perfect memory: all past gradients
+equally weighted).  By setting $\beta = 0.9$, RMSprop forgets old gradients with half-life
+$\tau = -1/\log(0.9) \approx 9.5$ iterations: only the most recent $\sim$10 gradients
+carry appreciable weight.  This limits the denominator's growth, preventing the effective
+step from vanishing.  The stationary EMA value satisfies $v_\infty = \mathbb{E}[g^2]$,
+so the effective step $\alpha_0/\sqrt{\mathbb{E}[g^2]}$ normalises each coordinate by its
+RMS gradient magnitude --- a principled scale invariance.
 \end{remark}
 
 \begin{algorithm}[H]
@@ -477,9 +478,12 @@ C (Rosenbrock)   & 2000  & 0.998   & $\approx 3450$ \\
 \end{tabular}
 \end{table}
 
-Heavy Ball and Nesterov momentum address this precisely: on quadratics, they achieve an
-effective condition number of $\sqrt{\kappa}$, reducing the required iterations by a factor
-of $\sqrt{\kappa}$.
+Heavy Ball and Nesterov momentum address this precisely: on quadratics with condition
+number $\kappa$, optimal momentum achieves an effective condition number of $\sqrt{\kappa}$,
+reducing the required iterations by a factor of $\sqrt{\kappa}$.  For Rosenbrock
+($\kappa \approx 2000$), this theoretical speedup is $\sqrt{2000} \approx 45\times$,
+reducing 3450 GD iterations to $\sim$75 iterations for the same accuracy --- consistent
+with Heavy Ball achieving $f = 1.40$ versus GD's $f = 3.51$ in 120 iterations.
 
 \begin{itemize}[nosep]
 \item \textbf{Convergence speed:}
@@ -548,8 +552,21 @@ satisfies
 \[
   f(x_k) - f^\star \leq \frac{2 L \|x_0 - x^\star\|^2}{(k+1)^2}.
 \]
-This matches the optimal convergence rate for first-order methods on this function class.
+This matches the optimal convergence rate for first-order methods on this function class
+(by the lower bound of Nemirovsky and Yudin, 1983).  Contrast with GD's $O(1/k)$ rate:
+to achieve accuracy $\varepsilon$, GD requires $O(1/\varepsilon)$ iterations, while
+Nesterov requires only $O(1/\sqrt{\varepsilon})$ --- a quadratic improvement.
 \end{theorem}
+
+\begin{remark}[Role of the adaptive $\beta_k$ schedule]
+The schedule $\beta_k = (k-1)/(k+2)$ is chosen to match the momentum required by the
+$O(1/k^2)$ rate: it increases from $\beta_1 = 0$ to its asymptote $\beta_k \to 1$,
+building momentum gradually.  Starting with zero momentum prevents overshoot early when
+the iterate may be far from the minimum; the growing momentum then accelerates convergence
+as the iterate enters the ``fast phase'' near the optimum.  The cap $\beta_{\max}$ prevents
+instability on nonconvex landscapes like Rosenbrock, where applying full momentum
+$\beta_k \to 1$ could cause the iterate to escape the valley.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
@@ -1108,12 +1125,28 @@ evaluations.  Settings: initial simplex step $= 0.35$, iterations $= 160$.
 \textbf{Left:} The simplex centroid trajectory navigates the curved banana-shaped valley
 without any gradient information, demonstrating that the simplex geometry adapts to the
 local landscape through the reflection/expansion/contraction operations.  The path follows
-the valley closely.
+the valley closely.  Notably, the trajectory enters the valley from the starting region
+and then descends along it, mirroring the behaviour of gradient-based methods.
 \textbf{Right:} The best objective value decreases from $\approx 4.0$ at initialisation
-to $\approx 10^{-3}$ after 160 iterations, confirming that Nelder--Mead can navigate
-highly nonlinear, ill-conditioned landscapes despite using only function values.}
+to $\approx 10^{-3}$ after 160 iterations --- a reduction of more than 3 orders of
+magnitude --- confirming that Nelder--Mead can navigate highly nonlinear, ill-conditioned
+landscapes despite using only function values.  Compare: gradient descent on Rosenbrock
+achieves only $f \approx 3.5$ after 120 iterations (Figure~\ref{fig:q1_fval_C}), while
+Nelder--Mead reaches $f \approx 10^{-3}$ in 160 iterations.  This remarkable result is
+due to Nelder--Mead's ability to align its simplex with the valley direction.}
 \label{fig:q4_nm}
 \end{figure}
+
+\begin{remark}[Nelder--Mead vs gradient-based methods]
+Nelder--Mead achieves $f \approx 10^{-3}$ on Rosenbrock in 160 simplex iterations
+(each requiring $\le 3$ function evaluations), while constant-step GD reaches only
+$f \approx 3.5$ in 120 iterations and Newton's method (with Hessian information) reaches
+$f \approx 0.686$ in 20 iterations.  Nelder--Mead's superior performance compared to GD
+arises because the simplex can \emph{rotate and elongate} to align with the curved valley,
+effectively implementing an implicit curvature adaptation that gradient descent cannot.
+However, Nelder--Mead lacks theoretical convergence guarantees for $d > 1$; its success
+here relies on the smooth, unimodal landscape of Rosenbrock.
+\end{remark}
 
 \subsubsection{Grid Search}
 
@@ -1332,17 +1365,30 @@ Penalty $\lambda = 4.5$   & $(0.582,\, 2.000)$ & 0.7244 & 0.0000 \\
 \end{tabular}
 \end{table}
 
-\textbf{Projected GD} enforces feasibility as a hard constraint at every iteration via
-the projection oracle $\Pi(x): x_1 \leftarrow \max(0.5, x_1)$.  For simple box constraints,
-the projection is trivially a coordinate-wise clamp, requiring $O(d)$ operations.  For
-complex constraint sets (e.g.\ semidefinite constraints), projection may itself be expensive.
+\paragraph{Projected GD analysis.}
+Projected GD enforces feasibility as a hard constraint at every iteration via the
+projection oracle $\Pi_\mathcal{X}(x): x_1 \leftarrow \max(0.5, x_1)$.  For simple box
+constraints, the projection is a coordinate-wise clamp, requiring $O(d)$ operations.
+For $\mu$-strongly convex $f$ with $L$-smooth gradient, projected GD with $\alpha = 1/L$
+satisfies the same linear convergence rate as unconstrained GD when the optimal point is
+in the interior:
+\[
+  \|x_{k+1} - x^\star\| \le (1 - \mu/L)\|x_k - x^\star\|.
+\]
+Since the constraint is inactive here, projected GD effectively reduces to standard GD
+once the iterate reaches the feasible region (after one step from $(0.2, 4.0)$).
 
-\textbf{Penalty methods} transform the constrained problem into an unconstrained one via
-the penalised objective $F_\lambda$.  As $\lambda \to \infty$, the penalty solution
-approaches the constrained optimum; in this problem, since the constraint is inactive at
-the true minimum, even moderate $\lambda = 1.8$ suffices.  The limitation is that very
-large $\lambda$ makes $F_\lambda$ ill-conditioned (large gradient near the boundary),
-requiring a smaller step size ($\alpha = 0.03$ for $\lambda = 4.5$).
+\paragraph{Penalty method analysis.}
+The penalised objective $F_\lambda(x) = f(x) + \lambda \max(0, 0.5 - x_1)$ can be
+viewed as an exact $\ell^1$ penalty.  The function $F_\lambda$ is not differentiable at
+$x_1 = 0.5$; the subgradient $\partial F_\lambda / \partial x_1 = \partial f/\partial x_1
+- \lambda \cdot \mathbf{1}\{x_1 < 0.5\}$ is used in the code.  As $\lambda$ increases:
+(a) the penalty gradient $-\lambda$ at $x_1 < 0.5$ drives the iterate toward feasibility
+more aggressively, and (b) the penalised Hessian near $x_1 = 0.5$ becomes effectively
+larger, requiring a smaller step size to maintain convergence.  In the limit $\lambda \to
+\infty$, the solution to $\min_x F_\lambda(x)$ converges to the constrained solution
+--- here $(0.582, 2.0)$ since the constraint is inactive.  For active constraints, larger
+$\lambda$ would be needed to achieve near-feasibility.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm}
