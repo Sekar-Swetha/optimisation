@@ -1091,6 +1091,31 @@ The method of multipliers alternates between:
 \item \textbf{Dual update:} $\nu_{k+1} \gets \max(0,\, \nu_k + \rho\, h(x_{k+1}))$.
 \end{enumerate}
 The dual update drives $\nu$ towards the Lagrange multiplier $\nu^{\star}$ at the constrained optimum. Once $\nu_k \approx \nu^{\star}$, a single primal solve with a moderate $\rho$ achieves exact feasibility, avoiding the ill-conditioning issue. For the half-space constraint with the unconstrained minimum satisfying the constraint ($h(x^{\star}) = 0$, inactive constraint), the true multiplier is $\nu^{\star} = 0$; the dual update would converge $\nu_k \to 0$, meaning the augmented Lagrangian reduces to the original objective with no penalty needed at convergence. This illustrates why augmented Lagrangian is the preferred approach for problems with multiple constraints of varying activity.
+
+The ADMM (Alternating Direction Method of Multipliers) extends the augmented Lagrangian to separable problems: for $\min_{x,z} f(x) + g(z)$ subject to $Ax + Bz = c$, it decomposes the primal update into separate $x$-minimisation and $z$-minimisation steps, enabling distributed implementation when $f$ and $g$ are evaluated on different compute nodes. ADMM converges at $O(1/k)$ rate for convex objectives and is widely used in large-scale machine learning (Lasso, support vector machines, graph optimisation).
+\end{remark}
+
+\begin{remark}[Projection oracle vs.\ linear minimisation oracle: PGD and Frank--Wolfe]
+Projected GD (this question) and Frank--Wolfe (Question~6) both achieve $O(1/k)$ convergence for $L$-smooth convex problems over compact constraint sets, but use different first-order oracles:
+\begin{itemize}[nosep]
+\item \textbf{PGD oracle:} $\Pi_\mathcal{X}(x) = \arg\min_{z \in \mathcal{X}} \|z - x\|^2$ --- the \emph{Euclidean projection}.
+\item \textbf{Frank--Wolfe oracle:} $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$ --- the \emph{linear minimisation} (LP) subproblem.
+\end{itemize}
+For the half-space $\mathcal{X} = \{x : x_1 \geq 0.5\}$ (this question): projection is $\max(0.5, x_1)$ ($O(1)$ per coordinate); LP is also $O(1)$. For the Q6 box constraint, both oracles are trivial coordinate-wise operations. The oracle comparison becomes decisive for complex constraint sets:
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Constraint set} & \textbf{Projection cost} & \textbf{LP oracle cost} \\
+\midrule
+Half-space, box & $O(d)$ & $O(d)$ \\
+$\ell^1$ ball $\|x\|_1 \leq r$ & $O(d\log d)$ (soft-threshold) & $O(d)$ (extreme point of $\ell^\infty$ unit ball) \\
+Nuclear norm ball $\|X\|_* \leq r$ & $O(d^2 \min(m,n))$ (full SVD) & $O(d\min(m,n))$ (top singular vectors) \\
+Spectrahedron $X \succeq 0$, $\mathrm{tr}(X)=1$ & $O(d^3)$ (eigendecomposition) & $O(d^2)$ (top eigenvector) \\
+\bottomrule
+\end{tabular}
+\end{center}
+For the nuclear norm ball (key to low-rank matrix completion), the Frank--Wolfe LP oracle requires only the \emph{leading} singular vector pair via power iteration ($O(d\min(m,n))$ per iteration), while PGD requires a \emph{full} SVD ($O(d^2\min(m,n))$) --- a factor-$\min(m,n)$ speedup. This explains why Frank--Wolfe has found renewed interest in matrix optimisation problems.
 \end{remark}
 
 % ============================================================
@@ -1205,6 +1230,8 @@ Boundary & 0.93 & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 \end{tabular}
 \end{table}
 
+\noindent\textbf{Quantitative rate verification.} The theoretical bound is $f(x_k) - f^{\star} \leq 2LD^2/(k+2)$ with $L = 2$ (Hessian eigenvalue for $f = \|x\|^2$ and $f = (x-c)^2$ type objectives) and $D \approx 15.7$ (box diameter). After $k = 140$ iterations: bound $= 2 \times 2 \times 15.7^2 / 142 \approx 6.93$. All observed gaps (0.0046, 0.0089, 0.1137) are well below this loose worst-case bound, confirming feasibility of the theory. To reach $\varepsilon = 0.01$ precision in the boundary case with the standard schedule, the bound predicts $k \geq 2LD^2/\varepsilon - 2 = 2 \times 2 \times 246/0.01 - 2 \approx 98{,}400$ iterations --- illustrating the practical limitation of the $O(1/k)$ convergence rate for tight tolerances.
+
 \subsection{Frank--Wolfe Duality Gap Analysis}
 
 The Frank--Wolfe duality gap $g_k = \nabla f(x_k)^T(x_k - z_k)$ provides a computable convergence certificate. Figure~\ref{fig:fw_gap} plots both the duality gap and objective suboptimality on log-log axes, verifying the $O(1/k)$ convergence rate.
@@ -1232,6 +1259,15 @@ The implementation here uses a fixed mixing parameter $\beta$ (equivalently, a f
 
 \begin{remark}[Frank--Wolfe and sparse iterates]
 A distinctive property of Frank--Wolfe is that iterates $x_k = \sum_{j \leq k} \gamma_j z_j$ (as convex combinations of LP vertices) are automatically \emph{sparse}: if the vertices $z_j$ are vertices of a polytope with at most $r$ non-zero coordinates, then $x_k$ has at most $k$ non-zero coordinates. This sparsity property is exploited in problems such as boosting (where $\mathcal{X}$ is the convex hull of weak learners), low-rank matrix factorisation (where vertices are rank-1 matrices), and compressed sensing (where $\mathcal{X}$ is the $\ell^1$ ball, giving the Lasso). For the box constraint in Q6, the vertices are at most 2D unit vectors, so all iterates remain bounded --- but the sparsity structure is not exploited as usefully as in higher-dimensional problems.
+\end{remark}
+
+\begin{remark}[Frank--Wolfe away step: fixing the zig-zag for interior optima]
+The zig-zag oscillation observed for the interior optimum (Figure~\ref{fig:q6_evolution}, top row) arises because the LP vertex $z_k$ jumps between extreme points of $\mathcal{X}$ as $\nabla f(x_k)$ changes direction across the optimum. The \emph{away-step Frank--Wolfe} variant (Lacoste-Julien and Jaggi, 2015) addresses this by maintaining the \emph{active set} $\mathcal{S}_k \subseteq \mathcal{X}$ of all LP vertices visited so far (i.e., the current convex combination decomposition), and at each iteration choosing between:
+\begin{itemize}[nosep]
+\item \textbf{FW step:} move towards $z_k^{\mathrm{FW}} = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z$ (standard step).
+\item \textbf{Away step:} move \emph{away} from $z_k^{\mathrm{away}} = \arg\max_{z \in \mathcal{S}_k} \nabla f(x_k)^T z$ (the active vertex most opposed to descent), updating $x_{k+1} = x_k + \gamma_k(x_k - z_k^{\mathrm{away}})$.
+\end{itemize}
+Away steps enable the iterate to escape the zig-zag by dropping inactive vertices from the convex combination rather than building up oscillatory contributions. Remarkably, the away-step variant achieves \emph{linear convergence} $f(x_k) - f^{\star} \leq \mathcal{O}(\rho^k)$ for strongly convex objectives over polytopes --- a qualitative improvement over the $O(1/k)$ rate of standard Frank--Wolfe. The cost is maintaining the active-set decomposition (up to $O(k)$ vertices), which adds $O(k)$ overhead per iteration for a polytope with many vertices.
 \end{remark}
 
 % ============================================================
@@ -1334,7 +1370,7 @@ The condition number $\kappa \approx 2508$ is the root cause of all these differ
 \label{sec:conclusion}
 % ============================================================
 
-This report has systematically investigated six families of optimisation algorithms across three benchmark problems of increasing difficulty.
+This report has systematically investigated six families of optimisation algorithms across three benchmark problems of increasing difficulty. The central theme connecting all questions is that algorithmic performance is fundamentally determined by the interplay between (a) the \emph{information} each method uses about the objective, (b) the \emph{structure} of the optimisation landscape (condition number, convexity, constraint geometry), and (c) the \emph{computational budget} available. The experiments consistently confirm the theoretical predictions: methods that exploit more information converge faster, subject to the stability constraints imposed by the landscape's curvature.
 
 \paragraph{Adaptive step-size methods (Q1).}
 The Polyak step size achieves the best convergence when $f^{\star}$ is known exactly (Rosenbrock: $f = 0.009$), but diverges catastrophically when $f^{\star}$ is misspecified --- a severe limitation in practice. Adagrad and Heavy Ball are robust alternatives, consistently matching or exceeding the GD baseline. RMSprop improves stability over Adagrad in non-stationary settings by exponentially forgetting old gradient information.
@@ -1349,10 +1385,10 @@ Newton's method demonstrates the power of second-order information: one-step exa
 Finite differences accurately approximate gradients when $\delta$ is well-chosen ($\delta = 0.05$), nearly matching exact gradient performance. Nesterov random search requires only 2 function evaluations per iteration and is dimension-independent in cost, but converges significantly more slowly due to the $O(1/d)$ factor in the expected gradient estimate. Nelder--Mead adapts its simplex geometry to the local landscape without gradient information, while grid search guarantees global optimum discovery at exponential cost in dimension.
 
 \paragraph{Constrained optimisation (Q5).}
-Projected GD immediately enforces feasibility as a hard constraint from the first iteration, at the cost of requiring a projection oracle. Penalty methods achieve feasibility asymptotically: large $\lambda$ enforces the constraint but requires smaller step sizes due to the increased Lipschitz constant of the penalised gradient. For this problem (half-space constraint with trivial projection), PGD is clearly preferable. For complex constraints, penalty or augmented Lagrangian methods may be preferred.
+Projected GD immediately enforces feasibility as a hard constraint from the first iteration, at the cost of requiring a projection oracle. Penalty methods achieve feasibility asymptotically: large $\lambda$ enforces the constraint but requires smaller step sizes due to the increased Lipschitz constant of the penalised gradient. The augmented Lagrangian (method of multipliers) combines the dual variable update with a moderate penalty to avoid the ill-conditioning issue. For this problem (half-space constraint with trivial projection), PGD is clearly preferable. For problems where projection is expensive (e.g.\ nuclear norm ball), penalty or augmented Lagrangian methods may be preferred, or the Frank--Wolfe LP oracle (Question~6) should be used instead.
 
 \paragraph{Frank--Wolfe and linear programming (Q6).}
-The Frank--Wolfe algorithm exploits the structure of box constraints through the LP subproblem, maintaining feasibility without projection. Its $O(1/k)$ convergence rate matches projected GD but is free of the projection oracle. The fixed mixing parameter $\beta$ leads to vertex oscillation for interior optima; the standard decaying step schedule $\gamma_k = 2/(k+2)$ would improve convergence. For boundary optima, Frank--Wolfe naturally converges to the active constraint boundary.
+PGD (Q5) and Frank--Wolfe (Q6) are complementary first-order methods: both achieve $O(1/k)$ convergence for $L$-smooth convex objectives over compact feasible sets, but use different oracles. PGD uses a \emph{projection oracle} ($O(d)$ for boxes and half-spaces; $O(d^2\min(m,n))$ for nuclear norm ball); Frank--Wolfe uses a \emph{linear minimisation oracle} ($O(d)$ for boxes; $O(d\min(m,n))$ for nuclear norm ball --- a factor of $\min(m,n)$ cheaper). The fixed mixing parameter $\beta$ leads to vertex oscillation for interior optima; the decaying schedule $\gamma_k = 2/(k+2)$ or the away-step variant (achieving linear convergence on strongly convex objectives) would improve this. For boundary optima, Frank--Wolfe naturally converges to the active constraint boundary without projection.
 
 \paragraph{Overall recommendation.}
 For smooth, well-conditioned problems: \textbf{Adam or Nesterov} (fast, robust, no oracle). For quadratic objectives: \textbf{Newton} (one-step). For extremely ill-conditioned problems with known $f^{\star}$: \textbf{Polyak}. For constrained optimisation with easy projections: \textbf{PGD}. For derivative-free settings in low dimension: \textbf{Nelder--Mead}. For high-dimensional derivative-free settings: \textbf{Nesterov random search}.
