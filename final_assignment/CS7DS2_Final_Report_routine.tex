@@ -130,6 +130,22 @@ C (Rosenbrock) & Nonlinear & 0.0 & $(1.0, 1.0)^T$ & 2508 & Yes (locally) & Very 
 \end{tabular}
 \end{table}
 
+\textbf{Impact of condition number on GD convergence:} The condition number $\kappa = L/\mu$ directly controls how many gradient descent iterations are needed. For a strongly convex function, the GD iterate satisfies:
+\begin{equation}
+f(x_k) - f^\star \leq \left(1 - \frac{2}{\kappa+1}\right)^k (f(x_0) - f^\star),
+\end{equation}
+and the number of iterations to achieve $f(x_k) - f^\star \leq \varepsilon$ is:
+\begin{equation}
+k \geq \frac{\kappa + 1}{2} \log\!\left(\frac{f(x_0) - f^\star}{\varepsilon}\right) \approx \frac{\kappa}{2} \log\!\left(\frac{1}{\varepsilon}\right).
+\end{equation}
+For our three benchmarks with $\varepsilon = 10^{-3}$ and $f(x_0) - f^\star \approx 10$:
+\begin{itemize}[nosep]
+  \item Benchmark A ($\kappa \approx 1.12$): $k \approx 1.06 \times \log(10^4) \approx 10$ iterations.
+  \item Benchmark B ($\kappa \approx 6.9$): $k \approx 3.45 \times \log(10^4) \approx 32$ iterations.
+  \item Benchmark C ($\kappa \approx 2508$): $k \approx 1254 \times \log(10^4) \approx 11{,}540$ iterations.
+\end{itemize}
+This is why 120 iterations is sufficient for Benchmarks A and B but leaves Benchmark C far from convergence --- the theoretical minimum required is over 100$\times$ our budget.
+
 % ============================================================
 \section[Q1: Adaptive Step-Size Methods]{Question 1: Adaptive Step-Size Methods \hfill [30 marks]}
 \label{sec:q1}
@@ -449,6 +465,14 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 & $2.1\times$ lower $f$ \\
 \end{tabular}
 \end{table}
 
+\textbf{Theoretical iteration counts for $\varepsilon = 0.01$ accuracy on Benchmark~C:}
+\begin{itemize}[nosep]
+  \item GD ($O(1/k)$, $f_0 - f^\star \approx 3.4$): needs $k \approx 3.4/0.01 = 340$ additional iterations.
+  \item Nesterov ($O(1/k^2)$, $L\|x_0 - x^\star\|^2 \approx 1001.6 \times 8 \approx 8000$): needs $k \approx \sqrt{2L\|x_0-x^\star\|^2/\varepsilon} = \sqrt{2 \times 8000 / 0.01} \approx 1265$ from start --- but already at $f = 0.479$ after 150 steps, so only $\approx 7$ more iters to $\varepsilon = 0.01$ from the current point.
+  \item Newton ($O(\log\log(1/\varepsilon))$): effectively 2--3 additional steps regardless of condition number.
+\end{itemize}
+These estimates confirm that for Benchmark~C, GD requires thousands more iterations to converge where Nesterov requires hundreds and Newton requires single digits.
+
 \textbf{Why Nesterov outperforms Adam on Rosenbrock:} Nesterov's theoretical advantage is clearest on smooth convex functions with high condition number. The Rosenbrock function, while not globally strongly convex, is locally convex near the valley floor with high anisotropy. Nesterov's lookahead mechanism --- computing the gradient at the anticipated next position rather than the current position --- allows it to take more informed steps that align with the valley floor direction. Adam's per-coordinate scaling is well-suited for problems where different coordinates have very different gradient magnitudes, but on Rosenbrock the gradient magnitudes in $x_1$ and $x_2$ directions are coupled through the $100(x_2 - x_1^2)^2$ term, which Adam cannot exploit through coordinate-wise scaling alone. Furthermore, Adam's conservative bias correction and EMA of squared gradients tend to produce more cautious, regularised steps that limit aggressive acceleration along the valley.
 
 \subsection{Contour Trajectories}
@@ -511,6 +535,12 @@ The experiment is repeated with output noise scaled by factor 6 ($\sigma = 6$ vs
 With $\sigma = 1, b = 5$: $\mathbb{V} = 0.2H$; with $\sigma = 6, b = 5$: $\mathbb{V} = 7.2H$ (36$\times$ larger). This explains why the convergence stagnates earlier under high noise: the stochastic gradient noise $O(\sigma^2/b)$ dominates the signal $O(\|\nabla J(\theta)\|^2)$ once $\|\nabla J(\theta)\|$ becomes small. The SGD convergence rate near the optimum is governed by the noise-to-signal ratio $\sigma^2/(b\|\nabla J\|^2)$, not just the learning rate or batch size.
 
 Furthermore, with $\sigma = 6$ and fixed $\alpha = 0.06$, the noise-amplified gradients cause the iterate to oscillate around the minimum with radius $O(\sigma\alpha/\sqrt{b})$. Reducing the learning rate $\alpha$ or increasing the batch size $b$ would reduce this oscillation, at the cost of slower initial convergence.
+
+\textbf{Noise floor formula:} For mini-batch SGD with constant step size $\alpha$ and noise variance $\sigma^2$, the asymptotic (irreducible) loss is:
+\begin{equation}
+\lim_{k\to\infty} \mathbb{E}[f(\theta_k)] \approx f^\star + \frac{\alpha \sigma^2 \operatorname{tr}(H)}{2b(1-\rho)},
+\end{equation}
+where $\rho = 1 - \alpha \mu$ is the contraction rate and $\mu$ is the strong convexity parameter. For Benchmark~A, $\operatorname{tr}(H) = \lambda_1 + \lambda_2 \approx 1.958$ and $\mu \approx 0.925$, giving the noise floor $\propto \sigma^2$. When $\sigma$ increases by $6\times$, the noise floor increases by $36\times$, consistent with the experiment. Decaying the learning rate $\alpha_k = \alpha_0 / k$ eliminates the noise floor but slows late-stage convergence; the Polyak--Ruppert averaging scheme ($\bar{\theta}_k = \frac{1}{k}\sum_{j=1}^k \theta_j$) recovers the $O(1/k)$ rate for the averaged iterate even with constant $\alpha$.
 
 % ============================================================
 \section[Q3: Newton's Method]{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -685,7 +715,11 @@ The approximation error decomposes into two competing terms:
 \begin{equation}
 \left|\frac{\partial f}{\partial x_i}(x) - \frac{f(x + \delta e_i) - f(x)}{\delta}\right| \leq \underbrace{\frac{\delta}{2}\left|\frac{\partial^2 f}{\partial x_i^2}(x)\right|}_{\text{truncation error}} + \underbrace{\frac{2\varepsilon_{\text{mach}}}{\delta}}_{\text{rounding error}}.
 \end{equation}
-Minimising over $\delta$ gives optimal $\delta^{\star} \sim \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-8}$ for 64-bit arithmetic. In practice, $\delta = 0.05$ is a safe choice for smooth functions with bounded second derivatives (truncation-dominated regime), while $\delta = 0.8$ introduces a truncation error of order $0.8 \times \frac{1}{2}|f''| \approx 0.4 |f''|$, which significantly corrupts the gradient direction on curved functions.
+Minimising the total error bound over $\delta$: differentiating $\frac{\delta}{2}|f''| + \frac{2\varepsilon_{\text{mach}}}{\delta}$ and setting to zero gives:
+\begin{equation}
+\delta^{\star} = 2\sqrt{\frac{\varepsilon_{\text{mach}}}{|f''|}} \approx 2\sqrt{\frac{10^{-16}}{|f''|}}.
+\end{equation}
+For $|f''| \approx 10$ (Benchmark B, $\partial^2 f/\partial x_2^2 = 10$): $\delta^\star \approx 2\sqrt{10^{-17}} \approx 6.3 \times 10^{-9}$. In practice, $\delta = 0.05$ is far from optimal in terms of floating-point precision, but in the \emph{truncation-dominated regime} it trades a small absolute error ($\leq 0.25$) for stability against subtractive cancellation. At $\delta = 6\times 10^{-9}$, the truncation error would be $< 10^{-7}$ but the rounding error $2\varepsilon_{\text{mach}}/\delta \approx 3\times 10^{-8}$ is comparable --- so both $\delta = 0.05$ and $\delta = \delta^\star$ give small absolute errors, but the intermediate regime $\delta = 0.8$ is the worst choice (large truncation, not small enough for rounding to compensate). The key point is that $\delta = 0.8$ introduces a truncation error of order $0.8 \times \frac{1}{2}|f''| \approx 0.4 |f''|$, which significantly corrupts the gradient direction on curved functions.
 
 Cost: $d + 1 = 3$ function evaluations per iteration (for $d = 2$), compared to 1 for exact gradient computation. The ratio grows linearly with $d$, making FD costly in high dimensions.
 
@@ -954,6 +988,16 @@ where $C = \max_{x,y \in \mathcal{X}} \|x - y\|$ is the diameter of $\mathcal{X}
 
 With a fixed $\beta$ (as used here, $\beta = 0.90$ or $0.985$), the effective step size $\gamma = 1-\beta$ is constant, leading to less smooth convergence but potentially faster initial progress.
 
+\textbf{Frank--Wolfe gap: a concrete example.} For the interior case $f(x) = (x_1-1)^2 + (x_2-5)^2$ with $\mathcal{X} = [0.5,5] \times [-5,10]$, consider an iterate $x = (1.5, 3.0)$. The gradient is $\nabla f(x) = (1.0, -4.0)^T$. The LP oracle selects:
+\begin{equation}
+z = \left(\begin{cases} 0.5 & (\nabla f)_1 = 1.0 > 0 \\ 5.0 & \text{else} \end{cases},\ \begin{cases} -5 & (\nabla f)_2 = -4 \leq 0 \end{cases}\right) = (0.5,\, 10.0).
+\end{equation}
+The FW gap is:
+\begin{equation}
+g = \nabla f(x)^T(x - z) = (1.0)(1.5 - 0.5) + (-4.0)(3.0 - 10.0) = 1.0 + 28.0 = 29.0.
+\end{equation}
+Since $f(x) - f^\star = (1.5-1)^2 + (3-5)^2 = 0.25 + 4 = 4.25$ and $g = 29.0 \geq 4.25$, the gap is a valid upper bound on suboptimality but quite loose here. As the iterate approaches the minimum $(1, 5)$, $\nabla f(x) \to 0$ and the gap $g \to 0$, providing a computable termination criterion without knowing $f^\star$.
+
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
 The unconstrained minimum $(1, 5)$ lies inside $\mathcal{X}$ (since $0.5 \leq 1 \leq 5$ and $-5 \leq 5 \leq 10$). Two mixing parameters are tested: $\beta = 0.90$ (step size $\gamma = 0.10$) and $\beta = 0.985$ (step size $\gamma = 0.015$).
@@ -1064,6 +1108,28 @@ Frank--Wolfe & $O(1/k)$ & Automatic feasibility & Zig-zag, no acc. & Structured 
 \label{fig:rosenbrock_comparison}
 \end{figure}
 
+\begin{table}[H]
+\centering
+\caption{All methods on Benchmark~C (Rosenbrock, $\kappa \approx 2508$), ranked by final objective value. Iteration budget varies by question; lower is better. $\dagger$: $f^\star = 0$ known exactly.}
+\label{tab:all_C}
+\small
+\begin{tabular}{llcrrl}
+\toprule
+\textbf{Q} & \textbf{Method} & \textbf{Iters} & \textbf{Final $f$} & \textbf{vs GD} & \textbf{Convergence class} \\
+\midrule
+Q1 & Polyak$^\dagger$ & 120 & 0.024 & $146\times$ better & $O(1/k)$ adaptive \\
+Q2 & Nesterov & 150 & 0.479 & $7.1\times$ better & $O(1/k^2)$ \\
+Q3 & Newton (20 it.) & 20 & 0.686 & GD needs 80 it. & $O(\log\log 1/\varepsilon)$ \\
+Q2 & Adam & 150 & 1.578 & $2.1\times$ better & heuristic \\
+Q1 & Heavy Ball & 120 & 1.400 & $2.5\times$ better & $O(1/\sqrt{\kappa})$ (quad.) \\
+Q1 & Adagrad & 120 & 2.203 & $1.6\times$ better & $O(\sqrt{T})$ regret \\
+Q1 & RMSprop & 120 & 3.120 & $1.1\times$ better & heuristic \\
+Q3 & GD (80 it.) & 80 & 3.732 & $1\times$ (baseline) & $O(1/k)$ \\
+Q1 & GD (120 it.) & 120 & 3.514 & $1\times$ (baseline) & $O(1/k)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \textbf{Key cross-cutting insights:}
 
 \begin{enumerate}
@@ -1078,14 +1144,25 @@ Frank--Wolfe & $O(1/k)$ & Automatic feasibility & Zig-zag, no acc. & Structured 
 \item \textbf{Constraint handling trade-offs.} Projected GD offers the cleanest guarantee (hard feasibility at every step) at the cost of requiring a projection oracle. Penalty methods are simpler to implement but require $\lambda$ tuning; as $\lambda$ increases, the problem becomes more ill-conditioned. Frank--Wolfe avoids both projections and ill-conditioning from large $\lambda$, but its $O(1/k)$ rate cannot be accelerated to $O(1/k^2)$ in general (unlike projected GD with Nesterov momentum).
 \end{enumerate}
 
+\textbf{Connections to modern machine learning:}
+
+The methods studied here are the direct ancestors of algorithms used in production ML systems. The lineage is:
+\begin{itemize}[nosep]
+  \item \textbf{GD $\to$ SGD $\to$ Mini-batch SGD}: The workhorse of neural network training. In deep learning, $d \sim 10^8$--$10^{11}$ parameters make full-gradient methods impractical; mini-batch SGD with $b \sim 32$--$4096$ is the standard.
+  \item \textbf{RMSprop $\to$ Adam}: Both are used to train transformers (GPT, BERT), convolutional networks (ResNet), and diffusion models. Adam's combination of momentum and adaptive scaling is particularly valuable for loss landscapes with highly varying curvature across layers.
+  \item \textbf{Nesterov $\to$ FISTA}: The Fast Iterative Shrinkage-Thresholding Algorithm applies Nesterov momentum to proximal gradient methods, achieving $O(1/k^2)$ convergence for sparse regression (LASSO), compressed sensing, and matrix completion.
+  \item \textbf{Newton $\to$ L-BFGS $\to$ K-FAC}: L-BFGS is used for batch optimisation in scientific computing (PyTorch's \texttt{torch.optim.LBFGS}). Kronecker-Factored Approximate Curvature (K-FAC) approximates the Fisher information matrix --- the natural gradient --- for neural networks, bridging Adagrad's coordinate-wise preconditioning and full Newton.
+  \item \textbf{Frank--Wolfe $\to$ SFW}: Stochastic Frank--Wolfe methods are used in machine learning with structured constraints (e.g., low-rank matrix constraints, $\ell_1$-norm budget constraints for sparse neural networks).
+\end{itemize}
+
 \textbf{Practical recommendations:}
 \begin{itemize}[nosep]
-\item For small-scale, smooth, well-specified problems: use Newton's method.
-\item For large-scale smooth convex problems: use Nesterov's method.
-\item For deep learning and non-convex problems: use Adam.
-\item When $f^\star$ is known: Polyak step with proper $f^\star$ is highly effective.
-\item For black-box/derivative-free settings: use FD gradient approximation with $\delta \approx \sqrt{\varepsilon_{\text{mach}}}$ or Nelder--Mead for low-dim problems.
-\item For constrained problems with simple sets: projected GD; for structured polytope constraints: Frank--Wolfe.
+\item For small-scale, smooth, well-specified problems ($d \leq 10^4$): use Newton's method or L-BFGS.
+\item For large-scale smooth convex problems: use Nesterov's method or FISTA.
+\item For deep learning and non-convex problems ($d \geq 10^6$): use Adam (standard) or AdamW (with weight decay regularisation).
+\item When $f^\star$ is known or estimable from duality: Polyak step with proper $f^\star$ is highly effective.
+\item For black-box/derivative-free settings: use FD gradient approximation with $\delta \approx \sqrt{\varepsilon_{\text{mach}}}$ for small $d$; Bayesian optimisation for $d \leq 20$; evolutionary methods for non-smooth.
+\item For constrained problems with simple sets: projected GD (or FISTA for $O(1/k^2)$); for structured polytope constraints: Frank--Wolfe; for complex constraints: augmented Lagrangian methods (ADMM).
 \end{itemize}
 
 % ============================================================
