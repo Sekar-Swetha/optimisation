@@ -84,6 +84,8 @@ All experiments use a fixed random seed (\texttt{np.random.seed(42)}) for reprod
 
 \textbf{Notation:} Throughout this report, $f : \mathbb{R}^n \to \mathbb{R}$ denotes the objective function; $x^{\star}$ the global minimiser; $f^{\star} = f(x^{\star})$ the global minimum value; $\nabla f(x)$ the gradient; $H(x) = \nabla^2 f(x)$ the Hessian; $L$ the Lipschitz constant of $\nabla f$ (so $\|\nabla f(x) - \nabla f(y)\| \leq L\|x-y\|$); $\mu > 0$ the strong convexity modulus (so $f(y) \geq f(x) + \nabla f(x)^T(y-x) + \frac{\mu}{2}\|y-x\|^2$); and $\kappa = L/\mu$ the condition number. We use $\odot$ for element-wise (Hadamard) product, $\|\cdot\|$ for the Euclidean norm, and $O(\cdot)$ for big-O notation as the iteration count $k \to \infty$.
 
+\textbf{Information-order hierarchy:} The methods in this report form a strict hierarchy by the type of oracle (function/gradient/Hessian) they require, with provably better convergence at each higher level. \emph{Zeroth-order} methods (Q4: grid search, Nelder--Mead, Nesterov random search, finite differences) use only function evaluations; their best achievable rate for $L$-smooth convex problems is $O(n/k)$, the factor of $n$ reflecting the cost of recovering gradient information from scalar evaluations. \emph{First-order} methods (Q1--Q2, Q5--Q6: GD, Nesterov, Adam, projected GD, Frank--Wolfe) use gradients; Nesterov's $O(1/k^2)$ rate is information-theoretically optimal for this oracle class \cite{nesterov2018}. \emph{Second-order} methods (Q3: Newton) additionally use the Hessian and achieve \emph{quadratic} local convergence --- a qualitative improvement that renders convergence rate comparisons meaningless near the optimum (any small neighbourhood is escaped in a constant number of steps). The price increases monotonically: zeroth-order requires $O(n)$ function evaluations per gradient estimate; first-order requires $O(n)$ arithmetic per gradient; second-order requires $O(n^2)$ memory and $O(n^3)$ arithmetic per Hessian solve. For $n = 2$, all three tiers have negligible per-step cost, so convergence rate alone determines competitiveness --- explaining why Newton dominates in Q3. For $n = 10^6$, only zeroth- or first-order methods are viable.
+
 % ============================================================
 \section{Benchmark Problems and Experimental Setup}
 \label{sec:benchmarks}
@@ -284,6 +286,8 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\textbf{Why Adagrad outperforms GD on Benchmark C:} GD must fix $\alpha = 0.0012$ to satisfy the global stability condition $\alpha < 2/L$ throughout the trajectory. At the starting point $(-1,1)$, the Hessian eigenvalues are $\lambda_{\min} \approx 0.40$ and $\lambda_{\max} \approx 1002$ (the full condition number $\kappa \approx 2508$ is realised there), giving stability limit $2/L \approx 0.002$; the choice $\alpha = 0.0012$ is only 60\% of this limit, a conservative but necessary constraint. Adagrad's effective step size adapts: at step $k=1$, after the first gradient $g_0 = [-4, 0]^T$ is accumulated ($G_1 = [16, 0]^T$), the effective step in $x_1$ is $\alpha_0/\sqrt{G_{1,1}} = 0.45/4 = 0.1125$, far larger than GD's $0.0012$. After 1--2 steps, when large gradients appear ($\|g_1\| \approx 205$), the effective step drops to $\approx 0.003$, but this is still 2.5$\times$ GD's step. The key mechanism: Adagrad's self-tuning allows larger steps when gradient magnitudes are moderate (early iterations near $x_0$) and automatically reduces them when large curvatures are encountered, achieving per-step progress that a fixed-$\alpha$ GD cannot match without risking instability.
 
 \subsection{Contour Plots with Optimisation Trajectories}
 
@@ -502,6 +506,14 @@ Adam & 0.4826 & 0.7244 & 1.5785 \\
 \label{fig:q2_rate}
 \end{figure}
 
+\textbf{Theoretical iteration counts:} For a strongly convex $L$-smooth problem with $\kappa = L/\mu$, to achieve $f(x_k) - f^{\star} \leq \varepsilon \cdot (f(x_0) - f^{\star})$ requires:
+\begin{itemize}[nosep]
+  \item \textbf{GD:} $k \geq \kappa \ln(1/\varepsilon)$ iterations, since the linear rate $(1-1/\kappa)^k \leq \varepsilon$ gives $k \geq \kappa\ln(1/\varepsilon)$.
+  \item \textbf{Nesterov:} $k \geq \sqrt{\kappa}\ln(1/\varepsilon)$ iterations, from $O(1/k^2)$ equivalent in the strongly convex setting.
+  \item \textbf{Ratio:} Nesterov requires $\sqrt{\kappa}$ times fewer iterations.
+\end{itemize}
+For Rosenbrock at the optimum ($\kappa \approx 2508$, $\sqrt{\kappa} \approx 50$): to reduce the error by factor $\varepsilon = 0.01$, GD requires $\approx 2508 \times 4.6 = 11{,}537$ iterations; Nesterov requires $\approx 50 \times 4.6 = 230$ iterations. After the 150 iterations in this experiment, GD has barely reduced the error ($f = 3.388$, compared to $f(x_0) = 4.0$: a $17\%$ reduction), while Nesterov achieves $88\%$ reduction ($f = 0.479$ vs $f(x_0) = 4.0$). The $7\times$ ratio in final objective values is a consequence of Nesterov being 50$\times$ more efficient per iteration, offset by the non-quadratic nature of Rosenbrock (the theoretical bound applies exactly only at the optimum, not along the full trajectory from $(-1,1)$).
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -541,7 +553,11 @@ The stochastic gradient is an unbiased estimate of the full gradient: $\mathbb{E
 \begin{equation}
 \mathrm{Cov}[\hat{g}] = \frac{1}{b}\left(\frac{\sigma^2}{m} X^TX\right) + \underbrace{0}_{\text{full-batch term}},
 \end{equation}
-so the gradient variance scales as $\Sigma/b$ where $\Sigma = \frac{\sigma^2}{m}X^TX$ is determined by the data and noise. Doubling the batch size halves the gradient variance, halving the number of iterations required for the same convergence --- the \emph{linear scaling rule}: to match the convergence of batch size $b$ with learning rate $\alpha$, batch size $kb$ should use learning rate $k\alpha$. This fundamental rule (exploited in distributed training where $k$ parallel workers allow a $k$-fold increase in effective batch size) breaks down for very large $k$ due to the boundary effects on the noise floor. The key trade-off: smaller $b$ means more frequent updates per epoch but higher gradient variance; larger $b$ means fewer, higher-quality updates per epoch.
+so the gradient variance scales as $\Sigma/b$ where $\Sigma = \frac{\sigma^2}{m}X^TX$ is determined by the data and noise. For Benchmark A with the fixed seed, $\Sigma \approx \mathrm{diag}(0.925, 1.032)$; doubling the batch from $b=5$ to $b=40$ reduces per-step gradient variance by factor 8, from $\Sigma/5 \approx \mathrm{diag}(0.185, 0.206)$ to $\Sigma/40 \approx \mathrm{diag}(0.023, 0.026)$.
+
+\textbf{Linear scaling rule:} To match the convergence quality of batch size $b$ with learning rate $\alpha$, batch size $kb$ should use learning rate $k\alpha$ (keeping the noise floor $\propto \alpha/b$ constant). Concretely: $b=5, \alpha=0.06$ and $b=40, \alpha=0.48$ have identical noise floors of $\approx \alpha\sigma^2/(2\mu b) \approx 0.006/(2 \times 0.925 \times 5) = 0.00065$. This rule, introduced by Goyal et al.\ (2017) for large-scale distributed training, allows $k$ parallel workers each processing batch $b$ to simulate a single worker with batch $kb$ and rate $k\alpha$, recovering full-batch convergence speed at $k$-fold wall-clock speedup. The rule breaks down for very large $k$ (typically $k \gtrsim \sqrt{\kappa \ln(1/\varepsilon)}$) because the \emph{critical batch size} --- the batch size above which variance reduction yields diminishing returns --- is bounded: for the SGD convergence bound (Theorem below), the noise floor $\alpha\sigma^2/(2\mu b)$ cannot be eliminated by increasing $b$ alone; decaying $\alpha \to 0$ is also required for exact convergence.
+
+The key trade-off: smaller $b$ means more frequent updates per epoch but higher gradient variance; larger $b$ means fewer, higher-quality updates per epoch. With $m=1000$ samples: $b=5$ performs 200 updates/epoch and $b=40$ performs 25 updates/epoch, an 8:1 ratio explaining the faster per-epoch loss reduction observed for $b=5$ in Figure~\ref{fig:q2_sgd_batch}.
 
 \begin{figure}[H]
 \centering
@@ -641,6 +657,8 @@ Iterations & 80 & 20 & 80 & 20 & 80 & 20 \\
 \end{table}
 
 \textbf{Note on step sizes:} Benchmark A uses $\alpha = 1.0$ for Newton because the quadratic structure means the full Newton step is exact. Benchmark B uses $\alpha = 0.85$ due to the sinusoidal non-quadratic term. Benchmark C requires $\alpha = 0.22$ because the Rosenbrock Hessian changes rapidly; full Newton steps ($\alpha=1$) overshoot in this case.
+
+\textbf{Modified Cholesky factorisation:} The Newton direction requires solving $H_k p_k = g_k$ where $H_k = \nabla^2 f(x_k) + \lambda I$. For a symmetric positive definite matrix, the Cholesky factorisation $H_k = LL^T$ (where $L$ is lower triangular) enables the solve in two triangular substitutions at $O(n^2/2)$ cost for $n \times n$ $H_k$, versus $O(n^3/3)$ for LU decomposition. The Tikhonov regularisation $\lambda = 10^{-8}$ ensures $H_k \succ 0$ throughout: if $\lambda_{\min}(H_k) < \lambda$, the regularised matrix $H_k + \lambda I$ has $\lambda_{\min} \geq \lambda > 0$, guaranteeing the Cholesky factorisation exists and the Newton direction $p_k = -(H_k+\lambda I)^{-1}g_k$ is a descent direction. For Benchmark C, the Rosenbrock Hessian is positive definite everywhere along the trajectory (eigenvalue bounds: $\lambda_{\min}(H) \geq 200 - \sqrt{200^2 + 400^2 x_1^2}$, which can be negative for large $|x_1|$), so the regularisation is a safety net rather than a correction. In practice, a more principled approach is the Gill--Murray--Wright modified Cholesky, which finds the smallest $\lambda$ needed at each step via an incomplete Cholesky factorisation attempt.
 
 \textbf{GD stability analysis:} The GD step sizes (0.08, 0.06, 0.001) must satisfy $\alpha < 2/L$ for convergence, where $L = \lambda_{\max}(H)$. For Benchmark A: $L \approx 1.033$, so the stability condition gives $\alpha < 1.936$; the choice $\alpha = 0.08$ is highly conservative ($4\%$ of the limit) but safe. For Benchmark B: $L = \max(H_{22}, H_{11}^{\max}) = \max(10, 3) = 10$, giving stability condition $\alpha < 0.2$; $\alpha = 0.06$ is $30\%$ of the limit. For Benchmark C: the Lipschitz constant of $\nabla f$ is $L = \sup_x \lambda_{\max}(H(x))$, which is $O(\|x\|^2)$ far from the origin and effectively unbounded globally. Near the starting point $(-1,1)$: $H_{11} = 2 + 1200(1) - 400(1) = 802$, giving $L \approx 802$ and stability condition $\alpha < 0.0025$; the choice $\alpha = 0.001$ (GD) satisfies this, while the Nesterov step $\alpha = 0.0007$ is even more conservative. The very small steps required by the Rosenbrock Lipschitz constant directly explain the slow GD convergence observed on Benchmark C.
 
@@ -869,7 +887,26 @@ Grid Search & None & $N^d$ total & \textbf{Very poor} ($O(N^d)$) & Grid-limited 
 
 \textbf{Theoretical limitations of Nelder--Mead:} Despite excellent practical performance, Nelder--Mead has no general convergence guarantee: McKinnon (1998) constructed a 2D example of a smooth, strongly convex function where Nelder--Mead converges to a non-stationary point. The issue is that the simplex can collapse into a lower-dimensional object (degenerate simplex), after which it cannot recover. In practice, the restart strategy (re-initialise the simplex when volume falls below a threshold) mitigates this, and Nelder--Mead performs well on smooth $d \leq 10$ problems. For the Rosenbrock function with its narrow curved valley, the simplex's adaptive reshaping (elongation along the valley) is particularly effective. The convergence rate is super-linear in practice but $O(1/k)$ in the worst case for smooth convex functions \cite{nocedal2006}.
 
-\textbf{Comparison of finite difference step sizes:} At the starting point $x_0 = (-1, 4)$, the true gradient $\nabla f(x_0) \approx [g_1, g_2]$ with $g_1 = 2(-2) + \cos(-1) \approx -3.46$ and $g_2 = 10(4-2) = 20$. The forward FD approximation with $\delta = 0.05$ has truncation error $\tfrac{1}{2}\delta \cdot H_{11} \approx 0.5 \times 0.05 \times 2.84 \approx 0.07$ for the $x_1$ component --- a relative error of $\approx 2\%$, explaining the close agreement with exact GD. With $\delta = 0.8$, the truncation error is $\approx 1.14$, a relative error of $\approx 33\%$, completely corrupting the gradient direction and causing the observed divergence from the exact GD trajectory. This quantitatively confirms the importance of choosing $\delta \ll \|\nabla f\|/\|H\|$, i.e., the step should be much smaller than the ratio of gradient magnitude to curvature. An even better approach is \emph{central differences}: $[f(x + \delta e_i) - f(x - \delta e_i)]/(2\delta)$, which achieves $O(\delta^2)$ truncation error with the same $2$ function evaluations per coordinate --- squaring the accuracy for no additional cost.
+\textbf{Quantitative comparison of finite difference step sizes:} At the starting point $x_0 = (-1, 4)$, the true gradient is $\nabla f(x_0) = [-3.460, 20.000]^T$ (with $H_{11}(-1) = 2 - \sin(-1) \approx 2.841$, $H_{22} = 10$). The errors for forward FD and central differences at $\delta \in \{0.05, 0.8\}$ are summarised below:
+
+\begin{table}[H]
+\centering
+\caption{Q4: Finite-difference approximation errors at $x_0 = (-1, 4)$. Absolute error $= |\hat{g}_i - g_i|$; relative error $= |\hat{g}_i - g_i|/|g_i|$.}
+\label{tab:q4_fd_error}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Method} & \boldmath$\delta$ & \textbf{$\hat{g}_1$} & \textbf{Rel.\ err.\ ($x_1$)} & \textbf{$\hat{g}_2$} & \textbf{Rel.\ err.\ ($x_2$)} \\
+\midrule
+Exact & --- & $-3.460$ & 0\% & $20.000$ & 0\% \\
+Forward FD & 0.05 & $-3.389$ & 2.0\% & $20.250$ & 1.2\% \\
+Forward FD & 0.80 & $-2.397$ & 30.7\% & $24.000$ & 20.0\% \\
+Central FD & 0.05 & $-3.460$ & 0.007\% & $20.000$ & $<10^{-12}$\% \\
+Central FD & 0.80 & $-3.516$ & 1.61\% & $20.000$ & $<10^{-12}$\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pattern is clear: (i) forward FD with $\delta = 0.05$ is acceptable (relative errors $\lesssim 2\%$), while $\delta = 0.8$ corrupts both gradient components (up to 30.7\% relative error in $x_1$, whose true gradient is only $-3.46$). The $x_1$ component is more sensitive than $x_2$ because the ratio $\tfrac{1}{2}\delta H_{11}/|g_1| = \delta \times 2.84/(2\times 3.46) = 0.41\delta$ is larger than $\tfrac{1}{2}\delta H_{22}/|g_2| = \delta \times 10/(2\times 20) = 0.25\delta$ for the same $\delta$. (ii) Central differences with $\delta = 0.05$ reduces the $x_1$ relative error from 2.0\% to 0.007\% --- a 286$\times$ improvement by eliminating the leading $O(\delta)$ truncation term: the central FD error is $O(\delta^2)$ vs $O(\delta)$ for forward FD, with identical cost of 2 function evaluations per coordinate. This quantitatively confirms the importance of choosing $\delta \ll \|\nabla f\|/\|H\|$ and preferring central differences wherever the extra function evaluation is affordable.
 
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
