@@ -389,6 +389,14 @@ f(x_k) - f^{\star} \leq \frac{2L\|x_0 - x^{\star}\|^2}{(k+1)^2} = O\!\left(\frac
 compared to gradient descent's $O(1/k)$ rate. This improvement from linear to quadratic convergence speed in $1/k$ is optimal for first-order methods on smooth convex functions (Nesterov's lower bound).
 \end{theorem}
 
+\begin{remark}[Nesterov's Lower Bound]
+Nesterov proved in 1983 that \emph{no first-order method} can achieve better than $O(1/k^2)$ on smooth convex functions in the worst case, using only gradient oracle calls. Formally, for any first-order method, there exists an $L$-smooth convex function such that after $k$ iterations:
+\begin{equation}
+f(x_k) - f^\star \geq \frac{3L\|x_0 - x^\star\|^2}{32(k+1)^2}.
+\end{equation}
+Nesterov's method matches this lower bound to within a constant factor, making it \emph{optimal} in the information-theoretic sense. This means that no gradient-only algorithm --- regardless of how cleverly it uses past gradients --- can do better than $O(1/k^2)$ on arbitrary smooth convex problems. To improve beyond this, one must either use higher-order information (Newton's $O(\log\log 1/\varepsilon)$ uses Hessians) or problem-specific structure.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
 \label{alg:adam}
@@ -608,13 +616,22 @@ The last equality shows that a \emph{single} Newton step from \emph{any} startin
 
 \textbf{Convergence theory:} Newton's method has two phases:
 \begin{itemize}[nosep]
-  \item \emph{Damped phase:} When far from the optimum, each step makes progress at a linear rate.
+  \item \emph{Damped phase:} When far from the optimum, each step makes progress at a linear rate $\delta \in (0,1)$ per iteration: $f(x_{k+1}) - f^\star \leq (1-\delta)(f(x_k) - f^\star)$. With backtracking line search, this phase terminates in at most $O((f(x_0) - f^\star)/\eta)$ iterations for some constant $\eta > 0$ depending on $L$, $\mu$, and $M$.
   \item \emph{Quadratic convergence phase:} Near the optimum $x^{\star}$, for $f$ with $M$-Lipschitz Hessian and strong convexity parameter $\mu$:
   \begin{equation}
   \|x_{k+1} - x^{\star}\| \leq \frac{M}{2\mu}\|x_k - x^{\star}\|^2.
   \end{equation}
-  This means the number of correct decimal digits \emph{doubles} at each iteration.
+  This means the number of correct decimal digits \emph{doubles} at each iteration. Starting from $\|x_0 - x^\star\| = r_0$, after $k$ iterations in the quadratic phase: $\|x_k - x^\star\| \leq (M/2\mu)^{2^k - 1} r_0^{2^k}$. To achieve $\varepsilon$-accuracy: $k = O(\log\log(1/\varepsilon))$.
 \end{itemize}
+\textbf{Numerical example of quadratic convergence:} Suppose Newton's method is within $\|x_k - x^\star\| = 0.1$ of the optimum with $M/(2\mu) = 1$ (a typical value). Then:
+\begin{itemize}[nosep]
+  \item $k$: $\|x_k - x^\star\| \approx 0.1$ (1 decimal place)
+  \item $k+1$: $\|x_{k+1} - x^\star\| \lesssim 0.01$ (2 decimal places)
+  \item $k+2$: $\|x_{k+2} - x^\star\| \lesssim 10^{-4}$ (4 decimal places)
+  \item $k+3$: $\|x_{k+3} - x^\star\| \lesssim 10^{-8}$ (8 decimal places)
+\end{itemize}
+3 additional iterations from within $10\%$ of the solution suffices to reach 8-digit accuracy. GD would require $\kappa \log(0.1/10^{-8}) \approx 2508 \times 18 \approx 45,000$ more iterations for the same accuracy.
+
 The iteration complexity to reach $\varepsilon$-accuracy is $O(\log\log(1/\varepsilon))$ for Newton versus $O(\kappa \log(1/\varepsilon))$ for GD. The $\kappa$-fold advantage of Newton is most pronounced on ill-conditioned problems (large $\kappa$).
 
 \textbf{Practical considerations and quasi-Newton alternatives:} The main cost of Newton's method is computing and factoring the Hessian at each step: $O(d^2)$ to compute $H$ and $O(d^3)$ to solve $H p = g$ by Cholesky factorisation. For large $d$, this becomes prohibitive. \emph{Quasi-Newton methods} (e.g., BFGS, L-BFGS) approximate $H^{-1}$ from gradient differences using the secant equation $H_k (x_k - x_{k-1}) \approx \nabla f(x_k) - \nabla f(x_{k-1})$, achieving \emph{superlinear} convergence (between linear GD and quadratic Newton) with $O(d^2)$ per iteration. L-BFGS stores only the $m$ most recent gradient differences ($O(md)$ memory), making it practical for $d \sim 10^6$ in machine learning applications.
@@ -752,7 +769,13 @@ Cost: $d + 1 = 3$ function evaluations per iteration (for $d = 2$), compared to 
 \end{algorithmic}
 \end{algorithm}
 
-This zeroth-order method estimates a directional derivative along a random unit vector $u_k$. Only \textbf{two} function evaluations are required per iteration regardless of dimension, giving it a dimension-independent cost per step. However, it sacrifices gradient accuracy: the expected value $\mathbb{E}[\hat{g}_k] = \frac{1}{d}\nabla f(x_k)$ is a scaled gradient, meaning the effective step size is $\alpha/d$ per coordinate on average. For $d = 2$, the overhead is only $2\times$, but for large $d$ this method becomes prohibitively slow per dimension.
+This zeroth-order method estimates a directional derivative along a random unit vector $u_k$. Only \textbf{two} function evaluations are required per iteration regardless of dimension, giving it a dimension-independent cost per step. However, it sacrifices gradient accuracy: the expected value of the estimator is:
+\begin{equation}
+\mathbb{E}_{u_k}[\hat{g}_k] = \frac{1}{d}\nabla f(x_k),
+\end{equation}
+a scaled version of the true gradient, meaning the effective step size is $\alpha/d$ per coordinate on average. For $d = 2$, the overhead is only $2\times$, but for large $d$ this method becomes prohibitively slow per dimension.
+
+\textbf{Variance of the estimator:} The variance $\operatorname{Var}[\hat{g}_k] = \frac{\|\nabla f(x_k)\|^2}{d^2}(d-1) \approx \frac{\|\nabla f(x_k)\|^2}{d}$, which decreases with $d$ but so does the signal $\frac{1}{d}\|\nabla f(x_k)\|$. The signal-to-noise ratio $\approx 1/\sqrt{d}$, meaning that higher-dimensional problems require more iterations proportional to $d$ to achieve the same effective gradient quality. The Nesterov Random Search convergence rate is $O(d/k)$ in function value (vs $O(1/k)$ for exact GD), reflecting this $d$-fold penalty. For $d = 2$: 220 NRS iterations $\approx$ 110 effective GD iterations, consistent with its slower but non-trivial convergence observed.
 
 \subsubsection{Results}
 
