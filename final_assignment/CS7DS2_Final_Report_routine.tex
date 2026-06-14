@@ -174,6 +174,45 @@ For constrained optimisation (Questions~5 and~6):
 \mathcal{X} = \bigl\{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10\bigr\}.
 \end{equation}
 
+% ------------------------------------------
+\subsection{Condition Number as a Unifying Lens}
+% ------------------------------------------
+
+The condition number $\kappa = L/\mu$ is the single most important quantity governing
+the difficulty of all first-order methods.  It controls:
+\begin{enumerate}[nosep]
+\item \textbf{GD convergence rate}: contraction factor $(1 - 1/\kappa)^k \approx e^{-k/\kappa}$,
+  so the number of iterations to reduce the gap by a factor $\varepsilon$ is $O(\kappa \log 1/\varepsilon)$.
+\item \textbf{Momentum speedup}: Heavy Ball and Nesterov reduce the effective exponent from
+  $\kappa$ to $\sqrt{\kappa}$, giving $O(\sqrt{\kappa} \log 1/\varepsilon)$ and
+  $O(\sqrt{\kappa/\varepsilon})$ iterations respectively.
+\item \textbf{Newton's independence}: Newton's method converges locally without depending on
+  $\kappa$, because the inverse Hessian exactly cancels the curvature anisotropy at each step.
+\item \textbf{Step-size restriction}: stability requires $\alpha < 2/L$, and the optimal step
+  $\alpha = 1/L$ is limited by the largest curvature.  For Benchmark C, this forces tiny steps
+  that barely move the iterate in 100 iterations.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Summary of benchmark condition numbers and their implications for method selection.}
+\label{tab:benchmark_kappa}
+\begin{tabular}{lccp{6cm}}
+\toprule
+\textbf{Benchmark} & \textbf{$\kappa$ (approx.)} & \textbf{GD iters for $10^{-3}$ gap} & \textbf{Key implication} \\
+\midrule
+A (Linear Reg.) & 1.07  & $\approx 3$    & All first-order methods equally fast \\
+B (Toy NN)      & 3--10 & 6--20          & Mild benefit from momentum/adaptive steps \\
+C (Rosenbrock)  & 2000  & $\approx 3450$ & Dramatic benefit from 2nd-order or momentum \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This table explains why Benchmarks A and B show smaller method differences than Benchmark C:
+when $\kappa$ is near 1, any reasonable step size and direction nearly suffices, while
+$\kappa \approx 2000$ magnifies the differences between methods by a factor of $\sqrt{2000}/1
+\approx 45$ in iteration count.
+
 % ============================================================
 \section{Question 1: Adaptive Step-Size Methods}
 \label{sec:q1}
@@ -1246,6 +1285,28 @@ evaluations are needed per iteration regardless of dimension, making this method
 dimension-independent in cost-per-step.  The trade-off is slow convergence: only
 $O(1/\sqrt{k})$ progress is achievable in the stochastic sense.
 
+\paragraph{Comparison of function-evaluation budgets.}
+For a $d$-dimensional problem requiring $\varepsilon$ accuracy:
+\begin{itemize}[nosep]
+\item \textbf{Exact GD}: $O\bigl(\kappa \log(1/\varepsilon)\bigr)$ iterations,
+  each costing $d + 1 = 3$ evaluations (forward pass + $d$ gradient components).
+  Total: $O\bigl(d\kappa \log(1/\varepsilon)\bigr)$ evaluations.
+\item \textbf{FD GD} ($\delta$ well-chosen): Same iteration count as GD; same $d + 1$
+  evaluations per step.  Total cost is identical to exact GD, but no analytic gradient
+  is required.
+\item \textbf{Nesterov Random Search}: Each step costs 2 evaluations but provides only
+  a 1-D directional estimate.  To achieve the same gradient accuracy as exact GD, NRS
+  needs $O(d)$ steps per ``effective gradient step,'' giving total
+  $O\bigl(d \cdot \kappa^2/\varepsilon\bigr)$ evaluations (zeroth-order lower bound).
+  For $d = 2$, $\kappa \approx 3$--$10$ (Benchmark B): NRS requires
+  $O(2 \times 100/\varepsilon) = O(200/\varepsilon)$ evaluations, far more than GD's
+  $O(6\log(1/\varepsilon))$, explaining the slower convergence in Figure~\ref{fig:q4_fval_B}.
+\end{itemize}
+NRS is most competitive in the regime $d \gg \kappa$: when the dimension is enormous
+but the function is nearly isotropic, each random direction carries useful information
+and the per-step cost of 2 evaluations is dramatically cheaper than the $d + 1$ needed
+for finite-difference GD.
+
 \subsubsection{Results on Benchmark B}
 
 \begin{figure}[H]
@@ -1570,6 +1631,36 @@ larger, requiring a smaller step size to maintain convergence.  In the limit $\l
 \infty$, the solution to $\min_x F_\lambda(x)$ converges to the constrained solution
 --- here $(0.582, 2.0)$ since the constraint is inactive.  For active constraints, larger
 $\lambda$ would be needed to achieve near-feasibility.
+
+\paragraph{Penalty bias when the constraint is active (counterfactual analysis).}
+If the constraint were active at the constrained optimum (i.e., $x_1^\star = 0.5$, which
+would occur for a different objective), the penalty method's solution $x^\star(\lambda)$
+would have a residual bias from the true constrained minimum.  At $x^\star(\lambda)$, the
+first-order stationarity condition is
+\[
+  \nabla f(x^\star(\lambda)) - \lambda\,\mathbf{1}\{x_1 < 0.5\}\,e_1 = 0,
+\]
+which implies $\partial f/\partial x_1 = \lambda$ at $x^\star(\lambda)$ (assuming
+$x_1^\star(\lambda) < 0.5$).  As $\lambda \to \infty$, the gradient in the $x_1$
+direction grows without bound, forcing $x_1^\star(\lambda) \to 0.5$ from below.
+The rate of approach can be estimated as
+$|x_1^\star(\lambda) - 0.5| = O(\lambda^{-1}/\partial^2 f/\partial x_1^2)$,
+which is $O(1/\lambda)$ --- a slow convergence that necessitates very large $\lambda$
+for accurate constraint satisfaction.  This is the fundamental limitation of $\ell^1$
+penalty methods for active constraints: projected GD avoids this bias entirely by
+enforcing the constraint as a hard constraint at every iteration.
+
+\paragraph{Method selection summary for Q5.}
+\begin{itemize}[nosep]
+\item \textbf{Projected GD} is preferable when: (a) the projection oracle is cheap
+  (e.g.\ box, simplex), and (b) hard feasibility at every iterate is required.
+  It has the same convergence rate as unconstrained GD once the iterate is feasible.
+\item \textbf{Penalty method} is preferable when: (a) the projection oracle is complex
+  or unavailable, and (b) only approximate feasibility is required.  Increasing $\lambda$
+  improves feasibility at the cost of slower convergence (larger effective Hessian).
+\item In this experiment, both methods reach the same $f = 0.7244$ because the constraint
+  is inactive; the distinction becomes critical only for problems with active constraints.
+\end{itemize}
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm}
