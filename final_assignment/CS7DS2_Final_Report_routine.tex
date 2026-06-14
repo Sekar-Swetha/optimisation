@@ -177,6 +177,12 @@ which holds for some non-convex functions including the Rosenbrock function near
 
 The effective per-coordinate step $\alpha_0/(\sqrt{G_k^{(i)}} + \varepsilon)$ is large when coordinate $i$ has historically received small gradients, providing automatic adaptation to the gradient scale. Because $G_k^{(i)} = \sum_{j=0}^{k-1}(g_j^{(i)})^2$ is monotonically non-decreasing, the step size is \emph{guaranteed to shrink}, which provides stability but can cause premature convergence on non-stationary objectives.
 
+\noindent Adagrad was originally designed for the \emph{online convex optimisation} setting, where the objective $f_t(x)$ changes at each time step and the goal is to minimise the cumulative regret $R_T = \sum_{t=1}^T f_t(x_t) - \sum_{t=1}^T f_t(x^{\star})$. The key Adagrad regret bound \cite{duchi2011adagrad} is:
+\begin{equation}
+R_T \leq 2\alpha_0 \sum_{i=1}^d \left\|g_{1:T}^{(i)}\right\|_2 = 2\alpha_0 \sum_{i=1}^d \sqrt{\sum_{t=1}^T (g_t^{(i)})^2},
+\end{equation}
+where $g_{1:T}^{(i)} = (g_1^{(i)}, \ldots, g_T^{(i)})$. This bound adapts to the \emph{observed gradient structure}: for sparse gradients (where many coordinates rarely receive non-zero gradients), $\|g_{1:T}^{(i)}\|_2$ is small for sparse coordinates, and Adagrad's per-coordinate adaptation achieves much better regret than any fixed-step-size method. For dense, isotropic gradients (as in Benchmark~A), $\|g_{1:T}^{(i)}\|_2 \approx \sqrt{T}\bar{\sigma}$ for all $i$, and the bound becomes $O(\sqrt{T})$ --- matching the minimax optimal rate for online convex optimisation. This is the theoretical basis for Adagrad's popularity in natural language processing, where word features are naturally sparse.
+
 \begin{algorithm}[H]
 \caption{RMSprop}
 \label{alg:rmsprop}
@@ -549,7 +555,11 @@ where $J^{\star}$ is the true minimum of $J$ and $\sigma^2 = \frac{1}{m}\sum_i \
 \noindent For Benchmark~A with $\mu \approx 0.925$, $L \approx 1.033$, $\sigma^2 \approx 1$ (estimated from noise level), $\alpha = 0.06$, the noise floor is $0.06/(2 \times 0.925 \times b)$. For $b = 5$: floor $\approx 0.0065$; for $b = 40$: floor $\approx 0.0008$. Since the true noise floor from observation noise is $J^{\star} \approx 0.4826 \gg 0.0065$, the SGD noise floor is dominated by the irreducible observation noise --- both batch sizes should converge to the same final value (as observed in Figure~\ref{fig:q2_sgd_batch}).
 
 \begin{remark}[Polyak--Ruppert averaging reduces SGD variance]
-A classical technique to reduce the variance of the final SGD iterate is \emph{iterate averaging} (Polyak--Ruppert): instead of returning $x_T$, return the time-averaged iterate $\bar{x}_T = \frac{1}{T}\sum_{k=1}^T x_k$. Under appropriate conditions, the averaged iterate achieves $\mathbb{E}[J(\bar{x}_T) - J^{\star}] = O(\sigma^2 / (\mu T b))$, which is $O(1/T)$ vs.\ the geometric-to-noise-floor convergence of the final iterate. Averaging effectively removes the last-iterate variance without requiring a decreasing step size, and is the basis of the \emph{SVRG} (stochastic variance-reduced gradient) method. In the mini-batch experiments here, the final iterate is used directly; averaging would reduce the oscillation visible in Figure~\ref{fig:q2_sgd_batch} near the noise floor.
+A classical technique to reduce the variance of the final SGD iterate is \emph{iterate averaging} (Polyak--Ruppert): instead of returning $x_T$, return the time-averaged iterate $\bar{x}_T = \frac{1}{T}\sum_{k=1}^T x_k$. Under appropriate conditions, the averaged iterate achieves $\mathbb{E}[J(\bar{x}_T) - J^{\star}] = O(\sigma^2 / (\mu T b))$, which is $O(1/T)$ vs.\ the geometric-to-noise-floor convergence of the final iterate. Averaging effectively removes the last-iterate variance without requiring a decreasing step size. In the mini-batch experiments here, the final iterate is used directly; averaging would reduce the oscillation visible in Figure~\ref{fig:q2_sgd_batch} near the noise floor.
+\end{remark}
+
+\begin{remark}[Variance reduction: SVRG and SAGA]
+Iterate averaging reduces \emph{last-iterate} variance but does not eliminate the irreducible SGD noise floor. The \emph{stochastic variance reduced gradient} (SVRG) method (Johnson and Zhang, 2013) periodically computes a full gradient $\tilde{g} = \nabla J(\tilde{x})$ at a snapshot $\tilde{x}$, then uses the variance-reduced estimator $\hat{g}_k = \nabla \ell_k(x_k) - \nabla \ell_k(\tilde{x}) + \tilde{g}$, which satisfies $\mathbb{E}[\hat{g}_k] = \nabla J(x_k)$ and has variance $\mathbb{E}[\|\hat{g}_k - \nabla J(x_k)\|^2] = O(\|x_k - \tilde{x}\|^2) \to 0$ as $x_k \to \tilde{x}$. As a result, SVRG achieves \emph{linear convergence} $\mathbb{E}[J(x_k) - J^{\star}] \leq O(\rho^k)$ for strongly convex $J$ --- the same rate as full gradient descent but with only $O(1)$ gradient evaluations per step on average. The per-epoch cost is $(m/b + m)$ gradient evaluations ($m$ for the snapshot), which is beneficial when $m/b \gg 1$ (small batch) and the problem is strongly convex. SAGA (Defazio et al., 2014) is a memory-efficient alternative that stores per-sample gradient estimates from the previous pass instead of recomputing a full snapshot, achieving the same linear convergence rate at $O(m)$ memory cost vs.\ $O(d)$ for SVRG.
 \end{remark}
 
 \begin{figure}[H]
@@ -1084,6 +1094,13 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 \\
 \textbf{Projected GD} enforces feasibility as a hard constraint at every iteration via the projection oracle. For simple constraint sets such as half-spaces and boxes, projection is a $\max$ or $\text{clip}$ operation costing $O(d)$ per iteration. For complex constraints (e.g.\ second-order cones, nuclear norm balls), projection can be expensive or intractable.
 
 \textbf{Penalty methods} are simpler to implement (no projection oracle required) but enforce feasibility only asymptotically. The weight $\lambda$ controls the hard/soft trade-off. Small $\lambda$ ($= 0.15$) under-penalises violations because the penalty gradient $\lambda\mathbf{1}[x_1 < 0.5]$ is weaker than the objective gradient pulling towards the unconstrained minimiser. Large $\lambda$ ($= 4.5$) enforces feasibility but increases the Lipschitz constant of $\nabla F_\lambda$ from $L_f \approx 10$ to $L_f + \lambda = 14.5$, requiring a smaller step size $\alpha \leq 2/14.5 \approx 0.138$ --- hence the choice $\alpha = 0.03$ for $\lambda = 4.5$.
+
+\paragraph{Log-barrier / Interior-point methods.}
+A smooth alternative to the quadratic penalty is the \emph{log-barrier method}, which replaces the inequality constraint $x_1 \geq 0.5$ with a barrier term that is smooth and concave on the feasible interior:
+\begin{equation}
+F_t(x) = f(x) - \frac{1}{t}\ln(x_1 - 0.5), \quad x_1 > 0.5.
+\end{equation}
+As $t \to \infty$, $F_t(x) \to f(x)$ for $x_1 > 0.5$ and $F_t(x) \to +\infty$ as $x_1 \to 0.5^+$, so the unconstrained minimiser of $F_t$ approaches the constrained minimiser. Unlike the quadratic penalty (which uses $(\max(0, 0.5 - x_1))^2$), the log-barrier keeps all iterates strictly feasible ($x_1 > 0.5$) throughout the algorithm. Newton's method applied to $F_t$ with a sequence $t_1 < t_2 < \cdots \to \infty$ is the basis of \emph{interior point methods} (Karmarkar, 1984; Boyd and Vandenberghe, 2004), which achieve polynomial-time convergence for convex problems and are the standard approach for large-scale linear and semidefinite programming. The log-barrier Lipschitz constant at the boundary grows as $O(1/t(x_1 - 0.5)^2)$, requiring the iterates to remain at least $O(1/\sqrt{t})$ away from the constraint boundary --- this is the mechanism that ``pushes'' iterates towards the feasible interior and avoids the infeasibility issues of GD with a fixed starting point on the boundary.
 
 \begin{figure}[H]
 \centering
