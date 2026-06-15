@@ -196,7 +196,7 @@ Four adaptive methods are compared against constant step-size gradient descent a
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Theoretical Convergence Rates}
+\subsection{Theoretical Convergence Rates and Second-Order Connections}
 \label{subsec:q1_theory}
 
 For reference, we state convergence rates for the classical setting of $L$-smooth, $\mu$-strongly convex objectives (Benchmarks A and B satisfy this near the optimum):
@@ -218,10 +218,16 @@ Let $f$ be $\mu$-strongly convex and $L$-smooth, and let $f^\star$ be the exact 
 
 \noindent When $f^\star$ is misspecified (e.g., $f^\star = 0$ when the true minimum is $0.4826$ or $0.7244$), Theorem~\ref{thm:polyak_rate} no longer applies. As $x_k$ approaches the true minimum, $\|g_k\|^2 \to 0$ while $f(x_k) - 0$ remains bounded away from zero, causing $\alpha_k \to \infty$ and inducing oscillation.
 
-\begin{proposition}[Adagrad monotone decay]
+\begin{proposition}[Adagrad monotone decay and diagonal preconditioning]
 \label{prop:adagrad}
 The effective per-coordinate step size $\alpha_0 / (\sqrt{G_k^{(i)}} + \varepsilon)$ is monotonically non-increasing in $k$ for each coordinate $i$. As a consequence, Adagrad is guaranteed not to diverge, but may suffer from premature convergence on non-stationary or ill-conditioned problems.
 \end{proposition}
+
+\noindent\textbf{Diagonal preconditioning interpretation.} The Adagrad update can be written as:
+\begin{equation}
+x_{k+1} = x_k - \underbrace{\operatorname{diag}\!\left(\frac{\alpha_0}{\sqrt{G_{k+1}} + \varepsilon}\right)}_{\approx \, \alpha_0 (G_{k+1})^{-1/2}} g_k.
+\end{equation}
+This is equivalent to preconditioned gradient descent with a diagonal preconditioner $(G_{k+1})^{-1/2}$. Coordinates with historically large gradients (high curvature) receive smaller effective step sizes; coordinates with small gradients (flat directions) receive larger steps. This implicitly adapts to the Hessian's diagonal structure, which is particularly beneficial for Benchmark B where the Hessian is diagonal ($H = \operatorname{diag}(2-\sin(x_1), 10)$) — Adagrad effectively learns separate step sizes for $x_1$ and $x_2$ without explicitly computing the Hessian.
 
 \subsection{Hyperparameter Settings}
 \label{subsec:q1_params}
@@ -364,6 +370,8 @@ When $x_k$ approaches the true minimum (where $f(x_k) \to 0.7244$ and $\|g_k\| \
 
 \item \textbf{Stability:} GD baseline is most stable but slowest. Adagrad is uniformly stable (monotonically decreasing step) but can stagnate prematurely. Heavy Ball can exhibit momentum-induced oscillation near the minimum but recovers quickly on smooth objectives.
 
+\item \textbf{Adagrad vs RMSprop:} Both maintain per-coordinate step-size adaptation, but differ in memory: Adagrad accumulates \emph{all} historical squared gradients ($G_k = \sum_{j=0}^{k} g_j \odot g_j$, growing monotonically), while RMSprop uses an exponential moving average ($v_{k+1} = \beta v_k + (1-\beta)g_k^2$, bounded). Adagrad thus eventually shrinks all step sizes to near-zero on long runs; RMSprop maintains a finite effective rate throughout by ``forgetting'' old squared gradients.
+
 \item \textbf{Practical recommendation:} For problems without known $f^\star$, RMSprop and Heavy Ball are robust choices with tunable hyperparameters. Adagrad is reliable for sparse gradients. Polyak is unsuitable unless $f^\star$ is accurately known.
 \end{itemize}
 
@@ -432,7 +440,17 @@ f(x_k) - f^\star \leq \frac{2L\|x_0 - x^\star\|^2}{(k+1)^2}.
 This $O(1/k^2)$ rate is \textbf{optimal} for first-order methods on convex problems (Nesterov 1983); gradient descent achieves only $O(1/k)$ for convex functions, and $(1-\mu/L)^k$ for strongly convex.
 \end{theorem}
 
-In contrast, \textbf{Adam lacks a general convergence guarantee} for non-convex problems. Reddi et al.\ (2018) constructed explicit counterexamples where Adam fails to converge. Despite this, Adam performs well empirically on the benchmarks because the objectives are smooth and the adaptive scaling helps navigate anisotropic curvature.
+In contrast, \textbf{Adam lacks a general convergence guarantee} for non-convex problems. Reddi et al.\ (2018) constructed explicit counterexamples where Adam fails to converge (the AMSGrad variant was proposed as a fix). Despite this, Adam performs well empirically on the benchmarks because the objectives are smooth and the adaptive scaling helps navigate anisotropic curvature.
+
+\begin{remark}[Schedule capping and effective Nesterov rate]
+\label{rem:nesterov_schedule}
+The schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ caps the momentum at $\beta_{\max}$. With $\beta_{\max} = 0.90$, the cap activates at $k \approx 28$ (when $(k-1)/(k+2) \geq 0.90$). For $k < 28$, the uncapped schedule applies and Nesterov's $O(1/k^2)$ rate (Theorem~\ref{thm:nesterov}) holds. For $k \geq 28$, fixed momentum $\beta = 0.90$ applies, which behaves similarly to Heavy Ball — the asymptotic convergence becomes linear rather than $O(1/k^2)$. This is why the cap should be chosen large (close to 1) to delay the transition, or the uncapped schedule used throughout.
+\end{remark}
+
+\begin{remark}[Adam hyperparameter choices]
+\label{rem:adam_params}
+The tuned values $\beta_1 \in \{0.82, 0.80\}$ (versus the typical $\beta_1 = 0.9$) represent a lower first-moment decay, meaning past gradients are down-weighted faster. This is advantageous on Rosenbrock where the gradient direction changes rapidly along the valley — fast forgetting allows Adam to adapt to local curvature changes rather than accumulating momentum in the wrong direction. The standard $\beta_2 = 0.999$ provides stable second-moment estimates across all three benchmarks.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 \label{subsec:q2_params}
@@ -930,6 +948,17 @@ If $x^\star$ is a local minimiser and the LICQ constraint qualification holds, t
 \end{algorithm}
 
 The projection $\Pi_{\mathcal{C}}(z) = (\max(0.5, z_1), z_2)^T$ is the nearest point in $\mathcal{C}$ to $z$. For the half-space $\mathcal{C} = \{x : x_1 \geq 0.5\}$, this is an $O(1)$ operation. The key property is that Projected GD satisfies $x_k \in \mathcal{C}$ for all $k \geq 1$ — feasibility is a hard constraint.
+
+\begin{theorem}[Projected GD convergence]
+\label{thm:pgd}
+Let $f$ be $\mu$-strongly convex and $L$-smooth on a closed convex set $\mathcal{C}$. With step size $\alpha \leq 1/L$ and starting from $x_0 \in \mathcal{C}$:
+\begin{equation}
+\|x_k - x^\star\|^2 \leq (1 - 2\alpha\mu)^k \|x_0 - x^\star\|^2.
+\end{equation}
+This achieves the same linear rate as unconstrained GD when the constraint is active, and when the constraint is inactive (as in our case, $x_1^\star \approx 0.582 > 0.5$), projected GD converges at the same rate as unconstrained GD after the first step.
+\end{theorem}
+
+For our problem with $L = 10$, $\mu = 1$ (Benchmark B, Section~\ref{subsec:bench_B}), and $\alpha = 0.08 \leq 1/10 = 0.1$: convergence rate $\rho = 1 - 2\times 0.08 \times 1 = 0.84$. Since the constraint is inactive ($x_1^\star > 0.5$), projected GD behaves like unconstrained GD after the first projection step clips $x_1$ to $0.5$ at step 1.
 
 \begin{algorithm}[H]
 \caption{Penalty Method (Quadratic Penalty)}
