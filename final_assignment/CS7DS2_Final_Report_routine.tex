@@ -576,6 +576,48 @@ where $\sigma^2_{\text{data}}$ is the per-sample gradient variance. This gives t
 \end{itemize}
 In terms of total gradient computations, both reach the same total work per epoch ($m = 1000$ evaluations). However, small batches make $8\times$ more parameter updates per epoch, exploiting local information more frequently.
 
+\subsubsection{SGD Convergence Theory}
+
+\begin{theorem}[SGD convergence for $L$-smooth objectives, non-convex]
+\label{thm:sgd_nonconvex}
+Let $f$ be $L$-smooth (not necessarily convex), and suppose the stochastic gradient satisfies $\mathbb{E}[\hat{g}_k] = \nabla f(x_k)$ and $\mathbb{E}[\|\hat{g}_k - \nabla f(x_k)\|^2] \leq \sigma^2/b$. With constant step size $\alpha_k = \alpha = \tfrac{1}{\sqrt{KL}}$ for $K$ total steps:
+\begin{equation}
+\min_{k=0,\ldots,K-1} \mathbb{E}\!\left[\|\nabla f(x_k)\|^2\right]
+\;\leq\; \frac{2\sqrt{L}(f(x_0) - f^\star)}{\sqrt{K}} + \frac{\sigma^2}{\sqrt{KL}\, b} \cdot L
+\;=\; O\!\left(\frac{1}{\sqrt{K}} + \frac{\sigma^2/b}{\sqrt{K}}\right).
+\end{equation}
+\end{theorem}
+
+\noindent This $O(1/\sqrt{K})$ rate for stationarity compares with GD's $O(1/K)$ guarantee for finding approximate stationary points; the gap arises from gradient noise. The key observation is that \emph{mini-batch size $b$ enters the bound additively with $\sigma^2$}: increasing $b$ reduces $\sigma^2/b$ and tightens the bound. In the large-batch limit ($b = m$, full batch), the $\sigma^2/b$ term vanishes and we recover GD's behaviour.
+
+\begin{theorem}[SGD convergence for strongly convex objectives]
+\label{thm:sgd_sc}
+For $\mu$-strongly convex, $L$-smooth $f$ with unbiased stochastic gradients of variance $\sigma^2/b$, and diminishing step sizes $\alpha_k = \frac{2}{\mu(k+1)}$:
+\begin{equation}
+\mathbb{E}[f(x_K)] - f^\star \;\leq\; \frac{2L\|x_0 - x^\star\|^2}{K+1} + \frac{2\sigma^2}{\mu b K}.
+\end{equation}
+The first term is the optimisation error (decays as $O(1/K)$) and the second is the statistical error (decays as $O(1/(bK))$, reduced by mini-batching). The total $O(1/K)$ rate is slower than the linear rate of full-gradient GD but is achieved at cost $O(K \cdot b/m)$ data passes (vs $O(K)$ passes for full GD).
+\end{theorem}
+
+\begin{table}[H]
+\centering
+\caption{Convergence rate comparison: full GD vs mini-batch SGD. $K$ = total gradient steps, $b$ = batch size, $m$ = dataset size, $\sigma^2$ = per-sample gradient variance.}
+\label{tab:sgd_rates}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Cost/step} & \textbf{Convex rate} & \textbf{Strongly convex rate} & \textbf{Non-convex rate} \\
+\midrule
+Full GD & $O(md)$ & $O(1/K)$ & $O(\rho^K)$ linear & $O(1/K)$ \\
+Mini-batch SGD & $O(bd)$ & $O(1/\sqrt{K})$ & $O(1/K) + O(\sigma^2/bK)$ & $O(1/\sqrt{K})$ \\
+SGD ($b=1$) & $O(d)$ & $O(1/\sqrt{K})$ & $O(1/K) + O(\sigma^2/K)$ & $O(1/\sqrt{K})$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Practical implications.} On Benchmark A (linear regression), the strongly convex rate applies. With $b = 5$: the statistical error $2\sigma^2/(\mu b K) \approx 2\sigma^2/(\mu \cdot 5K)$ dominates for moderate $K$. For the noise floor $J^\star \approx 0.4826$, the excess statistical error is $\approx \sigma^2_{\text{data}}/(bm)$ per epoch, explaining why both batch sizes converge to the same floor but at different rates. The practical optimum batch size balances parallelism (hardware efficiency) against the statistical efficiency gain from larger batches.
+
+\noindent\textbf{Connection to Adam in the stochastic setting.} Adam's adaptive step size acts as a per-coordinate step-size schedule, with the second moment tracking recent gradient variance. In the stochastic setting, the second moment $v_t \approx \mathbb{E}[g^2]$ (for large $t$) effectively normalises by the coordinate-wise gradient variance, making Adam particularly robust to varying noise levels across coordinates.
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -730,6 +772,75 @@ C & 3.7319 & 0.6864 & $(0.183, 0.020)$ \\
 \end{table}
 
 \noindent Note that on Benchmark C, Newton has not reached the true minimum $(1,1)$ in 20 iterations — it remains at $(0.183, 0.020)$ on the valley floor, far from the optimum. This is because the damping ($\alpha = 0.22$) combined with the high condition number significantly slows progress. More iterations or adaptive step-size selection (e.g., backtracking line search) would be needed.
+
+\subsection{Quasi-Newton Methods: Beyond Exact Hessians}
+\label{subsec:q3_quasinewton}
+
+While Newton's method achieves quadratic convergence (Theorem~\ref{thm:newton}), its $O(d^3)$ per-iteration cost (Hessian solve) is prohibitive for large $d$. \textbf{Quasi-Newton methods} approximate the inverse Hessian $H_k^{-1}$ from first-order gradient information alone, achieving \emph{superlinear} convergence at $O(d^2)$ per step.
+
+\subsubsection{BFGS Update Rule}
+
+The Broyden--Fletcher--Goldfarb--Shanno (BFGS) method maintains a positive definite approximation $B_k \approx \nabla^2 f(x_k)$ (or equivalently $W_k = B_k^{-1} \approx H_k^{-1}$), updated at each step using the secant equation:
+\begin{equation}
+B_{k+1}\, s_k = y_k, \qquad \text{where} \quad s_k = x_{k+1} - x_k,\quad y_k = \nabla f(x_{k+1}) - \nabla f(x_k).
+\end{equation}
+The secant equation requires that $B_{k+1}$ maps the step direction $s_k$ to the gradient change $y_k$, mimicking the true Hessian's action. The BFGS update to the inverse Hessian approximation $W_k \approx H_k^{-1}$ is:
+\begin{equation}
+\label{eq:bfgs_update}
+W_{k+1} = \left(I - \rho_k s_k y_k^T\right) W_k \left(I - \rho_k y_k s_k^T\right) + \rho_k s_k s_k^T, \qquad \rho_k = \frac{1}{y_k^T s_k}.
+\end{equation}
+The curvature condition $y_k^T s_k > 0$ (satisfied when $f$ is strongly convex, or when using Wolfe line search) ensures $\rho_k > 0$ and $W_{k+1} \succ 0$. The BFGS direction is $p_k = -W_k \nabla f(x_k)$, computed at $O(d^2)$ cost.
+
+\begin{theorem}[BFGS superlinear convergence]
+\label{thm:bfgs}
+Let $f$ be twice continuously differentiable with Lipschitz continuous Hessian at $x^\star$, and let $\nabla^2 f(x^\star) \succ 0$. Then BFGS with exact line search, started sufficiently near $x^\star$, converges \emph{superlinearly}:
+\begin{equation}
+\lim_{k\to\infty} \frac{\|x_{k+1} - x^\star\|}{\|x_k - x^\star\|} = 0.
+\end{equation}
+That is, the ratio $\|x_{k+1}-x^\star\|/\|x_k-x^\star\| \to 0$, which is faster than linear convergence but slower than Newton's quadratic convergence ($\|x_{k+1}-x^\star\| \sim c\|x_k-x^\star\|^2$).
+\end{theorem}
+
+\subsubsection{Limited-Memory BFGS (L-BFGS)}
+
+Standard BFGS stores the full $d \times d$ matrix $W_k$, requiring $O(d^2)$ memory. For $d \gg 1$, this is impractical. \textbf{L-BFGS} stores only the $m_L$ most recent curvature pairs $\{(s_j, y_j)\}_{j=k-m_L}^{k-1}$ (typically $m_L = 5$--$20$), using them to implicitly represent $W_k$:
+
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop Recursion (compute $W_k g_k$ without forming $W_k$)}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+\Require Gradient $q \gets g_k = \nabla f(x_k)$, curvature pairs $\{(s_j, y_j)\}_{j=k-m_L}^{k-1}$, initial $W^0 = \gamma_k I$
+\For{$j = k-1, k-2, \ldots, k-m_L$} \Comment{Backward pass}
+    \State $\rho_j \gets 1/(y_j^T s_j)$,\quad $\alpha_j \gets \rho_j s_j^T q$
+    \State $q \gets q - \alpha_j y_j$
+\EndFor
+\State $r \gets W^0 q$ \Comment{Scale by initial Hessian approximation}
+\For{$j = k-m_L, \ldots, k-1$} \Comment{Forward pass}
+    \State $\beta_j \gets \rho_j y_j^T r$
+    \State $r \gets r + s_j(\alpha_j - \beta_j)$
+\EndFor
+\State \Return $p_k \gets -r$ \Comment{L-BFGS direction, approximating $-W_k g_k$}
+\end{algorithmic}
+\end{algorithm}
+
+The two-loop recursion computes $W_k g_k$ in $O(m_L d)$ operations without forming $W_k$ explicitly, giving L-BFGS $O(m_L d)$ memory and $O(m_L d)$ per-step cost — vastly superior to Newton's $O(d^2)$ memory and $O(d^3)$ solve.
+
+\begin{table}[H]
+\centering
+\caption{Comparison of Newton, BFGS, and L-BFGS for our $d=2$ benchmarks and hypothetical large-scale setting.}
+\label{tab:newton_bfgs}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Method} & \textbf{Memory} & \textbf{Cost/step} & \textbf{Rate} & \textbf{At $d=2$} & \textbf{At $d=10^6$} \\
+\midrule
+Newton (exact $H$) & $O(d^2)$ & $O(d^3)$ & Quadratic & $O(8)$ & $O(10^{18})$ \\
+BFGS & $O(d^2)$ & $O(d^2)$ & Superlinear & $O(4)$ & $O(10^{12})$ \\
+L-BFGS ($m_L=10$) & $O(m_L d)$ & $O(m_L d)$ & Superlinear & $O(20)$ & $O(10^7)$ \\
+Gradient descent & $O(d)$ & $O(d)$ & Linear & $O(2)$ & $O(10^6)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Why L-BFGS dominates in practice.} For $d = 2$ (our problems), Newton, BFGS, and L-BFGS have essentially identical per-step cost. However, for neural network training ($d = 10^6$--$10^9$), only gradient-based methods and L-BFGS are computationally feasible. L-BFGS is the standard quasi-Newton method for large-scale deterministic optimisation (e.g., natural language model fine-tuning, scientific computing). Its main limitation is incompatibility with stochastic gradients: the secant condition requires consistent gradient information, so noisy mini-batch gradients corrupt the curvature estimates.
 
 \begin{figure}[H]
 \centering
@@ -1053,11 +1164,54 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & \checkmark \\
 
 \noindent\textbf{Ill-conditioning from large penalty.} The penalised objective $F_\lambda(x) = f(x) + \lambda\max(0, 0.5-x_1)$ has a discontinuous gradient at $x_1 = 0.5$. Near the constraint boundary, the effective Lipschitz constant of $F_\lambda$ is $L + \lambda$, requiring $\alpha \leq 1/(L + \lambda)$ for gradient descent stability. This explains why we use $\alpha = 0.03$ for $\lambda = 4.5$ (vs $\alpha = 0.05$ for $\lambda \leq 1.8$): the step size must decrease roughly as $1/\lambda$ as the penalty grows.
 
-\noindent\textbf{Augmented Lagrangian as improvement.} The pure penalty method requires $\lambda \to \infty$ to achieve feasibility exactly. The \emph{augmented Lagrangian} (Multiplier Method) overcomes this by incorporating a dual variable update:
+\subsection{Augmented Lagrangian Method (Multiplier Method)}
+\label{subsec:q5_alm}
+
+The pure penalty method requires $\lambda \to \infty$ to achieve feasibility exactly, causing progressive ill-conditioning. The \emph{Augmented Lagrangian Method} (ALM, also called the Multiplier Method or ADMM in distributed settings) overcomes this by combining the penalty with an explicit dual variable:
+
 \begin{equation}
-\mathcal{L}_\rho(x, \mu) = f(x) + \mu g(x) + \tfrac{\rho}{2}g(x)^2, \qquad g(x) = \max(0, 0.5 - x_1).
+\mathcal{L}_\rho(x, \mu) = f(x) + \mu\,g(x) + \tfrac{\rho}{2}\bigl[g(x)\bigr]^2, \qquad g(x) = \max(0,\; 0.5 - x_1) \geq 0.
 \end{equation}
-Dual updates $\mu_{k+1} = \mu_k + \rho\,g(x_k)$ allow convergence to the exact constrained solution at moderate $\rho$, avoiding the ill-conditioning of large penalty weights.
+
+\begin{algorithm}[H]
+\caption{Augmented Lagrangian Method (Method of Multipliers)}
+\label{alg:alm}
+\begin{algorithmic}[1]
+\Require Initial $x_0$, dual variable $\mu_0 = 0$, penalty $\rho > 0$, inner iterations $N_{\text{in}}$
+\For{$k = 0, 1, 2, \ldots$}
+    \State \textbf{Primal update:} $x_{k+1} \gets \arg\min_x \mathcal{L}_\rho(x, \mu_k)$ \Comment{(Inner loop: gradient steps on $\mathcal{L}_\rho(\cdot, \mu_k)$)}
+    \State \textbf{Dual update:} $\mu_{k+1} \gets \mu_k + \rho\, g(x_{k+1})$ \Comment{(Dual ascent step)}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[ALM convergence and exact penalty]
+\label{thm:alm}
+For the constrained problem $\min_x f(x)$ subject to $g(x) \leq 0$ with $f$ convex and $g$ convex, ALM with fixed penalty $\rho > 0$ converges to the constrained optimum $x^\star$ with $\mu_k \to \mu^\star$ (the optimal dual variable). Crucially, for any $\rho > 0$, the augmented Lagrangian $\mathcal{L}_\rho(\cdot, \mu^\star)$ is an \emph{exact penalty}: its unconstrained minimum is the constrained solution $x^\star$, eliminating the need for $\rho \to \infty$.
+\end{theorem}
+
+\noindent\textbf{Comparison of penalty approaches for our Q5 problem.}
+
+For our problem with inactive constraint ($x_1^\star \approx 0.582 > 0.5$, so $\mu^\star = 0$), all three approaches (penalty, ALM, projected GD) converge to the same unconstrained minimum. The differences become important when constraints are active:
+
+\begin{table}[H]
+\centering
+\caption{Q5: Comparison of constrained optimisation approaches. ``Active constraint'' means $x^\star$ lies on the boundary.}
+\label{tab:q5_methods}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Hard feasibility} & \textbf{$\lambda/\rho$ needed} & \textbf{Step size impact} & \textbf{Active constraint} \\
+\midrule
+Projected GD & Always & N/A & None from $\lambda$ & Exact \\
+Penalty ($\lambda < \infty$) & Never & Large & $\alpha \leq 1/(L+\lambda)$ & Approximate \\
+Augmented Lagrangian & Never & Moderate & $\alpha \leq 1/(L+\rho)$ & Exact \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The ALM dual update $\mu_{k+1} = \mu_k + \rho g(x_{k+1})$ acts as an integral controller: it accumulates the constraint violation over iterations, automatically increasing the effective penalty pressure until the constraint is satisfied. At convergence, $g(x^\star) = 0$, so $\mu_k$ stabilises at $\mu^\star$. This is analogous to proportional-integral (PI) control in control theory.
+
+\noindent For our Q5 problem, $\mu^\star = 0$ (inactive constraint), so the dual update adds no net pressure — ALM reduces to the penalty method in this special case. To observe ALM's advantage over pure penalty, one would need to modify the constraint to force $x_1^\star = 0.5$ (e.g., constrain $x_1 \geq 0.7$, making the constraint active).
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm}
