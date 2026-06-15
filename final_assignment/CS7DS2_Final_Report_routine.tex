@@ -1360,6 +1360,40 @@ Boundary, $\beta = 0.93$ & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 \item Poor performance for well-conditioned problems or when projection is cheap — projected GD is preferred in such cases
 \end{itemize}
 
+\subsection{Step-Size Schedule: Standard Diminishing vs Fixed-$\beta$}
+\label{subsec:q6_schedule}
+
+To quantify the impact of step-size schedule choice, we compare the standard diminishing schedule $\gamma_k = 2/(k+2)$ against the fixed-$\beta$ code implementation over 250 iterations.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_schedule_comparison.pdf}
+\caption{Q6: Standard diminishing $\gamma_k = 2/(k+2)$ vs fixed-$\beta$ Frank--Wolfe. Left (boundary optimum $f^\star = 0.25$ at $(0.5,0)$): standard schedule achieves $f - f^\star \approx 0.0016$ in 250 iterations, tracking the $O(1/k)$ theory bound (black dotted). Fixed $\beta=0.93$ ($\gamma=0.07$) achieves only $f-f^\star \approx 0.146$ — nearly $\mathbf{90\times}$ worse. Right (interior optimum $f^\star=0$ at $(1,5)$): standard achieves $f \approx 0.0018$ while fixed $\beta=0.985$ achieves $f \approx 0.009$ and $\beta=0.90$ achieves $f \approx 0.005$ (for 250 iterations; note at 180 iterations the code gives $\beta=0.985$ as better due to less oscillation). The standard schedule's advantage is larger for the boundary case where iterates must converge to the constraint boundary — the diminishing step size allows finer precision near the boundary without oscillation.}
+\label{fig:q6_schedule}
+\end{figure}
+
+\noindent\textbf{Interpretation.} The fixed-$\beta$ schedule does not satisfy the $O(1/k)$ guarantee because the step size does not decrease: iterates oscillate between the true optimum and the LMO vertex permanently. In contrast, $\gamma_k = 2/(k+2) \to 0$ causes steps to shrink, allowing iterates to settle. For the boundary case, the standard schedule is particularly effective: as $x_k$ approaches $(0.5, 0)$, the LP oracle repeatedly selects $(0.5, -5)$ (lower-left vertex) and the diminishing step means the update $\gamma_k \|x_k - z_k\|$ also shrinks, enabling precise convergence to the boundary point.
+
+\subsection{Away-Steps Frank--Wolfe}
+\label{subsec:q6_awaysteps}
+
+Standard Frank--Wolfe has a well-known weakness for interior optima: iterates can only move \emph{towards} extreme points (vertices) of $\mathcal{X}$, never \emph{away} from vertices that have accumulated too much weight. The \textbf{Away-Steps FW} variant (Wolfe 1970, Lacoste-Julien \& Jaggi 2015) adds an ``away step'' that moves away from the vertex contributing most to the current iterate:
+
+\begin{equation}
+\text{Away direction:} \quad d_k^{\text{away}} = x_k - v_k, \quad \text{where} \quad v_k = \arg\max_{v \in S_k} \nabla f(x_k)^T v,
+\end{equation}
+with $S_k$ the \emph{active set} of vertices with positive weights in the current iterate's convex combination representation. The iteration uses either the standard FW step (towards $z_k$) or the away step (away from $v_k$), whichever decreases the objective more.
+
+\begin{theorem}[Away-Steps FW linear convergence for strongly convex objectives]
+For $\mu$-strongly convex, $L$-smooth $f$ over a polytope $\mathcal{X}$, Away-Steps FW with exact line search achieves:
+\begin{equation}
+f(x_k) - f^\star \leq \left(1 - \frac{\mu}{C_{\mathcal{X}}^2 L}\right)^k (f(x_0) - f^\star),
+\end{equation}
+where $C_{\mathcal{X}}$ is the \emph{pyramidal width} of $\mathcal{X}$ (a geometric constant depending on the polytope). This is \emph{linear} convergence — dramatically faster than standard FW's $O(1/k)$.
+\end{theorem}
+
+\noindent For the box $\mathcal{X}$ in our problem, $C_{\mathcal{X}} = \Theta(D/\sqrt{n})$ (where $n$ is the number of vertices), and the linear rate is comparable to projected GD's. The trade-off is computational: Away-Steps FW requires maintaining and updating the active set $S_k$ (at $O(|S_k| d)$ cost), though $|S_k|$ is bounded by $\min(k, n)$ where $n$ is the number of vertices of $\mathcal{X}$. For our $2d$ box with 4 vertices, this overhead is negligible.
+
 % ============================================================
 \section{Summary and Conclusion}
 \label{sec:conclusion}
@@ -1413,12 +1447,15 @@ GD, Heavy Ball, Nesterov & 1 & 0 & $O(dn)$ (data pass) \\
 Adagrad, RMSprop, Adam & 1 & 0 & $O(dn)$ + $O(d)$ state \\
 Polyak & 1 & 1 & $O(dn)$ ($f$ eval needed) \\
 Newton's method & 1 & 0 & $O(dn) + O(d^3)$ (solve) \\
+L-BFGS ($m_L$ pairs) & 1 & 0 & $O(dn) + O(m_L d)$ two-loop \\
 FD gradient (forward diff) & 0 & $d+1$ & $O(dn)$ (for linear model) \\
 Nesterov random search & 0 & 2 & $O(d)$ per FE \\
 Nelder--Mead & 0 & $\leq n+3$ & $O(d)$ per FE \\
 Grid search & 0 & $N^d$ total & $O(d)$ per FE \\
 Projected GD & 1 & 0 & $O(dn)$ + $O(d)$ proj \\
-Frank--Wolfe & 1 & 0 & $O(dn)$ + $O(d)$ LMO \\
+Frank--Wolfe (standard $\gamma_k$) & 1 & 0 & $O(dn)$ + $O(d)$ LMO \\
+Away-Steps FW & 1 & 0 & $O(dn)$ + $O(|S_k| d)$ active set \\
+ALM (inner loop: GD) & $N_{\text{in}}$ & 0 & $O(N_{\text{in}} dn)$ + $O(d)$ dual \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1441,11 +1478,13 @@ For our $d=2$, $n=1000$ problems, Newton's $O(d^3) = O(8)$ solve cost is negligi
 
 \item \textbf{Newton's method provides dramatic speedup on smooth objectives.} On the quadratic Benchmark A, Newton converges in one iteration. On Benchmark C with damping $\alpha = 0.22$, Newton (20 iterations) is $5.4\times$ better than GD (80 iterations). The computational cost per Newton step ($O(d^3)$ for Hessian solve vs $O(d)$ for GD) is justified for small-$d$ problems with high curvature.
 
-\item \textbf{Derivative-free methods are essential for black-box functions.} Nesterov random search provides $O(1/\sqrt{k})$ convergence using only 2 function evaluations per step. Nelder--Mead adapts to local landscape geometry without gradients. Grid search guarantees global optimum discovery at exponential cost.
+\item \textbf{Derivative-free methods are essential for black-box functions.} Nesterov random search achieves rate $O(d^2 L \|x_0-x^\star\|^2/k)$ for smooth convex objectives (Theorem~\ref{thm:nrs}), using only 2 function evaluations per step but suffering a $d^2$ factor vs first-order GD. Nelder--Mead adapts to local landscape geometry without gradients. Grid search guarantees global optimum discovery at exponential cost $O(N^d)$.
 
-\item \textbf{Projected GD enforces hard feasibility; penalty methods offer a soft alternative.} When the constraint is inactive at optimality (as in Benchmark B with $x_1^\star \approx 0.582 > 0.5$), both approaches converge to the same point. When the optimum is on the boundary, projected GD achieves feasibility immediately ($\Pi_\mathcal{C}$ enforces $x_k \in \mathcal{C}$), while penalty methods require large $\lambda$ and small step sizes.
+\item \textbf{Mini-batch SGD offers a data-efficient convergence-noise tradeoff.} For $\mu$-strongly convex objectives with per-sample gradient variance $\sigma^2$, mini-batch SGD achieves $O(1/K) + O(\sigma^2/(bK))$ error after $K$ steps with batch size $b$ (Theorem~\ref{thm:sgd_sc}). The $\sigma^2/b$ noise term shows that doubling the batch halves the statistical error, but $m/b$ steps per epoch means the total function evaluation budget per epoch is identical regardless of $b$. This makes batch size a tradeoff between step quality and update frequency.
 
-\item \textbf{Frank--Wolfe naturally handles linear constraints.} The LP oracle steers iterates towards feasible vertices without projection, achieving $O(1/k)$ convergence (Theorem~\ref{thm:fw}) with only $O(d)$ LMO cost per step. It is particularly advantageous for boundary optima and sparse-solution problems.
+\item \textbf{Projected GD enforces hard feasibility; penalty methods and ALM offer soft alternatives.} When the constraint is inactive at optimality (as in Benchmark B with $x_1^\star \approx 0.582 > 0.5$), all three approaches (projected GD, penalty, ALM) converge to the same point. The Augmented Lagrangian Method (Section~\ref{subsec:q5_alm}) improves over pure penalty by maintaining a dual variable that accumulates constraint violation, enabling exact convergence at moderate penalty weight $\rho$ without the ill-conditioning of $\lambda \to \infty$.
+
+\item \textbf{Frank--Wolfe's fixed-$\beta$ implementation is suboptimal vs the theoretically guaranteed schedule.} The standard $\gamma_k = 2/(k+2)$ schedule achieves $O(1/k)$ convergence (Theorem~\ref{thm:fw}); the fixed-$\beta$ code achieves the same asymptotic accuracy only for very small $1-\beta$ (slow step size). On the boundary case, the standard schedule is $\mathbf{90\times}$ more accurate than fixed $\beta=0.93$ at 250 iterations (Figure~\ref{fig:q6_schedule}). Away-Steps FW (Section~\ref{subsec:q6_awaysteps}) further improves this to linear convergence for strongly convex objectives.
 \end{enumerate}
 
 \subsection{Practical Recommendations}
@@ -1462,10 +1501,14 @@ Well-conditioned, $f^\star$ known & Polyak step size & Optimal convergence, no L
 Well-conditioned, $f^\star$ unknown & GD or Heavy Ball & Linear rate, simple to tune \\
 Ill-conditioned, convex & Nesterov + line search & $O(1/k^2)$ optimal rate \\
 Ill-conditioned, non-convex & Adam & Empirically robust, adaptive LR \\
-Exact second-order info available & Newton (damped) & Quadratic convergence near min \\
+Exact second-order info, small $d$ & Newton (damped) & Quadratic convergence near min \\
+Exact second-order info, large $d$ & L-BFGS & $O(m_L d)$ cost, superlinear rate \\
 Black-box/no gradient available & Nelder--Mead or NRS & No derivative requirement \\
-Linear constraints, large-scale & Frank--Wolfe & No projection, sparse iterates \\
+Stochastic/noisy objectives, large data & Mini-batch SGD + Adam & Gradient variance $\propto 1/b$ \\
+Linear constraints, large-scale & FW + $\gamma_k=2/(k+2)$ & No projection, $O(1/k)$ guarantee \\
+Linear constraints, strongly convex & Away-Steps FW & Linear convergence rate \\
 Simple constraints, feasibility critical & Projected GD & Hard constraint enforcement \\
+Infeasible or expensive projection & ALM (Multiplier Method) & Exact penalty at finite $\rho$ \\
 \bottomrule
 \end{tabular}
 \end{table}
