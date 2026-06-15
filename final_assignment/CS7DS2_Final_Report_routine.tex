@@ -14,6 +14,8 @@
 \usepackage{listings}
 \usepackage{fancyhdr}
 \usepackage{microtype}
+\usepackage{array}
+\usepackage{multirow}
 
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
 
@@ -250,7 +252,7 @@ Heavy Ball & $\alpha$ & 0.045 & 0.035 & 0.0008 \\
 \end{tabular}
 \end{table}
 
-\noindent Note that the GD step sizes are smaller than the theoretical optimal $\alpha^* = 2/(L+\mu)$ (for Benchmark A, $\alpha^* \approx 1.02$). In practice, conservative step sizes are used because the full Lipschitz constant $L$ is not computed, and because the methods need to remain stable across all three benchmarks.
+\noindent \textbf{Step size vs theory.} For Benchmark A, the theoretical optimal GD step size is $\alpha^* = 2/(L+\mu) \approx 1.02$, which would give the maximum rate per iteration. The chosen $\alpha = 0.08$ is far more conservative, explaining why GD on Benchmark A still converges quickly ($\kappa \approx 1.12$ is so small that even a very small step is effective). For Benchmark C (Rosenbrock), the stability requirement $\alpha \leq 1/L$ gives $\alpha \leq 1/1001.6 \approx 0.001$, consistent with the chosen $\alpha = 0.0012$. The need for such tiny steps on Benchmark C ($\alpha$ is $\sim 850\times$ smaller than Benchmark A) directly reflects the $850\times$ larger Lipschitz constant.
 
 \subsection{Convergence Analysis}
 \label{subsec:q1_convergence}
@@ -407,6 +409,16 @@ The critical distinction from Heavy Ball (Algorithm~\ref{alg:heavyball}) is the 
 \end{algorithm}
 
 Adam combines Nesterov-like momentum (via the first moment $m_t$, effectively an EMA of gradients) with per-coordinate adaptive scaling (via the second moment $v_t$, an EMA of squared gradients), inheriting advantages of both RMSprop and momentum methods. The bias correction in step 4 prevents early iterates from being biased towards zero (since $m_0 = v_0 = \mathbf{0}$).
+
+\begin{remark}[Nesterov vs Heavy Ball]
+\label{rem:nesterov_hb}
+Both Nesterov (Algorithm~\ref{alg:nesterov}) and Heavy Ball (Algorithm~\ref{alg:heavyball}) use momentum, but differ crucially in \emph{where the gradient is evaluated}:
+\begin{align}
+\text{Heavy Ball:} \quad & x_{k+1} = x_k - \alpha\,\nabla f(x_k) + \beta(x_k - x_{k-1}), \\
+\text{Nesterov:} \quad & x_{k+1} = x_k - \alpha\,\nabla f(x_k + \beta_k(x_k - x_{k-1})) + \beta_k(x_k - x_{k-1}).
+\end{align}
+Nesterov evaluates the gradient at the \emph{lookahead} point $\tilde{x}_k = x_k + \beta_k(x_k - x_{k-1})$, effectively using a ``corrected'' gradient that anticipates where momentum will take the iterate. For convex functions, this lookahead is the key ingredient that achieves the optimal $O(1/k^2)$ rate (Theorem~\ref{thm:nesterov}). Heavy Ball does not have this guarantee for general convex functions, despite being effective in practice on strongly convex quadratics.
+\end{remark}
 
 \subsection{Theoretical Convergence Rates}
 \label{subsec:q2_theory}
@@ -605,14 +617,25 @@ The Newton direction $p_k = H_k^{-1}g_k$ changes coordinates to the natural geom
 
 \begin{theorem}[Newton quadratic convergence]
 \label{thm:newton}
-Let $f$ be twice continuously differentiable with $L$-Lipschitz continuous Hessian. There exist constants $r, c > 0$ such that if $\|x_0 - x^\star\| \leq r$ (local convergence region), then the full Newton step ($\alpha = 1$, $\lambda = 0$) satisfies:
+Let $f$ be twice continuously differentiable with $L_H$-Lipschitz continuous Hessian. There exist constants $r, c > 0$ such that if $\|x_0 - x^\star\| \leq r$ (local convergence region), then the full Newton step ($\alpha = 1$, $\lambda = 0$) satisfies:
 \begin{equation}
 \|x_{k+1} - x^\star\| \leq c\, \|x_k - x^\star\|^2.
 \end{equation}
 This \textbf{quadratic convergence} means the number of correct digits approximately doubles at each iteration, compared to the linear rate of gradient descent.
 \end{theorem}
 
-For the quadratic Benchmark A (constant Hessian), Newton achieves \emph{exact} convergence in one step (the quadratic model is exact), regardless of the initial point.
+\begin{proposition}[Newton is exact in one step for quadratics]
+\label{prop:newton_quadratic}
+Let $f(\theta) = \tfrac{1}{2}\theta^T H \theta - b^T\theta + c$ be a quadratic with $H \succ 0$ (constant Hessian). Then the Newton step from any starting point $\theta_0$ satisfies:
+\begin{equation}
+\theta_1 = \theta_0 - H^{-1}\nabla f(\theta_0) = \theta_0 - H^{-1}(H\theta_0 - b) = H^{-1}b = \theta^\star.
+\end{equation}
+The Newton step reaches the exact minimiser $\theta^\star = H^{-1}b$ in \textbf{one iteration}, regardless of $\theta_0$ or the condition number $\kappa$.
+\end{proposition}
+
+This is precisely what occurs on Benchmark A: $J(\theta) = \tfrac{1}{2m}\|X\theta - y\|^2 = \tfrac{1}{2}\theta^T H_A \theta - (X^Ty/m)^T\theta + \text{const}$ with $H_A = X^TX/m$ and $b = X^Ty/m$. Newton's single step solves the normal equations $H_A\theta = b$ exactly, yielding $\hat\theta_{\text{OLS}} = (X^TX)^{-1}X^Ty$.
+
+For Benchmark C (Rosenbrock), Newton achieves \emph{local} quadratic convergence but requires damping ($\alpha < 1$) to remain in the convergence region, since the Hessian varies rapidly along the curved valley ($L_H \propto \max\{1200, 400\}$, very large).
 
 \subsection{Hyperparameter Settings}
 \label{subsec:q3_params}
@@ -674,6 +697,13 @@ C & 3.7319 & 0.6864 & $(0.183, 0.020)$ \\
 \end{table}
 
 \noindent Note that on Benchmark C, Newton has not reached the true minimum $(1,1)$ in 20 iterations — it remains at $(0.183, 0.020)$ on the valley floor, far from the optimum. This is because the damping ($\alpha = 0.22$) combined with the high condition number significantly slows progress. More iterations or adaptive step-size selection (e.g., backtracking line search) would be needed.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_distance_to_opt.pdf}
+\caption{Q3: Distance to optimum $\|x_k - x^\star\|$ on log scale for Newton vs GD on Benchmarks B and C. On Benchmark B (left), Newton achieves near-machine-precision distance to the optimum within $\sim$8 iterations: the rapid decay characteristic of (damped) quadratic convergence is visible as a steeper-than-linear decrease on the log scale. On Benchmark C (right), Newton's progress is slower due to strong damping ($\alpha=0.22$) and the large Hessian variation along the valley; however, it still substantially outperforms GD, which barely reduces its distance to $(1,1)$ in 80 iterations.}
+\label{fig:q3_dist}
+\end{figure}
 
 \subsection{Contour Trajectories}
 \label{subsec:q3_contours}
@@ -742,7 +772,31 @@ This zeroth-order method uses only \emph{two} function evaluations per iteration
 
 \subsubsection{Hyperparameters}
 
-Methods are run for 120 iterations (FD GD) and 220 iterations (Nesterov random search) on Benchmark B. Step sizes: exact GD $\alpha = 0.06$, FD GD $\alpha = 0.08$, NRS $\alpha = 0.025$; perturbation NRS $\delta = 0.08$. Note that FD GD uses a slightly larger step size ($0.08$) than exact GD ($0.06$) since the approximate gradient introduces bias that reduces the effective descent amount.
+\begin{table}[H]
+\centering
+\caption{Q4A: Hyperparameter settings for gradient approximation methods on Benchmark B.}
+\label{tab:q4_params}
+\begin{tabular}{llcc}
+\toprule
+\textbf{Method} & \textbf{Parameter} & \textbf{Value} & \textbf{Iterations} \\
+\midrule
+Exact GD & $\alpha$ & 0.06 & 120 (truncated) \\
+FD GD (good) & $\alpha$, $\delta$ & 0.08, 0.05 & 120 \\
+FD GD (poor) & $\alpha$, $\delta$ & 0.08, 0.80 & 120 \\
+Nesterov Random Search & $\alpha$, $\delta$ & 0.025, 0.08 & 220 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent FD GD uses a slightly larger step size ($\alpha = 0.08$) than exact GD ($\alpha = 0.06$) because the approximate gradient has smaller magnitude (bias reduces the effective gradient size), allowing a larger nominal step while maintaining stability.
+
+\paragraph{Finite difference error quantification.}
+For Benchmark B at the starting point $x_0 = (-1, 4)$, the second partial derivatives are $\partial^2 f/\partial x_1^2 = 2 - \sin(-1) \approx 2.841$ and $\partial^2 f/\partial x_2^2 = 10$. The truncation error in coordinate $i$ is $\tfrac{\delta}{2}|\partial^2 f/\partial x_i^2|$, giving:
+\begin{align}
+\delta = 0.05: \quad &\text{error}_1 \approx 0.025 \times 2.841 = 0.071, \quad \text{error}_2 \approx 0.025 \times 10 = 0.25. \\
+\delta = 0.80: \quad &\text{error}_1 \approx 0.40 \times 2.841 = 1.136, \quad \text{error}_2 \approx 0.40 \times 10 = 4.0.
+\end{align}
+The true gradient at $x_0$ has magnitude $\|[\nabla f]_1\| = |2(-1-1)+\cos(-1)| \approx 3.460$ and $\|[\nabla f]_2\| = |10(4-2)| = 20$. Thus $\delta = 0.05$ introduces $\sim\!1.25\%$ relative error in $x_2$, while $\delta = 0.8$ introduces $\sim\!20\%$ relative error — sufficient to substantially distort the gradient direction.
 
 \subsubsection{Results}
 
@@ -936,6 +990,14 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & \checkmark \\
 
 \noindent\textbf{Connection to KKT:} As $\lambda \to \infty$, the penalty method's solution approaches the KKT point identified in Section~\ref{subsec:q5_kkt}: $(0.582, 2.0)$ with $\mu^\star = 0$ (inactive constraint). For $\lambda = 4.5$, the final violation is numerically zero, confirming that this penalty weight is sufficient for this problem.
 
+\noindent\textbf{Ill-conditioning from large penalty.} The penalised objective $F_\lambda(x) = f(x) + \lambda\max(0, 0.5-x_1)$ has a discontinuous gradient at $x_1 = 0.5$. Near the constraint boundary, the effective Lipschitz constant of $F_\lambda$ is $L + \lambda$, requiring $\alpha \leq 1/(L + \lambda)$ for gradient descent stability. This explains why we use $\alpha = 0.03$ for $\lambda = 4.5$ (vs $\alpha = 0.05$ for $\lambda \leq 1.8$): the step size must decrease roughly as $1/\lambda$ as the penalty grows.
+
+\noindent\textbf{Augmented Lagrangian as improvement.} The pure penalty method requires $\lambda \to \infty$ to achieve feasibility exactly. The \emph{augmented Lagrangian} (Multiplier Method) overcomes this by incorporating a dual variable update:
+\begin{equation}
+\mathcal{L}_\rho(x, \mu) = f(x) + \mu g(x) + \tfrac{\rho}{2}g(x)^2, \qquad g(x) = \max(0, 0.5 - x_1).
+\end{equation}
+Dual updates $\mu_{k+1} = \mu_k + \rho\,g(x_k)$ allow convergence to the exact constrained solution at moderate $\rho$, avoiding the ill-conditioning of large penalty weights.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm}
 \label{sec:q6}
@@ -1004,6 +1066,13 @@ The \textbf{Frank--Wolfe gap} $\Delta_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ pro
 
 In our implementation, a fixed $\beta$ (rather than the diminishing schedule $\gamma_k = 2/(k+2)$) is used. This is a constant step-size variant that does not satisfy Theorem~\ref{thm:fw}'s guarantee, but can be effective when the step size is tuned. For interior optima, fixed $\beta$ gives stable convergence; for boundary optima, the diminishing schedule is preferable.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q6_fw_gap.pdf}
+\caption{Q6: Frank--Wolfe convergence (left) and duality gap $\Delta_k = \nabla f(x_k)^T(x_k - z_k)$ (right) for the interior optimum. The duality gap provides a \emph{computable certificate} of optimality: when $\Delta_k = 0$, the current iterate is guaranteed to be optimal (for convex $f$). Both $\beta=0.90$ and $\beta=0.985$ show the gap decreasing, though with oscillation. The oscillation in $\Delta_k$ occurs because $z_k$ (the LP oracle output) alternates between different vertices of $\mathcal{X}$, producing variable gap values. With $\beta=0.985$ (smaller steps), the oscillation is reduced and the gap decreases more steadily.}
+\label{fig:q6_fw_gap}
+\end{figure}
+
 \subsection{Interior Optimum: $f(x) = (x_1-1)^2 + (x_2-5)^2$}
 \label{subsec:q6_interior}
 
@@ -1062,10 +1131,18 @@ Boundary, $\beta = 0.93$ & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 
 \textbf{Advantages of Frank--Wolfe over Projected GD:}
 \begin{itemize}[nosep]
-\item No projection oracle needed — only an LP over $\mathcal{X}$
+\item No projection oracle needed — only an LP oracle over $\mathcal{X}$ (cost $O(d)$ for box constraints)
 \item Iterates are automatically feasible (convex combination of feasible points)
-\item Applicable when $\mathcal{X}$ has structure that makes LP easy but projection hard (e.g., spectrahedra, flow polytopes)
-\item Sparse iterates: for polytope $\mathcal{X}$, iterates are convex combinations of at most $k+1$ vertices
+\item Applicable when $\mathcal{X}$ has structure that makes LP easy but projection hard (e.g., nuclear norm balls, spectrahedra, flow polytopes where LP is polynomial but projection is expensive)
+\item Sparse iterates: after $k$ iterations, $x_k$ is a convex combination of at most $k+1$ vertices of $\mathcal{X}$, promoting sparsity in the solution
+\item The FW gap $\Delta_k$ provides a computable optimality certificate (Figure~\ref{fig:q6_fw_gap})
+\end{itemize}
+
+\textbf{Limitations of Frank--Wolfe:}
+\begin{itemize}[nosep]
+\item Convergence rate $O(1/k)$ is slower than projected GD's $O(1/k^2)$ (with optimal step sizes) or linear rate for strongly convex objectives
+\item The fixed $\beta$ schedule (as used here) does not satisfy the theoretical guarantee of Theorem~\ref{thm:fw}; the standard $\gamma_k = 2/(k+2)$ schedule is needed
+\item Poor performance for well-conditioned problems or when projection is cheap — projected GD is preferred in such cases
 \end{itemize}
 
 % ============================================================
