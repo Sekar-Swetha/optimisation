@@ -410,8 +410,24 @@ The \emph{Fast Iterative Shrinkage-Thresholding Algorithm} (FISTA)~\cite{beck200
 
 Adam~\cite{kingma2015} combines \emph{gradient momentum} (via $m_t$, analogous to Heavy Ball) with \emph{per-coordinate adaptive scaling} (via $v_t$, analogous to RMSprop~\cite{tieleman2012}). The bias-correction terms arise because $m_t = (1-\beta_1)\sum_{i=1}^t \beta_1^{t-i} g_i$ has expectation $\mathbb{E}[m_t] = (1-\beta_1^t)\mathbb{E}[g]$: the exponential average underestimates the true mean by factor $(1-\beta_1^t)$ in early iterations (e.g., at $t=1$, $m_1 = (1-\beta_1)g_1$ underestimates by factor $1-\beta_1 = 0.1$). Dividing by $(1-\beta_1^t)$ corrects this initialisation bias. The asymmetry $\beta_2 = 0.999 \gg \beta_1 = 0.9$ ensures the second-moment estimate is more stable (longer memory) than the first-moment estimate, preventing the denominator $\sqrt{\hat{v}_t}$ from reacting too quickly to gradient magnitude changes. The effective step size at step $t$ is approximately $\alpha \cdot \sqrt{1-\beta_2^t}/(1-\beta_1^t)$, which is $\approx \alpha$ for large $t$. With default parameters $\beta_1 = 0.9$, $\beta_2 = 0.999$, $\varepsilon = 10^{-8}$, Adam is robust across a wide range of problems and is the de-facto standard in deep learning.
 
-\begin{remark}
+\begin{remark}[Adam Convergence and AdamW]
 Despite its practical success, Adam does not have convergence guarantees as strong as SGD with decreasing step sizes for convex problems. The non-convergence example of \cite{reddi2018} in simple convex settings motivates the AMSGrad variant, which replaces $\hat{v}_t$ with $\max(\hat{v}_{t-1}, \hat{v}_t)$ to ensure a non-increasing effective step size, though this instability rarely manifests in practice for the smooth objectives considered here.
+
+The dominant practical variant is \emph{AdamW} \cite{kingma2015}, which decouples the L2 weight-decay term from the gradient update. Standard Adam with L2 regularisation computes the gradient of $f(x) + \frac{\lambda}{2}\|x\|^2$, which modifies the adaptive scaling in the denominator. AdamW instead applies weight decay \emph{directly} to the parameter:
+\[
+  x_{t+1} = x_t - \alpha\left(\frac{\hat{m}_t}{\sqrt{\hat{v}_t}+\varepsilon} + \lambda x_t\right),
+\]
+keeping the adaptive step $\hat{m}_t/(\sqrt{\hat{v}_t}+\varepsilon)$ gradient-only and the decay term $\lambda x_t$ separate. This decoupling prevents the adaptive scaling from suppressing weight decay on parameters with large gradient variance, and is theoretically motivated by showing that Adam$+$L2 and AdamW correspond to different implicit regularisers. AdamW with cosine annealing $\alpha_t = \alpha_0 \cdot \frac{1}{2}(1 + \cos(\pi t/T))$ is currently the standard training recipe for transformer-based language models (GPT-4, LLaMA).
+\end{remark}
+
+\begin{remark}[Learning Rate Scheduling]
+In deep learning, constant step sizes are rarely optimal. Three common schedules address different regimes:
+\begin{itemize}[nosep]
+  \item \textbf{Linear warmup:} $\alpha_t = \alpha_{\max} \cdot t/T_{\text{warm}}$ for $t \leq T_{\text{warm}}$. Avoids large, potentially destabilising updates in the first few thousand iterations when the model parameters are far from any meaningful basin.
+  \item \textbf{Step decay:} $\alpha_t = \alpha_0 \cdot \gamma^{\lfloor t/T_\text{step}\rfloor}$ (e.g., $\gamma = 0.1$ every $T_\text{step}$ epochs). Satisfies the Robbins--Monro sum-convergence condition for $\gamma < 1$; standard in ResNet/ImageNet training.
+  \item \textbf{Cosine annealing:} $\alpha_t = \alpha_{\min} + \frac{1}{2}(\alpha_{\max} - \alpha_{\min})(1 + \cos(\pi t/T))$. Smoothly decays $\alpha$ to $\alpha_{\min}$ over $T$ steps, with optional ``warm restarts'' (cosine restarts with growing period) to escape local optima. Achieves state-of-the-art on most benchmarks.
+\end{itemize}
+All schedules reduce to constant $\alpha$ in the experiments here ($T_{\text{warm}} = 0$, $T = $ number of iterations, $\alpha_{\min} = \alpha_{\max}$). The step-decay and cosine schedules satisfy the Robbins--Monro conditions asymptotically, providing both fast early progress (large $\alpha$) and accurate convergence (small $\alpha$ late).
 \end{remark}
 
 \subsection{Hyperparameter Settings}
@@ -896,7 +912,14 @@ The key trade-off in derivative-free optimisation is between the cost per evalua
 The computational cost hierarchy for derivative-based vs.\ derivative-free methods is directly linked to the \emph{oracle model}: a gradient oracle provides $d$ directional derivatives in $O(1)$ function evaluations (via automatic differentiation), while a function oracle provides only one scalar. The statistical question is how efficiently a single scalar observation reduces uncertainty about the optimum.
 
 \begin{remark}[Automatic Differentiation]
-\emph{Automatic differentiation} (AD) computes exact gradients by applying the chain rule symbolically through a computation graph. \emph{Reverse-mode AD} (backpropagation in neural networks) computes $\nabla f(x)$ in $O(W)$ time where $W$ is the number of floating-point operations in computing $f$, regardless of $d$. This is a \emph{constant factor} overhead over a single function evaluation (typically $2$--$5\times$), eliminating the $d$-scaling penalty of finite differences entirely. For the Benchmark functions here, exact gradients are available analytically, so AD is not needed. However, for complex computational pipelines (e.g., neural network losses computed through dozens of non-linear layers), AD is the only feasible method for obtaining exact gradients. The distinction between \emph{forward-mode} AD (cost $O(dW)$, suitable for small $d$) and \emph{reverse-mode} AD (cost $O(W)$ for any $d$, suitable for large $d$) explains why backpropagation (reverse-mode) is the universal standard in deep learning.
+\emph{Automatic differentiation} (AD) computes exact gradients by applying the chain rule symbolically through a computation graph. \emph{Reverse-mode AD} (backpropagation in neural networks) computes $\nabla f(x)$ in $O(W)$ time where $W$ is the number of floating-point operations in computing $f$, regardless of $d$. This is a \emph{constant factor} overhead over a single function evaluation (typically $2$--$5\times$), eliminating the $d$-scaling penalty of finite differences entirely. For the Benchmark functions here, exact gradients are available analytically, so AD is not needed. However, for complex computational pipelines (e.g., neural network losses computed through dozens of non-linear layers), AD is the only feasible method for obtaining exact gradients.
+
+The distinction between the two modes follows directly from the direction in which the chain rule is composed:
+\begin{itemize}[nosep]
+  \item \textbf{Forward mode} (``forward tangent''): propagates a \emph{seed vector} $\dot{x} \in \mathbb{R}^d$ through the computation graph, computing $J \dot{x}$ (one directional Jacobian-vector product) per forward pass, at cost $O(W)$ per direction. Computing the full gradient $\nabla f \in \mathbb{R}^d$ requires $d$ forward passes: cost $O(dW)$. Efficient for $d \ll 1$ (e.g., $d = 2$ in our experiments).
+  \item \textbf{Reverse mode} (``backpropagation''): propagates an \emph{adjoint vector} $\bar{y} = 1$ \emph{backward} through the graph, computing $J^T \bar{y}$ (one vector-Jacobian product) per backward pass, at cost $O(W)$ regardless of $d$. Computing the full gradient requires only \emph{one} backward pass: cost $O(W)$. This is why backpropagation is the universal standard for neural networks where $d \sim 10^6$--$10^{12}$.
+\end{itemize}
+For the 2-dimensional benchmarks in this report, both modes cost $O(W)$ per gradient and are interchangeable. The $d$-factor difference becomes decisive only for $d \gg 1$.
 \end{remark}
 
 Random search averages $d$ independent measurements before obtaining a gradient estimate as accurate as one exact gradient evaluation. This $d$-factor overhead is the fundamental curse of dimensionality for derivative-free methods, and explains why AD eliminates the $d$-scaling penalty entirely.
@@ -1019,6 +1042,12 @@ The first-order necessary optimality conditions (KKT) for $\min_{x_1 \geq 0.5} f
   \mu^\star(x_1^\star - 0.5) &= 0 \quad &\text{(complementary slackness)}.
 \end{align*}
 Since $\nabla f(x^\star) = [2(x_1^\star - 1) + \cos(x_1^\star),\; 10(x_2^\star - 2)]^T = [0, 0]^T$ at the unconstrained minimum and $x_1^\star \approx 0.582 > 0.5$, complementary slackness forces $\mu^\star = 0$, confirming the constraint is inactive. If instead the constraint were active ($x_1^\star = 0.5$), stationarity would require $\nabla_1 f(0.5, x_2^\star) = \mu^\star > 0$: the gradient must point into the infeasible region, balanced by the multiplier. This is the key diagnostic for whether a problem's solution is on the constraint boundary.
+
+\textbf{Numerical verification at $x^\star \approx (0.582, 2.000)$:} The gradient of $f$ is
+\[
+  \nabla f(x) = \begin{bmatrix} 2(x_1-1) + \cos(x_1) \\ 10(x_2 - 2) \end{bmatrix}.
+\]
+At $x^\star = (0.582, 2.000)$: $\nabla_1 f = 2(0.582-1) + \cos(0.582) = -0.836 + 0.836 = 0.000$ and $\nabla_2 f = 10(0-0) = 0$. KKT stationarity $\nabla f(x^\star) - \mu^\star e_1 = 0$ with $\mu^\star = 0$ gives $[0, 0]^T = [0, 0]^T$ \checkmark. Primal feasibility: $x_1^\star = 0.582 \geq 0.5$ \checkmark. Dual feasibility: $\mu^\star = 0 \geq 0$ \checkmark. Complementary slackness: $0 \cdot (0.582 - 0.5) = 0$ \checkmark.
 
 \textbf{Constraint qualification:} For the KKT conditions to be \emph{necessary} (not just sufficient for convex problems), a constraint qualification (CQ) must hold at the solution. For the single linear inequality $g(x) = 0.5 - x_1 \leq 0$, the \emph{Linear Independence Constraint Qualification} (LICQ) is trivially satisfied everywhere since $\nabla g = [-1, 0]^T \neq 0$. LICQ guarantees that the KKT multipliers $\mu^\star$ are unique. For more complex constraint sets (e.g., two active constraints whose gradients are linearly dependent), the CQ can fail and the KKT conditions may not be necessary, requiring higher-order optimality conditions.
 \end{remark}
@@ -1157,6 +1186,18 @@ Boundary, $\beta = 0.93$ & 140 & $(0.500,\ {-}0.337)$ & 0.3637 & 0.25 \\
 
 \begin{remark}[Away-Step Frank--Wolfe]
 The zig-zag phenomenon for interior optima arises because the standard FW step can only move \emph{toward} $\mathcal{X}$'s extreme points, not \emph{away} from atom directions already in the active set. The \emph{Away-Step Frank--Wolfe} variant \cite{jaggi2013} augments each iteration with an ``away step'': identify the atom $v_k \in \mathcal{X}$ that contributes most to the current iterate (active set), and optionally step \emph{away} from $v_k$ as $x_{k+1} = x_k + (1-\gamma_k)(x_k - v_k)$. This allows the iterate to ``unzip'' previously accumulated vertex contributions, achieving \emph{linear convergence} $O((1-\mu/(LD^2))^k)$ for strongly convex objectives over polytopes. For the box-constrained experiments here, the difference is modest; the benefit is most pronounced for trace-norm or $\ell_1$-ball constraints where interior optima cause persistent zig-zagging in the standard FW algorithm.
+\end{remark}
+
+\begin{remark}[Frank--Wolfe for Matrix Completion and Low-Rank Problems]
+The canonical application of Frank--Wolfe in machine learning is \emph{matrix completion with trace-norm constraint}: given partial observations of a matrix $M \in \mathbb{R}^{m\times n}$, recover $M$ by solving
+\[
+  \min_{X \in \mathbb{R}^{m\times n}} \sum_{(i,j) \in \Omega} (X_{ij} - M_{ij})^2 \quad \text{subject to} \quad \|X\|_* \leq \tau,
+\]
+where $\|X\|_* = \sum_i \sigma_i(X)$ is the nuclear (trace) norm (sum of singular values), and $\Omega$ is the observed index set. The trace-norm ball $\{X : \|X\|_* \leq \tau\}$ is a convex proxy for the rank constraint $\mathrm{rank}(X) \leq r$, and its LP oracle is a \emph{rank-1 singular vector computation}:
+\[
+  \arg\min_{\|Z\|_* \leq \tau} \langle \nabla f(X), Z\rangle = -\tau \cdot u_1 v_1^T,
+\]
+where $u_1, v_1$ are the top left/right singular vectors of $-\nabla f(X)$, computable in $O(mn)$ via power iteration. Frank--Wolfe is thus \emph{projection-free} with $O(mn)$ oracle cost per step --- dramatically cheaper than projecting onto the trace-norm ball (which requires a full SVD at $O(mn\min(m,n))$ cost). Each iterate $X_k$ is a convex combination of rank-1 matrices, giving a naturally low-rank iterand that grows rank by at most 1 per iteration. This sparse-representation property is a fundamental structural advantage over PGD for large-scale matrix problems, and explains why Frank--Wolfe (or its block-coordinate variant, the Alternating Direction Method) dominates collaborative filtering and recommender system training.
 \end{remark}
 
 \textbf{Boundary optimum:} Frank--Wolfe is particularly well-suited to boundary optima because the LP oracle frequently selects the vertex closest to the constrained optimum. When the unconstrained optimum is outside $\mathcal{X}$, the gradient consistently points away from the boundary, causing $z_k$ to reliably select the boundary vertex (here $(0.5, -5)$). The iterate is then steadily pulled toward $(0.5, 0)$. The gap between achieved ($f = 0.364$) and optimal ($f^\star = 0.25$) reflects the finite number of iterations; using the theoretically recommended schedule $\gamma_k = 2/(k+2)$ would guarantee $f(x_{140}) - f^\star \leq \frac{2LD^2}{142}$ convergence.
@@ -1351,6 +1392,8 @@ The study presented here is bounded by several intentional simplifications that 
   \item \textbf{Stochastic non-convex convergence:} For non-convex functions, the standard convergence criterion for SGD is $\mathbb{E}[\|\nabla f(x_k)\|^2] \leq \epsilon$ (gradient norm, not function value gap), and SGD with step $\alpha_k = O(1/\sqrt{T})$ achieves this at rate $O(1/\sqrt{T})$ \cite{ghadimi2013}. Variance reduction methods achieve $O(1/T)$ under PL conditions.
 
   \item \textbf{Constrained optimisation methods:} Interior point methods (barrier methods) and augmented Lagrangian methods (ADMM, ALM) are not covered here but are central to large-scale constrained optimisation. Interior point methods achieve $O(d^3 \log(1/\epsilon))$ complexity for linear programs and $O(d^3)$ for smooth strictly convex programs, matching Newton's efficiency within the feasible interior.
+
+  \item \textbf{Curvature exploitation beyond Newton:} For ill-conditioned problems, preconditioning offers a middle path between the $O(\kappa)$ cost of GD and the $O(d^3)$ cost of Newton. A diagonal preconditioner $P = \mathrm{diag}(H_{11}, H_{22})^{-1}$ (approximating Adagrad's behaviour) reduces the effective condition number from $\kappa$ to $\kappa / \kappa_{\text{diag}} \leq \kappa$; a block-diagonal preconditioner can achieve further reduction. For the Rosenbrock Hessian $H = \bigl[\begin{smallmatrix}802 & -400\\ -400 & 200\end{smallmatrix}\bigr]$, the diagonal preconditioner gives effective $\kappa_{\text{diag}} = 802/200 = 4.01$, still leaving substantial off-diagonal coupling. This explains why Adagrad performs well on sparse gradient settings (where diagonal preconditioning is nearly exact) but struggles on Rosenbrock (where the off-diagonal coupling dominates).
 \end{enumerate}
 
 % ============================================================
