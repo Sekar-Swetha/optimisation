@@ -241,6 +241,27 @@ A larger step $\alpha > 2/L$ causes divergence due to the descent lemma violatio
 condition $\alpha \le 1/L$ guarantees $f(x_{k+1}) \le f(x_k) - \frac{\alpha}{2}\|\nabla f(x_k)\|^2$
 (sufficient decrease), which each method in this section attempts to improve upon.
 
+\textbf{Adaptive methods as implicit preconditioners.}  The fundamental motivation for adaptive
+step sizes is the recognition that gradient descent applies a \emph{scalar} scaling to the
+gradient, whereas the ideal update would scale each coordinate (or direction) inversely by its
+local curvature.  This ideal is the Newton step, which applies $H_k^{-1}$, the full Hessian
+inverse (a $d\times d$ matrix).  Adaptive methods approximate this ideal cheaply:
+
+\begin{itemize}[nosep]
+  \item \textbf{Adagrad} approximates $H^{-1}$ by a \emph{diagonal} matrix
+    $D_k = \mathrm{diag}(1/\sqrt{G_{k,j}})$, using the cumulative squared gradient as a
+    running proxy for curvature.  For a quadratic $f$ with diagonal Hessian $H=\mathrm{diag}(h_j)$,
+    after many iterations $G_k \approx k\cdot h_j \cdot \|x^\star\|^2$, giving
+    $D_k \approx C/\sqrt{h_j}$ --- matching the scaling of $H^{-1/2}$.
+  \item \textbf{RMSprop} makes the same approximation but forgets old curvature information,
+    adapting to local curvature near the current point.
+  \item \textbf{Adam} combines this with gradient momentum, inheriting properties of both
+    the preconditioning (from RMSprop) and the momentum (from Heavy Ball).
+\end{itemize}
+
+All diagonal adaptive methods are therefore \emph{diagonal-matrix preconditioned} gradient
+descent, in contrast to the full-matrix preconditioning of Newton's method.
+
 \begin{definition}[Polyak Step Size]
 Given an estimate $f^\star$ of the optimal value, the Polyak step at $x_k$ is
 \begin{equation}
@@ -768,6 +789,7 @@ variance $\mathrm{Var}[\hat{g}] = \frac{1}{b}\sigma_{\mathrm{batch}}^2$ where
 $\sigma_{\mathrm{batch}}^2$ depends on the data spread.  SGD with constant step size cannot
 converge to $J^\star$ but oscillates within a ball of radius $O(\alpha\sigma^2_{\mathrm{batch}}/b)$
 around the optimum.  This explains the oscillation visible near the noise floor.
+Figure~\ref{fig:q2_sgd_variance} empirically confirms the $1/b$ scaling of gradient variance.
 
 \begin{figure}[H]
 \centering
@@ -1584,6 +1606,27 @@ $x_{k+1} = \beta x_k + (1-\beta) z_k$, equivalent to a fixed step-size
 $\gamma = 1 - \beta$ towards the LP vertex.  This differs from the optimal $\gamma_k = 2/(k+2)$
 schedule, but allows comparison between different fixed strategies.
 
+\textbf{Comparison of step-size strategies:}  For the interior optimum case, the two strategies
+are:
+\begin{itemize}[nosep]
+  \item $\gamma = 1-\beta = 0.10$ (aggressive): fast initial descent but larger oscillation
+    once $x_k$ is near $(1,5)$, since each $z_k$ vertex is far from the minimum.
+  \item $\gamma = 1-\beta = 0.015$ (conservative): slower initial descent but smaller
+    oscillation near the minimum.  Since $x_{k+1} = 0.985 x_k + 0.015 z_k$, the iterate
+    ``forgets'' the vertex jumps slowly.
+  \item $\gamma_k = 2/(k+2)$ (optimal schedule, not implemented): decays from $2/2=1$ to
+    $2/(N+2)$, providing fast initial steps and small steps near the minimum.  This achieves
+    the $O(1/k)$ bound with the smallest constant.
+\end{itemize}
+
+\textbf{Diameter of the feasible set:} For $\mathcal{X} = [0.5,5]\times[-5,10]$,
+$D = \sqrt{(5-0.5)^2 + (10-(-5))^2} = \sqrt{20.25 + 225} = \sqrt{245.25} \approx 15.66$.
+The FW convergence bound gives $f(x_{100}) - f^\star \le \frac{2L\cdot245.25}{100+2}$.
+For the interior optimum $f(x)=(x_1-1)^2+(x_2-5)^2$, $L=2$, giving
+$f(x_{100}) - 0 \le \frac{2\cdot2\cdot245.25}{102} \approx 9.62$ --- a very loose upper bound,
+as the actual errors are $\sim$0.005 in 140 iterations.  The looseness reflects the pessimistic
+``diameter'' bound (the initial point $x_0=(1,1)$ is close to $x^\star=(1,5)$).
+
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
 The unconstrained minimum $(1, 5)$ lies inside $\mathcal{X}$ (since $0.5\le 1\le 5$ and
@@ -1850,6 +1893,28 @@ Its $O(1/k)$ convergence rate (vs.\ $O(1/k^2)$ for projected GD) is the price of
 projections with linear minimisations.  FW is most valuable when the LMO is easy (box, simplex,
 nuclear norm ball) but the projection is expensive.  The FW gap provides a practical stopping
 criterion without knowledge of $f^\star$.
+
+\subsection{Condition Number and Convergence Speed}
+
+The condition number $\kappa = L/\mu$ is the central quantity governing first-order convergence
+rates.  Figure~\ref{fig:kappa_scaling} illustrates how $\kappa$ affects the number of iterations
+required to reduce the optimality gap by 99\%, for GD, Nesterov, and Newton's method.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/kappa_convergence_scaling.pdf}
+\caption{Left: GD convergence on all three benchmarks in terms of objective gap $f(x_k)-f^\star$,
+with theoretical rate $(1-1/\kappa)^k$ overlaid.  The empirical rates closely match the theory
+for Benchmarks~A and~B, while Benchmark~C deviates because the Rosenbrock Hessian varies and
+$\kappa$ is not constant.  Right: iterations required to reach 1\% of the initial gap, as a
+function of condition number.  GD requires $O(\kappa)$ iterations, Nesterov $O(\sqrt\kappa)$
+(the $k^{1/2}$ speedup), and Newton is essentially $\kappa$-independent (requires a constant
+number of iterations once in the quadratic convergence region).  The three benchmarks are
+marked as vertical lines: Benchmark~A ($\kappa\approx1$, easy), Benchmark~B ($\kappa\approx7$),
+and Benchmark~C ($\kappa\approx500$, hard).  The gap between GD and Nesterov grows as
+$\sqrt{\kappa}$, explaining why acceleration is critical for ill-conditioned problems.}
+\label{fig:kappa_scaling}
+\end{figure}
 
 \subsection{Theoretical Convergence Rates Summary}
 
