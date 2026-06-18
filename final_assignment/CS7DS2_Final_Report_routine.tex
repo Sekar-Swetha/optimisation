@@ -437,6 +437,22 @@ $\beta^\star = \bigl(\tfrac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\bigr)^2$ achieves
 improving GD's rate of $(1-1/\kappa)$ to $(1-1/\sqrt{\kappa})$ per iteration.
 \end{proposition}
 
+\begin{remark}[Heavy Ball as Conjugate Gradient for Quadratics]
+For a quadratic $f(x) = \frac{1}{2}x^T A x - b^T x$ with $A\succ0$, the Heavy Ball method
+with optimal parameters coincides (in the long run) with the \emph{Conjugate Gradient} (CG)
+method in terms of the subspace spanned by iterates.  CG generates iterates in the Krylov
+subspace $\mathcal{K}_k = \mathrm{span}\{r_0, A r_0, A^2 r_0,\ldots,A^{k-1}r_0\}$ where
+$r_0 = b - Ax_0$ is the initial residual.  Heavy Ball with momentum produces the same
+sequence of Krylov subspace directions, achieving the optimal polynomial preconditioning rate
+$(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$.  However, CG computes the \emph{optimal} coefficients
+for the Krylov subspace at each step (minimising $\|x_k - x^\star\|_A^2$ over the whole
+subspace), whereas Heavy Ball commits to the two-term recurrence --- which is optimal only
+for quadratics with a single unique eigenvalue distribution.  For quadratics with clustered
+eigenspectra (e.g., Benchmark~A where $A \approx \lambda_{\rm avg} I$), both methods converge
+in very few steps.  For Benchmark~C (spread eigenspectrum), CG would converge in $d=2$ steps
+exactly, while Heavy Ball requires tuning to the specific spectrum.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -720,6 +736,21 @@ by $10^{3}$, while Nesterov requires only $\sqrt{500}\times\ln(1/\varepsilon)\ap
 \approx 154$ iterations --- a $\sqrt{500}\approx22$-fold reduction.  This theoretical gap is
 the key motivation for Nesterov acceleration on ill-conditioned problems.
 
+Figure~\ref{fig:nesterov_sc_rate} quantifies this speedup for Benchmarks~B and~C.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/nesterov_sc_rate.pdf}
+\caption{Q2: Theoretical convergence rates for GD vs.\ Nesterov for strongly convex $f$,
+normalised by the initial gap.  Left: Benchmark~B ($\kappa\approx7$) --- GD requires $\approx$14 iterations
+to reach 1\% of the initial gap, while Nesterov requires~5 (speedup of~2.6x~$\approx\sqrt{7}$).
+Right: Benchmark~C ($\kappa\approx500$) --- GD requires $\approx$2303 iterations, Nesterov only~103
+(speedup of~22x~$\approx\sqrt{500}$).  The vertical dashed lines mark 1\% gap thresholds.
+This figure empirically illustrates the $\sqrt{\kappa}$ speedup from the strongly-convex
+Nesterov rate $e^{-k/\sqrt\kappa}$ vs.\ GD's $(1-1/\kappa)^k\approx e^{-k/\kappa}$.}
+\label{fig:nesterov_sc_rate}
+\end{figure}
+
 Figure~\ref{fig:nesterov_lookahead} visualises the lookahead mechanism on Benchmark~B and
 contrasts Nesterov with Heavy Ball, illustrating why the gradient evaluation point matters.
 
@@ -745,6 +776,24 @@ The correction factors $(1-\beta_1^t)^{-1}$ and $(1-\beta_2^t)^{-1}$ remove this
 ensuring $\hat{m}_1 \approx g_1$ and $\hat{v}_1 \approx g_1^2$ regardless of the momentum
 parameters.
 \end{proposition}
+
+\begin{remark}[Adam Non-Convergence and AMSGrad]
+Despite widespread empirical success, Adam can fail to converge even for convex online
+problems.  Reddi et al.\ (2018) constructed an online convex problem where Adam's exponential
+moving average of past squared gradients ``forgets'' informative large gradients from early
+steps, causing the effective learning rate to oscillate and the regret to grow as $O(\sqrt{T})$
+instead of $O(\log T)$ as promised.  The \emph{AMSGrad} fix maintains the \emph{maximum}
+rather than the exponential moving average for the denominator:
+\begin{equation}
+\hat{v}_t^{\rm max} = \max(\hat{v}_{t-1}^{\rm max},\; \hat{v}_t), \qquad
+x_{t+1} = x_t - \frac{\alpha}{\sqrt{\hat{v}_t^{\rm max}} + \varepsilon} \hat{m}_t.
+\end{equation}
+The key property: $\hat{v}_t^{\rm max}$ is \emph{non-decreasing}, ensuring that large past
+curvature is never forgotten.  AMSGrad is provably convergent for convex online problems, but
+in practice often converges slightly slower than Adam due to the conservative denominator.
+For the smooth convex problems in this assignment, both Adam and AMSGrad converge satisfactorily;
+the non-convergence issue primarily manifests on highly non-stationary online sequences.
+\end{remark}
 
 \subsection{Algorithm Formulations}
 
@@ -1641,6 +1690,13 @@ efficiency decreases as $d$ grows.
     to the true gradient in high dimensions ($\cos\theta \sim d^{-1/2}$).
   \item \textbf{Discrete/non-differentiable:} Grid search (exhaustive) or genetic algorithms
     (population-based).
+  \item \textbf{Separable objectives (coordinate-decomposable):} \emph{Coordinate descent}
+    updates one coordinate at a time using only the partial derivative $\partial f/\partial x_j$
+    (or a one-dimensional finite difference), at cost $O(1)$ per step instead of $O(d)$ per
+    step.  For separable objectives or problems with cheap partial derivatives (e.g., LASSO
+    with $\ell_1$ penalty), coordinate descent achieves the same $O(1/k)$ rate as GD for
+    smooth convex objectives, at a $d$-fold reduction in per-step cost.  It is particularly
+    effective when a closed-form coordinate minimum exists, as in LASSO (soft thresholding).
 \end{itemize}
 
 % ============================================================
@@ -1901,6 +1957,23 @@ an $O(1/k)$ convergence rate.  This is weaker than projected gradient descent's
 $O(1/k^2)$ rate but avoids the need for a projection oracle.
 \end{theorem}
 
+\begin{proof}[Proof sketch of Frank--Wolfe $O(1/k)$ rate]
+By $L$-smoothness applied to the update $x_{k+1} = (1-\gamma_k)x_k + \gamma_k z_k$:
+\begin{align}
+f(x_{k+1}) &\le f(x_k) + \nabla f(x_k)^T(x_{k+1} - x_k) + \frac{L}{2}\|x_{k+1}-x_k\|^2 \\
+&= f(x_k) + \gamma_k \nabla f(x_k)^T(z_k - x_k) + \frac{L\gamma_k^2}{2}\|z_k - x_k\|^2 \\
+&\le f(x_k) + \gamma_k \nabla f(x_k)^T(x^\star - x_k) + \frac{L\gamma_k^2 D^2}{2},
+\end{align}
+where the last line uses $\nabla f(x_k)^T z_k \le \nabla f(x_k)^T x^\star$ (LMO minimality)
+and $\|z_k-x_k\|\le D$.  By convexity, $\nabla f(x_k)^T(x^\star - x_k) \le f(x^\star) - f(x_k)$.
+Define $h_k = f(x_k) - f^\star$.  Then:
+\begin{equation}
+h_{k+1} \le (1-\gamma_k) h_k + \frac{L\gamma_k^2 D^2}{2}.
+\end{equation}
+With $\gamma_k = 2/(k+2)$, by induction one can show $h_k \le 2LD^2/(k+2)$.  The base
+$h_0 \le LD^2/2 = 2LD^2/2$ holds, and the recurrence is satisfied by the given bound.
+\end{proof}
+
 The key advantage of FW is the \emph{linear minimisation oracle (LMO)}: $z_k = \arg\min_{x\in\mathcal{X}} \nabla f(x_k)^T x$.
 For box constraints, this decomposes per coordinate in $O(d)$ operations:
 \begin{equation}
@@ -2092,6 +2165,23 @@ $f$~(vs.\ $O(1/k)$ for standard FW), at the cost of maintaining the active set $
 ($O(k)$ memory per iteration).  This linear rate matches projected GD's rate for constrained
 strongly convex problems, while preserving the projection-free (LMO-only) property of FW.
 \end{remark}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/fw_gap_certificate.pdf}
+\caption{Q6: Frank--Wolfe gap as a convergence certificate.  Left: actual optimality gap
+$f(x_k)-f^\star$ (solid) vs.\ FW gap $g_k$ (dashed) on log scale for both interior and
+boundary optimal cases.  The FW gap upper-bounds the actual gap in all cases ($g_k\ge f(x_k)-f^\star$,
+as proved above).  Both converge at $O(1/k)$ rate (reference dotted).  Right: tightness ratio
+$g_k/(f(x_k)-f^\star)$.  For the \emph{boundary} optimum, the ratio stays moderate ($\sim 2$--$5$)
+because $z_k$ consistently selects the vertex near $x^\star$, making $|x_k-z_k|$ small.
+For the \emph{interior} optimum, the ratio grows as $\|x_k-x^\star\|\to0$ because $z_k$
+still jumps to distant vertices (the gradient direction oscillates around zero, selecting
+opposite corners), so $|x_k-z_k|\approx D$ even when $\|g_k\|\to0$.  Practically: for interior
+optima, the FW gap overestimates the true gap by a growing factor near convergence, while for
+boundary optima it is a tight certificate.}
+\label{fig:fw_gap_cert}
+\end{figure}
 
 \begin{table}[H]
 \centering
