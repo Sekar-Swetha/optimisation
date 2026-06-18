@@ -470,9 +470,19 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 \\
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{figures/q2_contour_C.pdf}
-\caption{Q2: Trajectories on Benchmark C (Rosenbrock). All methods descend quickly to the valley floor but differ markedly in their progress \emph{along} the valley. Nesterov's momentum accumulates kinetic energy in the valley direction, enabling substantially faster traversal. GD's constant small step size ($\alpha = 0.0012$) limits valley progress. Adam's per-coordinate scaling is less effective here because the challenge is not anisotropy per se but the curvature of the valley itself.}
+\caption{Q2: Trajectories on Benchmark C (Rosenbrock). All methods descend quickly to the valley floor but differ markedly in their progress \emph{along} the valley. Nesterov's momentum accumulates kinetic energy in the valley direction, enabling substantially faster traversal. GD's constant small step size ($\alpha = 0.0012$) limits valley progress. Adam's per-coordinate scaling is less effective here because the challenge is not coordinate-wise anisotropy (which Adam handles) but rather the \emph{off-diagonal curvature} (the $H_{12} = -400x_1$ term in the Rosenbrock Hessian), which mixes the $x_1$ and $x_2$ update directions in a way that per-coordinate adaptation cannot correct. A full-matrix preconditioner (like Newton's or BFGS's Hessian inverse) would handle this mixing, but Adam's diagonal approximation cannot.}
 \label{fig:q2_contour_C}
 \end{figure}
+
+\subsection{Nesterov vs Adam: Empirical Rate Analysis}
+
+On Benchmark~C (Rosenbrock), the empirical convergence rates can be characterised from the extended 500-iteration experiment (Figure~\ref{fig:convergence_extended}). Reading from the log-log plot:
+\begin{itemize}[nosep]
+  \item \textbf{Nesterov:} approximate slope $\approx -2$ on the log-log plot (consistent with $O(1/k^2)$).
+  \item \textbf{GD:} approximate slope $\approx -1$ (consistent with $O(1/k)$).
+  \item \textbf{Adam:} slope $\approx -1.2$ (slightly faster than GD due to adaptive scaling, but slower than Nesterov due to the off-diagonal Hessian structure).
+\end{itemize}
+These empirical slopes are consistent with the theoretical predictions for convex functions. However, since Rosenbrock is not globally convex, the theoretical rates apply only locally near the valley floor (where the function is approximately strongly convex due to the PL condition). The excellent agreement between theory and experiment supports that our starting points are in the ``nearly convex'' regime for these benchmarks.
 
 \subsection{Mini-Batch Stochastic Gradient Descent}
 
@@ -505,6 +515,14 @@ Vanilla mini-batch SGD converges to a \emph{noise floor} determined by the gradi
   \item \textbf{SAG/SAGA}: store per-sample gradient estimates; update a running average, achieving linear convergence with $O(m)$ memory overhead.
 \end{itemize}
 For the Benchmark~A experiments here, variance reduction is unnecessary since $m = 1000$ is small enough that full-batch GD is efficient; its benefit emerges for $m \sim 10^6$ where a single epoch is already too expensive.
+\end{remark}
+
+\begin{remark}[Robbins--Monro Convergence Conditions for SGD]
+Classical stochastic approximation theory~(Robbins \& Monro, 1951) establishes that SGD with \emph{decaying} step sizes $\alpha_k$ converges almost surely to a stationary point under the conditions:
+\[
+  \sum_{k=0}^\infty \alpha_k = \infty \quad \text{(sufficient descent)} \qquad \text{and} \qquad \sum_{k=0}^\infty \alpha_k^2 < \infty \quad \text{(sufficient stability)}.
+\]
+The canonical schedule $\alpha_k = \alpha_0/(k+1)$ satisfies both conditions (harmonic series diverges; sum of squares converges). However, decaying step sizes eliminate the mini-batch advantage: with $\alpha_k \to 0$, SGD converges to the true minimum but at the asymptotic rate $O(1/k)$ for convex functions, \emph{the same as GD}. The advantage of SGD is only in the transient phase when $\alpha$ is still large enough to make rapid progress on many samples per epoch. In the experiments here we use constant $\alpha$, which does not satisfy the Robbins--Monro conditions; instead the iterate converges to a ball of radius $O(\alpha \sigma/\sqrt{b})$ around the optimum. This is the standard practice in deep learning, where the final performance is not the exact optimum but any point sufficiently close to it.
 \end{remark}
 
 \begin{figure}[H]
@@ -954,6 +972,8 @@ The first-order necessary optimality conditions (KKT) for $\min_{x_1 \geq 0.5} f
   \mu^\star(x_1^\star - 0.5) &= 0 \quad &\text{(complementary slackness)}.
 \end{align*}
 Since $\nabla f(x^\star) = [2(x_1^\star - 1) + \cos(x_1^\star),\; 10(x_2^\star - 2)]^T = [0, 0]^T$ at the unconstrained minimum and $x_1^\star \approx 0.582 > 0.5$, complementary slackness forces $\mu^\star = 0$, confirming the constraint is inactive. If instead the constraint were active ($x_1^\star = 0.5$), stationarity would require $\nabla_1 f(0.5, x_2^\star) = \mu^\star > 0$: the gradient must point into the infeasible region, balanced by the multiplier. This is the key diagnostic for whether a problem's solution is on the constraint boundary.
+
+\textbf{Constraint qualification:} For the KKT conditions to be \emph{necessary} (not just sufficient for convex problems), a constraint qualification (CQ) must hold at the solution. For the single linear inequality $g(x) = 0.5 - x_1 \leq 0$, the \emph{Linear Independence Constraint Qualification} (LICQ) is trivially satisfied everywhere since $\nabla g = [-1, 0]^T \neq 0$. LICQ guarantees that the KKT multipliers $\mu^\star$ are unique. For more complex constraint sets (e.g., two active constraints whose gradients are linearly dependent), the CQ can fail and the KKT conditions may not be necessary, requiring higher-order optimality conditions.
 \end{remark}
 
 \begin{figure}[H]
@@ -1197,7 +1217,7 @@ The Rosenbrock function is the decisive discriminator. With $\kappa \approx 2500
 \end{equation}
 The trade-off is computational cost: zeroth-order methods need only 2 function evaluations per step but $O(d)$ more iterations; second-order methods use $O(d^3)$ per step but $O(\log\log(1/\varepsilon))$ iterations.
 
-\textbf{Constrained optimisation (Q5--Q6):} When the unconstrained optimum lies in the interior of the feasible set (as in Q5 where $x_1^\star \approx 0.582 > 0.5$), both PGD and strong-penalty methods recover it exactly via KKT stationarity. Frank--Wolfe is structurally different: it enforces constraints implicitly via the LP oracle, making it particularly powerful for structured constraint sets (nuclear norm ball, $\ell_1$ ball, simplex) where projection is computationally expensive but the LP has a closed-form or efficient solution.
+\textbf{Constrained optimisation (Q5--Q6):} When the unconstrained optimum lies in the interior of the feasible set (as in Q5 where $x_1^\star \approx 0.582 > 0.5$), both PGD and strong-penalty methods recover it exactly via KKT stationarity. Frank--Wolfe is structurally different: it enforces constraints implicitly via the LP oracle, making it particularly powerful for structured constraint sets (nuclear norm ball, $\ell_1$ ball, simplex) where projection is computationally expensive but the LP has a closed-form or efficient solution. For the Q6 box constraint, both PGD (projection: $O(d)$) and Frank--Wolfe (LP oracle: $O(d)$) have comparable per-iteration cost, but they generate qualitatively different iterates: PGD iterates can lie anywhere in $\mathcal{X}$ (they are projections of potentially any point), while Frank--Wolfe iterates are \emph{convex combinations} of the extreme points visited so far, giving a sparse representation that is useful in low-rank matrix problems.
 
 % ============================================================
 \section{Conclusion}
