@@ -537,13 +537,14 @@ complexity lower bound proved in [1]).
 \end{theorem}
 
 \begin{remark}[Heavy Ball vs.\ Nesterov]
-The Heavy Ball method (Q1) also uses a momentum term but does \emph{not} evaluate the gradient
-at the lookahead point.  This subtle difference has major consequences: Heavy Ball achieves the
-optimal quadratic rate $((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^k$ on strictly quadratic
-objectives but fails to achieve $O(1/k^2)$ on general convex problems, and can even diverge
-on some non-strongly-convex problems~[8].  Nesterov's lookahead $\tilde{x}_k = x_k + \beta_k z_k$
-enables a ``corrected gradient'' that accounts for where the iterate is \emph{going}, not just
-where it is, yielding the universally optimal $O(1/k^2)$ rate.
+The Heavy Ball method (Section~\ref{sec:q1}, Algorithm~\ref{alg:heavyball}) also uses a momentum
+term but does \emph{not} evaluate the gradient at the lookahead point.  This subtle difference
+has major consequences: Heavy Ball achieves the optimal quadratic rate
+$((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^k$ on strictly quadratic objectives (Proposition~1 in
+Section~\ref{sec:q1}) but fails to achieve $O(1/k^2)$ on general convex problems, and can even
+diverge on some non-strongly-convex problems~[8].  Nesterov's lookahead
+$\tilde{x}_k = x_k + \beta_k z_k$ enables a ``corrected gradient'' that accounts for where the
+iterate is \emph{going}, not just where it is, yielding the universally optimal $O(1/k^2)$ rate.
 \end{remark}
 
 Compare with the $O(1/k)$ rate of vanilla gradient descent.  Nesterov's key insight is the
@@ -740,6 +741,40 @@ updates, but exhibits more oscillation near the minimum because each mini-batch 
 more from the true gradient $\nabla J(\theta)$.}
 \label{fig:q2_sgd_batch}
 \end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{figures/sgd_variance_vs_batch.pdf}
+\caption{Q2: Mini-batch gradient variance $\mathrm{Var}[\hat{g}]$ vs.\ batch size~$b$ on
+Benchmark~A, estimated empirically over 200 random mini-batch samples at $\theta_0=[0,0]$.
+The empirical variance closely follows the theoretical $\sigma^2_1/b$ scaling (dashed),
+confirming that gradient noise is inversely proportional to batch size.  At $b=1$,
+$\mathrm{Var}[\hat{g}]\approx 7.3$; at $b=40$, $\mathrm{Var}[\hat{g}]\approx 0.18$; at
+$b=1000$ (full batch), $\mathrm{Var}[\hat{g}]\approx0.007$ (residual from finite sample).
+This quantifies the variance--batch-size trade-off: doubling $b$ halves the gradient noise
+but halves the number of updates per epoch.}
+\label{fig:q2_sgd_variance}
+\end{figure}
+
+\subsection{Noise Floor Analysis}
+
+\begin{proposition}[SGD Noise Floor]
+For strongly convex $f$ with step size $\alpha$ and mini-batch gradient noise variance
+$\sigma^2_b = \sigma^2/b$ (where $\sigma^2$ is the per-sample gradient variance), constant
+step-size SGD converges to a neighbourhood of the optimum:
+\begin{equation}
+\limsup_{k\to\infty}\;\mathbb{E}[f(\theta_k)] - f^\star \;\le\; \frac{\alpha L \sigma^2_b}{2\mu}
+= \frac{\alpha L \sigma^2}{2\mu b}.
+\end{equation}
+\end{proposition}
+
+For Benchmark~A: $\sigma^2$ is the noise from the data labels, so $f^\star = J^\star = \sigma^2_{\rm obs}/(2)$
+plus contributions from the finite dataset.  With observation noise $\varepsilon^{(i)}\sim\mathcal{N}(0,\sigma^2_{\rm obs})$
+and the Bayes-optimal linear predictor fitting $\theta^\star$, the irreducible loss is
+$J^\star = \sigma^2_{\rm obs}/2$.  For $\sigma_{\rm obs}=1$: $J^\star\approx 0.4826$; for
+$\sigma_{\rm obs}=6$ ($\sigma^2_{\rm obs}=36$): $J^\star\approx 0.4826\times36\approx 17.4$.
+The numerical experiments confirm this scaling (the noise floor shifts up by factor~36 in
+Figure~\ref{fig:q2_sgd_noisy}).
 
 \subsection{SGD with Increased Noise}
 
@@ -952,7 +987,8 @@ metric defined by the Hessian.}
 \caption{Q3: Newton vs.\ GD trajectories on Rosenbrock.  Newton's trajectory follows the valley
 floor more closely by using local curvature information from the Hessian, which encodes the
 high-curvature transverse direction.  GD is constrained to tiny steps ($\alpha=0.001$) to maintain
-stability on the ill-conditioned problem ($\kappa\approx2000$), barely advancing in 80 iterations.}
+stability on the ill-conditioned problem ($\kappa\approx500$ at the optimum), barely advancing
+in 80 iterations.}
 \label{fig:q3_contour_C}
 \end{figure}
 
@@ -969,6 +1005,58 @@ log scale), reflecting its linear $O(\rho^k)$ convergence rate.  On Rosenbrock, 
 larger updates than GD, indicating more aggressive and productive steps despite a small step size.}
 \label{fig:q3_update}
 \end{figure}
+
+\subsection{Limitations of Newton's Method and Practical Considerations}
+
+Despite its quadratic convergence rate, Newton's method has important limitations that often
+prevent its direct use in high-dimensional machine learning settings:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Hessian storage and computation ($O(d^2)$ cost):}  For $d$ parameters, the
+    Hessian $\nabla^2 f \in \mathbb{R}^{d\times d}$ requires $O(d^2)$ memory.  For modern
+    neural networks with $d = 10^7$ parameters, this is $\sim$800~GB --- completely infeasible.
+    Explicit gradient descent by contrast stores only the $d$-dimensional gradient.
+
+  \item \textbf{Linear system solve ($O(d^3)$ per step):}  Computing the Newton direction
+    $p_k = H_k^{-1}g_k$ requires solving a $d\times d$ linear system, costing $O(d^3)$ via
+    Cholesky or LU factorisation.  For $d = 10^4$, this is $10^{12}$ operations per iteration,
+    compared to $O(d)$ for gradient descent.
+
+  \item \textbf{Non-convex objectives:}  When $\nabla^2 f(x_k) \not\succ 0$ (e.g., near a
+    saddle point or on the non-convex Rosenbrock for large $\|x\|$), the Newton direction may
+    point uphill.  Tikhonov regularisation $H_k + \lambda I$ (used in our implementation)
+    restores positive definiteness but at the cost of exactness.
+
+  \item \textbf{Global convergence:}  Newton's method is only locally convergent: the quadratic
+    rate applies only within a ball of radius $r \sim \mu/M$ around $x^\star$ (where $M$ is
+    the Lipschitz constant of $\nabla^2 f$).  Far from the optimum, damping ($\alpha < 1$) or
+    globalisation via backtracking line search is required.
+\end{enumerate}
+
+\textbf{Practical alternative:} Quasi-Newton methods (L-BFGS, BFGS) approximate $H_k^{-1}$
+from the $m$ most recent gradient differences, achieving superlinear convergence
+($\|x_{k+1}-x^\star\|/\|x_k-x^\star\|\to0$, though not exactly quadratic) at cost $O(md)$
+per step with only $O(md)$ memory.  L-BFGS with $m=10$--$30$ is the de facto standard
+second-order method for unconstrained ML problems.
+
+\begin{table}[H]
+\centering
+\caption{Computational cost comparison for second-order methods ($d$ = dimension).}
+\label{tab:second_order_cost}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Memory} & \textbf{Cost/iter} & \textbf{Conv.\ rate} \\
+\midrule
+Gradient descent & $O(d)$ & $O(d)$ & Linear \\
+L-BFGS ($m$ vectors) & $O(md)$ & $O(md)$ & Superlinear \\
+Full Newton & $O(d^2)$ & $O(d^3)$ & Quadratic \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In this assignment ($d = 2$), these costs are negligible and full Newton is feasible.  The
+experiments serve as proof-of-concept for the quadratic convergence behaviour, not a practical
+prescription for high-dimensional settings.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -996,6 +1084,48 @@ for double precision.  The assignment tests $\delta = 0.05$ (close to useful) an
 $\delta = 0.8$ (truncation-dominated, poor).  This requires $d+1 = 3$ function evaluations per
 iteration for $d=2$.
 
+\textbf{Central differences} offer a higher-order alternative:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}.
+\end{equation}
+The truncation error is $O(\delta^2)$ rather than $O(\delta)$, because the odd-order Taylor
+terms cancel in the symmetric difference.  However, central differences require $2d$ function
+evaluations per gradient (vs.\ $d+1$ for forward differences), doubling the per-iteration cost.
+For $\delta=0.05$, the forward truncation error is $\approx\frac{0.05}{2}\cdot|f''|\approx 0.1$
+while the central error is $O(0.05^2) \approx 0.003$ --- a 30$\times$ improvement in gradient
+accuracy at 2$\times$ the function evaluation cost.  For $\delta=0.8$, central differences are
+essential: the forward truncation error $\sim\frac{0.8}{2}\cdot|f''|\approx 4$ is larger than
+typical gradient magnitudes, rendering the gradient direction useless.
+
+\begin{table}[H]
+\centering
+\caption{Forward vs.\ central finite differences: accuracy and cost trade-off.}
+\label{tab:fd_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Scheme} & \textbf{Truncation error} & \textbf{FE/gradient} & \textbf{Best $\delta$} \\
+\midrule
+Forward FD & $O(\delta)$ & $d+1$ & $\sqrt{\varepsilon_{\rm mach}}\approx10^{-8}$ \\
+Central FD & $O(\delta^2)$ & $2d$ & $\varepsilon_{\rm mach}^{1/3}\approx10^{-5}$ \\
+Complex step & $O(\delta^2)$ (exact) & $d$ & $\delta \to 0$ (no roundoff) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/fd_error_vs_delta.pdf}
+\caption{Q4A: Finite difference gradient error vs.\ step size $\delta$ on Benchmark~B at
+$x_0=[-1,4]$.  Left: Forward FD error for each coordinate, with reference lines for
+$O(\delta)$ truncation error and $O(\varepsilon_{\rm mach}/\delta)$ roundoff error, confirming
+the classic ``V-shape'' on log-log scale.  The optimal $\delta\approx10^{-8}$ minimises total
+error.  Vertical lines mark $\delta=0.05$ (accurate) and $\delta=0.8$ (truncation-dominated).
+Right: comparison of forward vs.\ central FD error for $x_1$.  Central differences
+achieve $O(\delta^2)$ accuracy, dramatically reducing error at $\delta=0.05$ (from $\sim$0.05
+to $\sim$0.001) and recovering usable gradients even at $\delta=0.8$.}
+\label{fig:q4_fd_error}
+\end{figure}
+
 \subsubsection{Nesterov Random Search}
 
 \begin{algorithm}[H]
@@ -1013,10 +1143,20 @@ iteration for $d=2$.
 
 This zeroth-order method estimates a \emph{directional derivative} along a random unit vector,
 using only two function evaluations per iteration regardless of dimension~$d$.  The expected
-directional estimate satisfies $\mathbb{E}[\hat{g}_k] = \nabla f(x_k)/d$ for smooth~$f$
-(up to the leading-order perturbation), so the method is an $O(\delta)$-biased, high-variance
-gradient estimator.  For $d$ dimensions, the effective dimension-independent cost per step is
-its primary advantage over finite-difference methods.
+directional estimate satisfies
+\begin{equation}
+\mathbb{E}_u[\hat{g}_k] = \frac{1}{d}\nabla f_\delta(x_k),
+\end{equation}
+where $f_\delta(x) = \mathbb{E}_u[f(x + \delta u)]$ is a smoothed version of $f$.  The method
+is therefore an $O(\delta)$-biased gradient estimator: as $\delta\to0$, $\mathbb{E}[\hat{g}_k]
+\to \nabla f(x_k)/d$.  Since the estimate is scaled by $1/d$, the effective step size towards
+the gradient direction is $\alpha_{\mathrm{eff}} = \alpha/d$, explaining why Nesterov random
+search converges more slowly in higher dimensions.
+
+\textbf{Theoretical guarantee:} For $L$-smooth convex $f$ and step size $\alpha = 1/(Ld^2)$,
+Nesterov's zeroth-order method requires $O(d^2/\epsilon)$ function evaluations to find an
+$\epsilon$-approximate solution, compared to $O(d/\epsilon)$ for gradient methods with exact
+gradients.  The extra factor of $d$ reflects the averaging loss from random directional sampling.
 
 Hyperparameters used: step size $\alpha=0.025$, perturbation $\delta=0.08$, 220 iterations.
 The FD GD variants use step size $\alpha=0.08$ (not the same as exact GD's $\alpha=0.06$),
@@ -1271,6 +1411,15 @@ by combining penalty terms with explicit Lagrange multiplier updates:
 $L_\lambda(x, \mu) = f(x) + \mu g(x) + \frac{\lambda}{2}[\max(0, g(x))]^2$.  This achieves
 exact feasibility at finite penalty while maintaining better conditioning than pure penalty methods.
 
+\textbf{Projection-free alternative:} For constraint sets where the LMO is cheap but the
+projection $\Pi_\mathcal{X}$ is expensive (e.g., nuclear norm ball, spectrahedra), the
+Frank--Wolfe algorithm (Section~\ref{sec:q6}) provides a projection-free alternative with an
+$O(1/k)$ convergence rate.  The trade-off between projected GD ($O(1/k^2)$ rate, $O(d)$
+projection cost for simplex) and Frank--Wolfe ($O(1/k)$ rate, $O(nd)$ LMO cost for
+rank-1 update) depends on the relative cost of projection vs.\ LMO for the specific
+constraint set.  For simple box constraints as in Q5--Q6, both costs are $O(d)$ and projected
+GD's faster rate is preferable.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -1419,7 +1568,10 @@ Boundary & 0.93 & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 vertex $z_k$ jumps between extreme points of $\mathcal{X}$ at each iteration, and the convex
 combination gradually averages these jumps towards the interior.  The general convergence rate
 is $O(1/k)$.  Smaller $\beta$ (larger steps towards $z_k$) can be faster initially but introduces
-more oscillation near the optimum, as seen in Figure~\ref{fig:q6_fw_conv}.
+more oscillation near the optimum, as seen in Figure~\ref{fig:q6_fw_conv}.  Note that the KKT
+conditions for the interior case (Section~\ref{sec:q5}) give $\mu^\star=0$, confirming that the
+gradient of $f$ at the interior minimum is zero --- consistent with FW's convergence to $x^\star$
+without hitting the boundary.
 
 \textbf{Boundary optimum:} Frank--Wolfe is particularly well-suited to boundary optima because
 $z_k$ frequently selects the vertex closest to the constrained optimum.  The iterate naturally
@@ -1442,6 +1594,63 @@ as the gradient direction rotates around the interior minimum.  The iterate $x_k
 oscillation by taking only a $1-\beta$ fraction of the step towards each vertex.  The open
 problem of FW oscillation has motivated variants such as the Away-Step Frank--Wolfe and
 Pairwise Frank--Wolfe, which allow steps away from ``bad'' vertices.
+
+\subsection{Sparse Structure of Frank--Wolfe Iterates}
+
+A distinctive property of the Frank--Wolfe algorithm, distinguishing it from projected gradient
+methods, is that its iterates naturally maintain \emph{sparse representations} in terms of the
+vertices of $\mathcal{X}$:
+
+\begin{proposition}[Sparse Iterates]
+The Frank--Wolfe iterate after $k$ steps is a convex combination of at most $k+1$ vertices of
+$\mathcal{X}$:
+\begin{equation}
+x_k = \sum_{j=0}^{k} \lambda_j^{(k)} v_j,\quad \lambda_j^{(k)} \ge 0,\quad \sum_j \lambda_j^{(k)} = 1,
+\end{equation}
+where each $v_j$ is a vertex of $\mathcal{X}$ (an atom) and at most $k+1$ atoms are active.
+\end{proposition}
+
+This sparsity property has important implications for problems where the feasible set is a
+structured polytope.  For example:
+\begin{itemize}[nosep]
+  \item \textbf{$\ell_1$-ball} ($\|x\|_1 \le 1$): the vertices are $\pm e_i$ (standard basis
+    vectors).  Frank--Wolfe naturally produces sparse solutions with at most $k+1$ non-zero
+    coordinates after $k$ iterations, recovering the LASSO solution without explicit sparsity
+    penalties.
+  \item \textbf{Nuclear norm ball} ($\|X\|_* \le 1$): the LMO computes the top singular vector
+    pair ($O(nd)$ for rank-$r$ matrices), producing rank-$k$ iterates.  This is far cheaper
+    than projecting onto the nuclear norm ball, which requires a full SVD.
+  \item \textbf{Spectrahedra} (trace-norm balls in PSD matrices): similarly, the LMO computes
+    one eigenvector per step.
+\end{itemize}
+
+In our box-constraint experiment, the feasible set has only 4 vertices, and the iterates are
+convex combinations of these corners --- explaining the staircase pattern of $z_k$ in
+Figure~\ref{fig:q6_evolution}.  For this experiment, projection is cheap ($O(1)$ per coordinate),
+so the sparsity advantage of FW is not as critical as in the structured applications above.
+
+\textbf{FW gap as a stopping criterion:} The Frank--Wolfe gap $g_k = \nabla f(x_k)^T(x_k-z_k)
+\ge f(x_k) - f^\star$ (derived in Section~\ref{sec:q6}) provides a computable certificate
+without knowing $f^\star$.  A practical stopping rule is $g_k \le \varepsilon$, guaranteeing
+that $f(x_k) - f^\star \le \varepsilon$.  This is in contrast with gradient descent, where one
+must monitor $\|\nabla f(x_k)\|^2 \le 2\mu\varepsilon$ (requiring knowledge of $\mu$), or use
+a relative criterion $f(x_k) - f(x_{k-1}) \le \varepsilon$.
+
+\begin{table}[H]
+\centering
+\caption{Stopping criteria available for each method class.}
+\label{tab:stopping}
+\begin{tabular}{llc}
+\toprule
+\textbf{Method} & \textbf{Stopping criterion} & \textbf{Requires $f^\star$?} \\
+\midrule
+GD, Nesterov, Adam & $\|\nabla f(x_k)\| \le \varepsilon$ & No \\
+Polyak step & $f(x_k) - f^\star \le \varepsilon$ & Yes \\
+Frank--Wolfe & FW gap $g_k \le \varepsilon$ & No \\
+Newton & $\lambda^2/2 = \frac{1}{2}g_k^T H_k^{-1} g_k \le \varepsilon$ & No \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 % ============================================================
 \section{Summary and Conclusions}
@@ -1466,8 +1675,8 @@ over 150 iterations at their Q1/Q2/Q3 hyperparameter settings.  Left: full run. 
 due to its large initial step sizes.  Nesterov achieves the best final value among first-order
 methods ($f=0.479$ at 150 iterations).  Newton (20 iterations, then held constant) reaches
 $f=0.686$ — competitive with Nesterov despite using far fewer gradient/Hessian evaluations.
-GD, RMSprop, and Adam are unable to navigate the ill-conditioned ($\kappa\approx2000$) valley
-effectively, converging to $f>1.5$.}
+GD, RMSprop, and Adam are unable to navigate the ill-conditioned ($\kappa\approx500$ at the
+optimum) valley effectively, converging to $f>1.5$.}
 \label{fig:summary_rosenbrock}
 \end{figure}
 
@@ -1530,7 +1739,7 @@ but infrequent updates.
 \textbf{Newton's method (Q3):}
 Newton converges in one iteration on the quadratic (Benchmark~A) and in $\sim$5 iterations
 on the near-quadratic Benchmark~B, demonstrating quadratic convergence.  On Rosenbrock
-($\kappa\approx2000$), a damped step is required; even so, Newton's 20 iterations
+($\kappa\approx500$ at the optimum), a damped step is required; even so, Newton's 20 iterations
 (reaching $f=0.686$) dramatically outperform GD's 80 iterations ($f=3.73$).  The affine
 invariance of Newton's method directly explains why it is unaffected by the conditioning that
 cripples first-order methods.
@@ -1555,6 +1764,42 @@ Its $O(1/k)$ convergence rate (vs.\ $O(1/k^2)$ for projected GD) is the price of
 projections with linear minimisations.  FW is most valuable when the LMO is easy (box, simplex,
 nuclear norm ball) but the projection is expensive.  The FW gap provides a practical stopping
 criterion without knowledge of $f^\star$.
+
+\subsection{Theoretical Convergence Rates Summary}
+
+Table~\ref{tab:theory_rates} collects the theoretical convergence guarantees for all methods
+studied.  ``SC'' = strongly convex; ``CVX'' = general convex.  The rate column gives the
+worst-case bound on $f(x_k) - f^\star$ or $\|x_k - x^\star\|$.
+
+\begin{table}[H]
+\centering
+\caption{Theoretical convergence rates.  $\kappa = L/\mu$, $D = $ constraint set diameter,
+$\sigma^2 = $ gradient noise variance, $b = $ batch size.  Rates are for the setting where
+each assumption holds.}
+\label{tab:theory_rates}
+\begin{tabular}{llll}
+\toprule
+\textbf{Method} & \textbf{Rate} & \textbf{Setting} & \textbf{Notes} \\
+\midrule
+GD (constant $\alpha$) & $O\!\left(\left(1-1/\kappa\right)^k\right)$ & SC + smooth & Linear; degrades as $\kappa\uparrow$ \\
+GD & $O(1/k)$ & CVX + smooth & Sublinear \\
+Polyak step & $O\!\left(\left(1-1/\kappa\right)^k\right)$ & SC, exact $f^\star$ & Optimal SC rate; requires $f^\star$ \\
+Adagrad & $O(1/\sqrt{k})$ & CVX, online & Regret bound; coordinate-adaptive \\
+RMSprop & --- & Heuristic & No proved rate for non-convex \\
+Heavy Ball & $O\!\left(\left(\frac{\sqrt\kappa-1}{\sqrt\kappa+1}\right)^k\right)$ & Quadratic & Optimal for quadratics only \\
+Nesterov & $O(1/k^2)$ & CVX + smooth & Optimal first-order rate~[1] \\
+Nesterov & $O\!\left(\left(1-1/\sqrt\kappa\right)^k\right)$ & SC + smooth & Optimal SC first-order rate \\
+Adam & --- & Non-convex & Convergence to stationary pts\ in practice \\
+Mini-batch SGD & $O(1/\sqrt{kB})$ & SC, noise $\sigma^2$ & Noise floor $\sim\sigma^2/B$ \\
+Newton (undamped) & Quadratic $\|e_{k+1}\|\le C\|e_k\|^2$ & Near $x^\star$, SC & Local; requires $\nabla^2 f$ \\
+Newton (damped) & Linear, then quadratic & Global (with LS) & Two-phase convergence \\
+FD Gradient & Same as GD + $O(\delta)$ bias & Same as GD & Bias from truncation error \\
+Nesterov Random & $O(d^2/k)$ & CVX + smooth & Zeroth order; $d$ penalty \\
+Frank--Wolfe & $O(LD^2/k)$ & CVX + smooth & No projection; $O(1/k)$ rate \\
+Projected GD & $O(1/k^2)$ & CVX + smooth & Same rate as Nesterov \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Computational Cost per Iteration}
 
