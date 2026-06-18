@@ -414,6 +414,27 @@ convergence on this benchmark.}
   0.0035$ for Rosenbrock vs.\ $\alpha_0 = 0.22$ for Benchmark A).
 \end{itemize}
 
+\begin{table}[H]
+\centering
+\caption{Q1: Per-iteration computational cost (dominant operations, $d = 2$ parameters, $m = 1000$ data points for Bench.~A).}
+\label{tab:q1_cost}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Method} & \textbf{Gradient evals / iter} & \textbf{Extra storage / operations} \\
+\midrule
+GD (baseline) & 1 & None \\
+Polyak step & 2 (gradient + loss) & $\|g\|^2$ (scalar) \\
+Adagrad & 1 & $G \in \mathbb{R}^d$ accumulator; 1 sqrt per coordinate \\
+RMSprop & 1 & $v \in \mathbb{R}^d$ running average; 1 sqrt per coordinate \\
+Heavy Ball & 1 & $z \in \mathbb{R}^d$ velocity vector \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All adaptive methods incur only $O(d)$ overhead per iteration over baseline gradient descent.
+This makes them practical even at large scale: their memory footprint grows linearly in the
+parameter count, unlike second-order methods that require $O(d^2)$ Hessian storage.
+
 % ============================================================
 \section{Question 2: Momentum and Stochastic Methods \hfill [30 marks]}
 \label{sec:q2}
@@ -471,6 +492,14 @@ enabling the $O(1/k^2)$ guarantee rather than the $O(1/k)$ rate achievable by He
 Adam combines first-moment momentum (inherited from Heavy Ball / Nesterov) with per-coordinate
 adaptive scaling (inherited from RMSprop).  The bias-correction terms $1/(1-\beta_i^t)$ compensate
 for the zero-initialisation of $m_0$ and $v_0$, preventing underestimation in the early iterations.
+
+\textbf{Necessity of bias correction:} Without correction, $\mathbb{E}[m_t] = (1-\beta_1^t)g$ at
+the first step when $m_0 = 0$, so the uncorrected $m_t$ underestimates the true gradient by a
+factor $(1 - \beta_1^t)$.  For $\beta_1 = 0.82$ and $t = 1$, this gives $0.18\,g$ --- an $82\%$
+underestimate.  Bias correction restores $\hat{m}_t = m_t/(1-\beta_1^t) = m_t/0.18 \approx g$,
+yielding an unbiased estimate.  By $t = 10$, $1 - 0.82^{10} \approx 0.86$, so the correction
+factor is already close to 1 and becomes negligible at large $t$.  The same argument applies to
+the second moment $v_t$ with $\beta_2 = 0.999$, which corrects even more slowly.
 
 \subsection{Hyperparameter Settings}
 
@@ -590,8 +619,15 @@ Mini-batch SGD on Benchmark A uses learning rate $\alpha = 0.06$, batch sizes $b
 The mini-batch gradient $g_{\mathcal{B}}$ is an unbiased estimator of the full gradient:
 $\mathbb{E}[g_{\mathcal{B}}] = \nabla J(\theta)$, with variance
 $\mathrm{Var}[g_{\mathcal{B}}] = \frac{m - b}{b(m-1)}\mathrm{Var}[g_{\mathrm{sample}}] \approx
-\frac{\sigma^2}{b}$ (proportional to $1/b$).  Larger batches reduce gradient variance but require
-more computation per epoch.
+\frac{\sigma_g^2}{b}$ (proportional to $1/b$, where $\sigma_g^2$ is the per-sample gradient variance).
+Larger batches reduce gradient variance but require more computation per epoch.
+
+For a quadratic loss with fixed learning rate $\alpha$, SGD converges to a \emph{noise ball}
+around the minimum of radius $r \propto \alpha \sigma_g^2 / b$~\cite{nocedal2006}.
+Reducing $\alpha$ shrinks the noise ball but slows initial convergence; increasing $b$ has the
+same effect at the cost of more computation per step.  These trade-offs underlie the commonly
+used \emph{linear scaling rule}: doubling the batch size should be accompanied by doubling the
+learning rate to maintain the same convergence speed per epoch.
 
 \begin{figure}[H]
 \centering
@@ -637,6 +673,13 @@ gradient is evaluated:
 This lookahead corrects the momentum direction \emph{before} committing to the step, enabling the
 theoretically optimal $O(1/k^2)$ convergence rate.  In experiments, Nesterov achieves $f = 0.479$
 on Rosenbrock vs.\ Heavy Ball's $f = 1.400$ after the same number of iterations, a $3\times$ improvement.
+
+\textbf{Quantitative rate comparison on Benchmark C:}  GD achieves $f = 3.39$ after 150 iterations.
+The $O(1/k^2)$ rate suggests Nesterov should improve the convergence bound by a factor of
+$k^2/1 = 150^2/1 = 22{,}500$ relative to GD, though in practice the constant in the bound also
+differs; the empirically observed improvement factor is $3.39/0.479 \approx 7\times$, consistent
+with the theoretical prediction that acceleration becomes increasingly beneficial as the number of
+iterations grows.
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -732,6 +775,19 @@ exact in one step).  For Benchmark B, $\alpha = 0.85$ (slight damping for the no
 sinusoidal Hessian).  For Rosenbrock, strong damping ($\alpha = 0.22$) is required because the
 rapidly varying Hessian along the curved valley renders full Newton steps unstable.
 
+\textbf{Rosenbrock Hessian structure:} At a generic point $(x_1, x_2)$:
+\begin{equation}
+\nabla^2 f(x) = \begin{bmatrix} 2 + 1200x_1^2 - 400x_2 & -400x_1 \\ -400x_1 & 200 \end{bmatrix}.
+\end{equation}
+Along the valley floor where $x_2 \approx x_1^2$: the $(1,1)$ entry is approximately
+$2 + 1200x_1^2 - 400x_1^2 = 2 + 800x_1^2$, and the off-diagonal is $-400x_1$.  Near the starting
+point $x_0 = (-1, 1)$, the Hessian has eigenvalues approximately $\{1.2, 1202\}$, giving
+$\kappa \approx 1000$.  The large off-diagonal coupling ($-400x_1$) is the reason standard gradient
+descent must use such a small step size ($\alpha = 0.001$): the stability condition
+$\alpha \leq 2/L_{\max}$ with $L_{\max} \approx 1202$ requires $\alpha \leq 0.0017$.  Newton's
+method bypasses this constraint by explicitly accounting for the off-diagonal coupling in the
+Newton direction $p_k = H_k^{-1}g_k$.
+
 \subsection{Convergence Comparison}
 
 \begin{figure}[H]
@@ -825,6 +881,26 @@ $\|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2$.}
 \label{fig:q3_newton_rate}
 \end{figure}
 
+\subsection{Limitations and Practical Considerations}
+
+\textbf{When Newton fails:}  The analysis above assumes that $\nabla^2 f(x)$ is positive definite
+along the trajectory.  In non-convex regions, the Hessian may have negative eigenvalues, making the
+Newton direction non-descending.  The regularisation $\lambda I$ (used here with $\lambda = 10^{-8}$)
+mitigates this but may be insufficient far from the optimum.  In practice, a trust-region or
+line-search globalisation strategy is needed.
+
+\textbf{Cost of Newton's method:} Each Newton iteration requires computing the full Hessian
+($O(d^2)$ entries), solving a $d \times d$ linear system ($O(d^3)$ via Gaussian elimination), and
+evaluating the gradient ($O(d)$ or $O(md)$ for data-dependent objectives).  For $d = 2$ parameters
+this is negligible, but for large-scale problems ($d \sim 10^6$) the $O(d^3)$ Hessian inversion is
+completely intractable.
+
+\textbf{Quasi-Newton alternatives:} Limited-memory BFGS (L-BFGS) approximates the inverse Hessian
+using a low-rank update from the last $m$ gradient differences, achieving superlinear (but not
+quadratic) convergence at $O(md)$ cost per iteration.  This makes it practical for moderate-scale
+problems ($d \sim 10^4$--$10^5$)~\cite{nocedal2006}.  For the 2D benchmarks here, full Newton
+is the natural choice; for higher-dimensional extensions, L-BFGS would be preferable.
+
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
 \label{sec:q4}
@@ -852,12 +928,21 @@ gives the optimal perturbation:
 \delta_{\mathrm{opt}}^{\mathrm{fwd}} \approx \sqrt{\varepsilon_{\mathrm{mach}}} \approx 10^{-8}.
 \label{eq:delta_opt_fwd}
 \end{equation}
-The \emph{central} difference formula,
-$\partial f/\partial x_i \approx [f(x + \delta e_i) - f(x - \delta e_i)]/(2\delta)$, has
-$O(\delta^2)$ truncation error, giving an optimal
-$\delta_{\mathrm{opt}}^{\mathrm{cen}} \approx \varepsilon_{\mathrm{mach}}^{1/3} \approx 10^{-5}$
-and lower overall approximation error.  The experiment tests $\delta = 0.05$ (near good regime)
-and $\delta = 0.8$ (far too large, dominated by truncation error).
+
+The \emph{central} finite-difference formula removes the first-order truncation term:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}
+= \frac{\partial f}{\partial x_i}(x) + \frac{\delta^2}{6}f_{iii}'''(x) + O(\delta^4),
+\label{eq:fdcen}
+\end{equation}
+giving $O(\delta^2)$ truncation error at the cost of one additional function evaluation per
+coordinate.  The optimal central-FD step is
+$\delta_{\mathrm{opt}}^{\mathrm{cen}} \approx \varepsilon_{\mathrm{mach}}^{1/3} \approx 10^{-5}$,
+achieving lower overall error than forward FD at the same $\delta$.
+The experiment tests $\delta = 0.05$ (near good regime) and $\delta = 0.8$ (far too large,
+dominated by truncation error).  For $\delta = 0.05$, the forward FD error is
+$O(0.05) \approx 0.05f_{ii}''(x)/2$, while for $\delta = 0.8$ it is $O(0.8) = 0.4f_{ii}''(x)$,
+an $8\times$ larger approximation error.
 
 \begin{figure}[H]
 \centering
@@ -1139,9 +1224,17 @@ trivial but can be expensive for complex (e.g.\ semidefinite) constraint sets.
 $\lambda$ controls the trade-off: small $\lambda$ under-penalises violations; large $\lambda$
 enforces feasibility but introduces a stiff gradient term, requiring smaller step sizes for
 stability (here $\alpha = 0.03$ for $\lambda = 4.5$ vs.\ $\alpha = 0.05$ for $\lambda \leq 1.8$).
-An alternative is the \emph{augmented Lagrangian} method, which updates a dual variable $\mu_k$
-alongside the penalty, achieving convergence to the exact constrained solution at moderate $\lambda$
-without ill-conditioning~\cite{bertsekas1999}.
+
+\textbf{Augmented Lagrangian (Method of Multipliers):} An improved alternative builds a dual
+variable $\mu_k$ (Lagrange multiplier estimate) alongside the penalty:
+\begin{equation}
+\mathcal{L}_{\lambda}(x, \mu) = f(x) + \mu\max(0, 0.5-x_1) + \frac{\lambda}{2}\max(0, 0.5-x_1)^2.
+\end{equation}
+The multiplier is updated as $\mu_{k+1} = \mu_k + \lambda\max(0, 0.5 - x_k^{(1)})$ after each
+inner minimisation.  With a fixed moderate $\lambda$, the augmented Lagrangian converges to the
+exact constrained solution without requiring $\lambda \to \infty$, avoiding the ill-conditioning
+of the pure penalty approach~\cite{bertsekas1999}.  This is the theoretical justification for why
+large penalty weights must be accompanied by smaller step sizes in the experiments.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1299,6 +1392,19 @@ selects the vertex closest to the constrained optimum ($x_1 = 0.5$), naturally d
 to the boundary.  After 140 iterations, the method reaches $f = 0.364$ vs.\ $f^{\star} = 0.25$,
 a gap of $0.114$: convergence is slower because the $O(1/k)$ rate is slow at the boundary when
 the problem is not strongly convex over $\mathcal{X}$.
+
+\textbf{Effect of step-size schedule on convergence:} The fixed mixing parameter $\beta$ (step size
+$1-\beta$) does not decay, causing persistent oscillation near the optimum.  Replacing this with
+the diminishing schedule $\gamma_k = 2/(k+2)$ (i.e.\ $\beta_k = k/(k+2)$) gives the standard
+Frank--Wolfe guarantee.  Alternatively, a line search $\gamma_k^{\star} = \arg\min_{\gamma \in
+[0,1]} f(\gamma x_k + (1-\gamma)z_k)$ accelerates convergence at the cost of one additional
+function evaluation per iteration.  For the quadratic interior objective
+$(x_1-1)^2 + (x_2-5)^2$, the optimal step is
+\begin{equation}
+\gamma_k^{\star} = \frac{\nabla f(x_k)^T (x_k - z_k)}{\|x_k - z_k\|^2 / (2f''_{\mathrm{quad}})},
+\end{equation}
+where $f''_{\mathrm{quad}} = 2$ is the curvature constant, offering exact steps at no extra
+derivative computation.
 
 % ============================================================
 \section{Conclusion}
