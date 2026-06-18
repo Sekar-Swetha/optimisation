@@ -521,6 +521,15 @@ Adam & \textbf{0.4826} & \textbf{0.7244} & 1.5785 \\
 
 \textbf{Key finding (Q2):} Nesterov acceleration is the most effective first-order method for ill-conditioned nonlinear problems, providing near-optimal convergence rate among methods that require only gradient computations. Adam's per-coordinate adaptation is not sufficient to address the off-diagonal ill-conditioning of the Rosenbrock (the $H_{12}$ mixing term requires a full-matrix preconditioner). For well-conditioned problems (Benchmarks A and B), the first-order methods are indistinguishable in accuracy at convergence, and the noise floor is the dominant limitation.
 
+\begin{remark}[Nesterov vs Adam: When Adaptation Wins Over Acceleration]
+Our experiments show Nesterov outperforms Adam on the ill-conditioned Rosenbrock, yet Adam dominates in deep learning practice. The resolution lies in the \emph{statistical regime}:
+\begin{itemize}[nosep]
+  \item \textbf{Deterministic, ill-conditioned} (our Benchmark C): Nesterov accumulates momentum along a consistent valley direction (the gradient direction is stable across iterations), achieving the theoretical $O(1/k^2)$ rate. Adam's per-coordinate denominator $\sqrt{\hat{v}_t}$ partially compensates for diagonal curvature but cannot handle the off-diagonal $H_{12}$ term, limiting its advantage over GD on this problem.
+  \item \textbf{Stochastic, diverse gradients} (deep learning): Mini-batch gradients are noisy; Nesterov's accumulated momentum can point in the wrong direction when gradient estimates are stochastic, causing oscillation or divergence unless the step size is very small. Adam's per-coordinate normalisation $1/\sqrt{\hat{v}_t}$ acts as an adaptive ``signal-to-noise'' normaliser across layers with wildly different gradient scales (e.g., output layer vs.\ embedding layers), enabling stable training without careful per-layer learning-rate tuning. The bias-correction terms further prevent instability in the early epochs when $m_t$ and $v_t$ are poorly estimated.
+  \item \textbf{Practical criterion}: For convex, deterministic, full-batch problems with known $L$ --- use Nesterov (FISTA). For stochastic, high-dimensional, non-convex problems with heterogeneous gradient scales (neural networks) --- use Adam or AdamW.
+\end{itemize}
+\end{remark}
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -698,7 +707,7 @@ The main computational bottleneck of Newton's method is the $O(d^3)$ Hessian fac
 \[
   B_{k+1} = B_k - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k} + \frac{y_k y_k^T}{y_k^T s_k}.
 \]
-BFGS achieves \emph{superlinear convergence} --- faster than linear GD but slower than Newton's quadratic convergence --- at $O(d^2)$ cost per step rather than $O(d^3)$. For the $d=2$ experiments here the cost difference is negligible, but for $d \sim 10^4$ (as in deep learning), L-BFGS ($O(md)$ storage, $m \approx 20$ history vectors) becomes the practical standard for second-order-like convergence.
+BFGS achieves \emph{superlinear convergence}: the error ratio $\|x_{k+1} - x^\star\| / \|x_k - x^\star\| \to 0$ as $k \to \infty$ (i.e., the convergence factor itself goes to zero, faster than any fixed $\rho < 1$) --- strictly between linear GD (fixed $\rho < 1$) and Newton's quadratic convergence ($\|x_{k+1}-x^\star\| \leq C\|x_k-x^\star\|^2$). The superlinear rate of BFGS is a consequence of the Hessian approximation $B_k \to \nabla^2 f(x^\star)$ along the search directions (the \emph{Dennis--Mor\'{e} condition}: $\|(B_k - \nabla^2 f(x^\star))s_k\|/\|s_k\| \to 0$), allowing the Hessian error to contribute negligibly in the limit. The cost is $O(d^2)$ per step (matrix-vector multiply with $B_k$) rather than $O(d^3)$. For the $d=2$ experiments here the cost difference is negligible, but for $d \sim 10^4$ (as in deep learning), L-BFGS ($O(md)$ storage, $m \approx 20$ history vectors) becomes the practical standard for second-order-like convergence.
 \end{remark}
 
 \begin{remark}[Tikhonov Regularisation and Ridge Regression]
@@ -1394,6 +1403,8 @@ Frank--Wolfe & Convex, $L$-smooth, $\mathcal{X}$ convex & $O(1/k)$ & LMO \\
 
 The Rosenbrock function is the decisive discriminator. With $\kappa \approx 2500$: GD needs $O(\kappa) = O(2500)$ steps per order-of-magnitude improvement; Nesterov needs $O(\sqrt{\kappa}) = O(50)$; Newton needs $O(\log\log(1/\varepsilon))$ once in the quadratic regime. These theoretical predictions align well with the empirical results (Figure~\ref{fig:convergence_extended}).
 
+\noindent\textit{Reconciling the observed $7\times$ speedup with the theoretical $\sqrt{\kappa} \approx 50$ factor:} At $k = 150$, Nesterov achieves $f = 0.479$ vs GD's $f = 3.39$ --- a $7.1\times$ ratio in final objective values. This does not contradict the $\sqrt{\kappa} \approx 50$ rate speedup. The rate comparison holds in the \emph{convergence phase}: GD's linear rate $\rho_{\rm GD} = (\kappa-1)/(\kappa+1) \approx 0.9992$ requires $\log(2)/\log(1/\rho_{\rm GD}) \approx 867$ iterations to halve the error, while Nesterov's $\rho_{\rm Nes} \approx (\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \approx 0.960$ halves it in $\approx 17$ iterations ($50\times$ fewer). At $k=150$ iterations, GD has barely progressed from $f_0 = 4.0$ to $3.39$ (a $15\%$ reduction --- well within the linear-rate pre-asymptotic transient), while Nesterov has achieved $88\%$ reduction. To observe the full $50\times$ rate ratio empirically, one would need to compare the number of iterations for each method to reach the same low accuracy $\varepsilon \ll f_0$, such as $\varepsilon = 10^{-4}$: GD would need $O(2500 \times \log(4/10^{-4})) \approx 96{,}000$ iterations, while Nesterov needs $O(50 \times \log(4/10^{-4})) \approx 1{,}900$ iterations. Our 150-iteration experiment captures only the early transient, explaining the modest observed ratio.
+
 \textbf{The gradient information hierarchy:} Methods using more information converge faster on smooth functions:
 \begin{equation}
   \underbrace{\text{Zeroth-order}}_{\text{Q4}} \; < \;
@@ -1487,7 +1498,12 @@ The study presented here is bounded by several intentional simplifications that 
 
   \item \textbf{Non-convexity:} Rosenbrock is non-convex globally, but all methods in this study are analysed under local convexity assumptions. In practice (deep learning, neural networks), objectives are highly non-convex with many saddle points and local minima; Adam and SGD with momentum are used not because their convergence theory extends to non-convex settings (it does not, in general) but because they escape saddle points effectively due to gradient noise and momentum.
 
-  \item \textbf{Line search:} All methods here use fixed step sizes, which require prior knowledge of $L$ (or conservative tuning). Backtracking \emph{Armijo line search} (reduce $\alpha$ by half until $f(x - \alpha g) \leq f(x) - c\alpha\|g\|^2$) and the \emph{Wolfe conditions} provide automatic step size selection without knowledge of $L$, and are standard in scipy's \texttt{minimize} and professional optimisation libraries.
+  \item \textbf{Line search:} All methods here use fixed step sizes, which require prior knowledge of $L$ (or conservative tuning). Automatic step selection is provided by:
+  \begin{itemize}[nosep]
+    \item \emph{Armijo (sufficient decrease) condition}: Accept $\alpha$ if $f(x_k - \alpha g_k) \leq f(x_k) - c_1 \alpha \|g_k\|^2$ (with $c_1 \in (0,1)$, typically $10^{-4}$). Backtracking from $\alpha_0$ repeatedly halves $\alpha$ until satisfied; guarantees a valid step without knowing $L$.
+    \item \emph{Wolfe conditions}: Armijo condition plus the curvature condition $-\nabla f(x_k - \alpha g_k)^T g_k \leq -c_2 g_k^T g_k$ (with $c_2 \in (c_1, 1)$, typically $0.9$), ensuring the step is not too short. The Wolfe conditions are required for convergence guarantees of BFGS: they ensure the curvature condition $y_k^T s_k > 0$ for the positive-definite BFGS update.
+  \end{itemize}
+  These conditions are standard in scipy's \texttt{minimize} (L-BFGS-B) and professional optimisation libraries \cite{nocedal2006}.
 
   \item \textbf{Stochastic non-convex convergence:} For non-convex functions, the standard convergence criterion for SGD is $\mathbb{E}[\|\nabla f(x_k)\|^2] \leq \epsilon$ (gradient norm, not function value gap), and SGD with step $\alpha_k = O(1/\sqrt{T})$ achieves this at rate $O(1/\sqrt{T})$ \cite{ghadimi2013}. Variance reduction methods achieve $O(1/T)$ under PL conditions.
 
