@@ -231,10 +231,19 @@ $f(x_k) - f^{\star} \leq \frac{\|x_0 - x^{\star}\|^2}{2k}$ when $f^{\star}$ is e
 achieving an $O(1/k)$ convergence rate without tuning a learning rate.
 \end{theorem}
 
-\begin{remark}
+\begin{remark}[Underestimation causes divergence]
 If $f^{\star}_{\mathrm{spec}} < f^{\star}_{\mathrm{true}}$ (i.e.\ the specified value underestimates
 the true minimum), then $f(x_k) - f^{\star}_{\mathrm{spec}} \to f^{\star}_{\mathrm{true}} -
 f^{\star}_{\mathrm{spec}} > 0$ while $\|g_k\| \to 0$, causing $\alpha_k \to \infty$ and divergence.
+\end{remark}
+
+\begin{remark}[Relationship to subgradient methods]
+The Polyak step size originates in subgradient optimisation for non-smooth $f$.  For non-smooth
+convex functions, no gradient exists, but a \emph{subgradient} $g_k \in \partial f(x_k)$ can
+be computed; the Polyak step $\alpha_k = (f(x_k) - f^{\star})/\|g_k\|^2$ is then well-defined
+whenever $g_k \neq 0$.  The same $O(1/k)$ rate holds.  For smooth functions (as here),
+the Polyak step reduces to the gradient step with a self-tuned magnitude proportional to
+the current sub-optimality divided by the squared gradient norm.
 \end{remark}
 
 \begin{remark}
@@ -281,6 +290,15 @@ receive rare updates) but may prematurely slow on dense problems.
 RMSprop addresses Adagrad's monotone decay by using an exponential moving average of squared
 gradients with forgetting factor $\beta$.  This allows the effective step size to adapt to
 recent curvature rather than the full gradient history.
+
+\begin{remark}[AMSGrad: restoring Adagrad's convergence guarantee]
+Reddi et al.~\cite{reddi2018} showed that Adam and RMSprop can fail to converge on simple convex
+online problems due to the exponential moving average of squared gradients increasing in some steps.
+AMSGrad fixes this by replacing $\hat{v}_t$ with $\hat{v}_t^{\max} = \max(\hat{v}_{t-1}^{\max}, \hat{v}_t)$,
+ensuring the effective step size never increases.  This restores Adagrad's convergence guarantee
+while retaining the benefit of adaptivity.  The correction is critical in settings where occasional
+large-gradient steps should not be ``forgotten'' by the moving average.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Polyak Momentum (Heavy Ball)~\cite{polyak1964}}
@@ -487,6 +505,23 @@ All adaptive methods incur only $O(d)$ overhead per iteration over baseline grad
 This makes them practical even at large scale: their memory footprint grows linearly in the
 parameter count, unlike second-order methods that require $O(d^2)$ Hessian storage.
 
+\begin{table}[H]
+\centering
+\caption{Q1: Theoretical properties and convergence guarantees.}
+\label{tab:q1_theory}
+\begin{tabular}{llll}
+\toprule
+\textbf{Method} & \textbf{Convergence guarantee} & \textbf{Step-size tuning} & \textbf{Key limitation} \\
+\midrule
+GD            & $O(1/k)$ (convex); linear (s.c.) & Manual $\alpha$ & Slow on ill-cond. \\
+Polyak        & $O(1/k)$ (convex) & None required & Requires exact $f^{\star}$ \\
+Adagrad       & $O(\log k / \sqrt{k})$ (convex) & Base $\alpha_0$ & Monotone step decay \\
+RMSprop       & None known & $\alpha_0$, $\beta$ & Practical heuristic \\
+Heavy Ball    & Optimal (quadratic only) & $\alpha$, $\beta$ & No guarantee, non-convex \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 % ============================================================
 \section{Question 2: Momentum and Stochastic Methods \hfill [30 marks]}
 \label{sec:q2}
@@ -515,9 +550,19 @@ $\alpha = 1/L$ and momentum schedule $\beta_k = (k-1)/(k+2)$ achieves
 \begin{equation}
 f(x_k) - f^{\star} \leq \frac{2L\|x_0 - x^{\star}\|^2}{(k+1)^2} = O\!\left(\frac{1}{k^2}\right),
 \end{equation}
-which is \emph{optimal} for first-order methods on convex functions~\cite{nesterov2003}.  This
+which is \emph{optimal} for first-order methods on convex functions~\cite{nesterov2004}.  This
 contrasts with gradient descent's $O(1/k)$ rate (or $O((1-\mu/L)^k)$ for strongly convex $f$).
 \end{theorem}
+
+\begin{remark}[Optimal first-order complexity]
+Nesterov (1983) also proved a \emph{lower bound}: no first-order method (using only values and
+gradients) can achieve a convergence rate better than $\Omega(1/k^2)$ for general smooth convex
+functions.  This means Nesterov's method is \emph{optimal} in the first-order oracle model: its
+convergence rate cannot be improved without exploiting additional structure (e.g.\ strong convexity,
+Hessian information).  For strongly convex functions, the optimal first-order rate is
+$O\bigl((1 - \sqrt{\mu/L})^k\bigr)$, achieved by Nesterov's strongly-convex variant, reducing
+the iteration count from $O(\kappa)$ (GD) to $O(\sqrt{\kappa})$.
+\end{remark}
 
 The key distinction from Heavy Ball (Algorithm~\ref{alg:heavyball}) is the \emph{lookahead}:
 the gradient is evaluated at $\tilde{x}_k = x_k + \beta_k z_k$ rather than $x_k$.  This
@@ -681,6 +726,36 @@ same effect at the cost of more computation per step.  These trade-offs underlie
 used \emph{linear scaling rule}: doubling the batch size should be accompanied by doubling the
 learning rate to maintain the same convergence speed per epoch.
 
+\textbf{Irreducible noise floor for linear regression:}  When $y = X\theta^{\star} + \varepsilon$
+with $\varepsilon \sim \mathcal{N}(0, \sigma^2 I_m)$, the MSE loss at the OLS minimiser satisfies
+\begin{equation}
+\mathbb{E}\bigl[J(\hat\theta)\bigr]
+  = \frac{1}{2m}\mathbb{E}\bigl\|{(I - P)\varepsilon}\bigr\|^2
+  = \frac{(m-d)\sigma^2}{2m}
+  \approx \frac{\sigma^2}{2} \quad (m \gg d),
+\label{eq:noise_floor}
+\end{equation}
+where $P = X(X^TX)^{-1}X^T$ is the hat matrix with $\operatorname{tr}(I - P) = m - d$.
+For Benchmark A ($m = 1000$, $d = 2$, $\sigma = 1$): $J^{\star} \approx 998/2000 \approx 0.499$,
+consistent with the empirical $0.4826$.
+Scaling to $\sigma = 6$ multiplies the floor by $\sigma^2 = 36$: $J^{\star} \approx 0.499 \times 36
+\approx 17.96$, consistent with the observed $\approx 17.4$.
+This confirms the $\sigma^2$ scaling and explains why both batch sizes converge to approximately
+the same elevated floor under high noise: the observation-noise term $\sigma^2/2$ dominates
+any reduction from larger batches, which only reduce the batch-sampling component of variance.
+
+\begin{remark}[Variance reduction methods]
+The fundamental limitation of mini-batch SGD is the residual gradient variance $\sigma_g^2/b$,
+which prevents convergence to the exact minimum for fixed $\alpha$.  \emph{Variance reduction}
+methods such as SVRG~\cite{johnson2013} and SAG~\cite{roux2012} eliminate this limitation by
+periodically recomputing the full gradient and using it to correct the stochastic direction.
+SVRG achieves linear convergence $O\bigl((1 - \mu/L)^k\bigr)$ \emph{without} decaying the
+step size, combining the computational advantage of SGD (one sample per iteration) with the
+convergence rate of full gradient descent.  This is particularly relevant for the linear
+regression benchmark, where SVRG would converge geometrically to $J^{\star}$ rather than to
+the noise ball of mini-batch SGD.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -725,6 +800,19 @@ gradient is evaluated:
 This lookahead corrects the momentum direction \emph{before} committing to the step, enabling the
 theoretically optimal $O(1/k^2)$ convergence rate.  In experiments, Nesterov achieves $f = 0.479$
 on Rosenbrock vs.\ Heavy Ball's $f = 1.400$ after the same number of iterations, a $3\times$ improvement.
+
+\textbf{Why Adam underperforms Nesterov on Rosenbrock:} Adam applies independent per-coordinate
+step-size scaling via $1/\sqrt{\hat{v}_t}$.  For Benchmark C, the Rosenbrock Hessian has a large
+off-diagonal term $\nabla^2 f(x)_{12} = -400x_1$, coupling the $(x_1, x_2)$ coordinates.  Adam's
+diagonal preconditioning implicitly assumes the Hessian is diagonal, so it cannot compensate for
+the off-diagonal coupling.  Formally, the ideal Newton preconditioner for Rosenbrock is the full
+inverse Hessian:
+\begin{equation}
+H(x)^{-1} = \frac{1}{\det H}\begin{bmatrix} 200 & 400x_1 \\ 400x_1 & 2+1200x_1^2-400x_2 \end{bmatrix},
+\end{equation}
+which involves cross-coordinate terms.  Adam can only approximate the diagonal blocks
+$\mathrm{diag}(H)^{-1}$, missing the coupling.  Nesterov requires no Hessian information but
+its accumulating momentum in the valley direction compensates for the curvature coupling.
 
 \textbf{Quantitative rate comparison on Benchmark C:}  GD achieves $f = 3.39$ after 150 iterations.
 The $O(1/k^2)$ rate suggests Nesterov should improve the convergence bound by a factor of
@@ -938,6 +1026,13 @@ $\|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2$.}
 
 \subsection{Limitations and Practical Considerations}
 
+\textbf{Stopping criteria for Newton's method:}  The standard stopping criterion is the
+\emph{Newton decrement}: $\lambda^2(x) = g_k^T H_k^{-1} g_k$, which satisfies
+$\lambda^2(x)/2 \leq f(x) - f^{\star}$ (a computable bound on sub-optimality for strongly convex $f$).
+Iterating until $\lambda^2 \leq 2\varepsilon$ guarantees $f(x) - f^{\star} \leq \varepsilon$ without
+knowing $f^{\star}$~\cite{nocedal2006}.  The gradient norm $\|g_k\|$ is also used in practice
+($\|g_k\| \leq \varepsilon$), though this does not provide a direct sub-optimality bound.
+
 \textbf{When Newton fails:}  The analysis above assumes that $\nabla^2 f(x)$ is positive definite
 along the trajectory.  In non-convex regions, the Hessian may have negative eigenvalues, making the
 Newton direction non-descending.  The regularisation $\lambda I$ (used here with $\lambda = 10^{-8}$)
@@ -955,6 +1050,28 @@ using a low-rank update from the last $m$ gradient differences, achieving superl
 quadratic) convergence at $O(md)$ cost per iteration.  This makes it practical for moderate-scale
 problems ($d \sim 10^4$--$10^5$)~\cite{nocedal2006}.  For the 2D benchmarks here, full Newton
 is the natural choice; for higher-dimensional extensions, L-BFGS would be preferable.
+
+The L-BFGS update maintains two history arrays $\{s_j, y_j\}_{j=k-m}^{k-1}$ where
+$s_j = x_{j+1} - x_j$ and $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$, and computes the Newton
+direction $p_k = H_k^{-1}g_k$ via two passes over the history using the
+\emph{two-loop recursion}~\cite{nocedal2006}.  The result is an approximation to the true
+Newton direction that becomes exact as the history length $m \to d$.
+
+\begin{table}[H]
+\centering
+\caption{Q3: Computational cost comparison of second-order and quasi-Newton methods ($d$ = parameters, $m$ = history length for L-BFGS).}
+\label{tab:q3_cost}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Per-iter cost} & \textbf{Storage} & \textbf{Convergence} & \textbf{Typical use} \\
+\midrule
+Full Newton & $O(d^3)$ solve & $O(d^2)$ Hessian & Quadratic & $d \leq 10^3$ \\
+L-BFGS & $O(md)$ & $O(md)$ vectors & Superlinear & $d \leq 10^6$ \\
+Gauss--Newton & $O(nd^2 + d^3)$ & $O(d^2)$ & Quadratic (LS) & $d \leq 10^3$ (LS only) \\
+Gradient Descent & $O(d)$ & $O(d)$ & Linear $O(1/k)$ & Any $d$ \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -1031,9 +1148,16 @@ regime for forward FD, explaining the performance difference.}
 This zeroth-order method requires only \emph{two} function evaluations per iteration regardless of
 dimension $d$.  The directional derivative $\hat{g}_k$ is a noisy estimate of the gradient:
 $\mathbb{E}[\hat{g}_k] = \nabla f_{\delta}(x_k)$ where $f_{\delta}$ is the Gaussian-smoothed
-objective with smoothing parameter $\delta$.  The convergence rate is $O(d/k)$ --- a factor of
+objective with smoothing parameter $\delta$~\cite{nesterov2017}:
+\begin{equation}
+f_{\delta}(x) = \mathbb{E}_{u \sim \mathcal{N}(0,I)}[f(x + \delta u)]
+\approx f(x) + \frac{\delta^2}{2}\operatorname{tr}(\nabla^2 f(x)),
+\end{equation}
+with the approximation holding for small $\delta$.  The bias $f_{\delta}(x) - f(x) = O(\delta^2)$
+represents the trade-off between approximation quality and noise in the gradient estimate.
+The convergence rate is $O(d/k)$ --- a factor of
 $d$ slower than gradient-based methods --- reflecting the information loss from using a single
-random direction instead of the full $d$-dimensional gradient~\cite{nesterov2017}.
+random direction instead of the full $d$-dimensional gradient.
 
 \begin{remark}
 The $O(d/k)$ rate can be interpreted as follows: the random direction $u_k \in \mathbb{R}^d$
@@ -1075,6 +1199,21 @@ gradient direction.  Nesterov random search follows a noisy wandering path, occa
 in sub-optimal directions due to random directional sampling.}
 \label{fig:q4_contour_B}
 \end{figure}
+
+\begin{remark}[Complex-step differentiation]
+An alternative to finite differences that avoids catastrophic cancellation entirely is the
+\emph{complex-step method}: for a function $f : \mathbb{R} \to \mathbb{R}$ extended analytically
+to the complex plane,
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) \approx \frac{\operatorname{Im}[f(x + ih\,e_i)]}{h},
+\end{equation}
+with error $O(h^2)$ from the Taylor series but \emph{no} subtraction of nearly equal quantities.
+The imaginary perturbation never cancels with the real part, so the method achieves near-analytic
+accuracy for any $h \gg \varepsilon_{\mathrm{mach}}$ (e.g.\ $h = 10^{-200}$).  The cost is $d + 1$
+complex function evaluations per gradient --- identical to forward FD in count but dramatically
+more accurate.  The method requires the objective implementation to accept complex arguments,
+which is satisfied by many scientific computing libraries.
+\end{remark}
 
 \subsection{Part B: Derivative-Free Methods on Rosenbrock (Benchmark C)}
 
@@ -1185,9 +1324,12 @@ The constrained problem is:
 \end{equation}
 starting from the infeasible point $x_0 = (0.2, 4.0)$.
 
-Since Benchmark B is convex and satisfies a constraint qualification (Slater's condition:
-$\{x : x_1 > 0.5\} \cap \text{dom}(f) \neq \emptyset$), the KKT conditions are both necessary
-and sufficient for optimality~\cite{bertsekas1999}.  The Karush--Kuhn--Tucker conditions for~\eqref{eq:constrained} are:
+\textbf{Slater's condition (constraint qualification):}  Benchmark B satisfies Slater's condition
+since the strictly feasible point $x = (1, 2)$ exists: $x_1 = 1 > 0.5$.  This is a \emph{regularity
+condition} (constraint qualification) that ensures strong duality and the sufficiency of KKT
+conditions.  Without it, the KKT conditions would be necessary but not sufficient.
+
+The Karush--Kuhn--Tucker conditions for~\eqref{eq:constrained} are:
 \begin{align}
 \nabla f(x^{\star}) - \mu^{\star} e_1 &= 0, \label{eq:kkt_stat} \\
 x_1^{\star} - 0.5 &\geq 0, \label{eq:kkt_primal} \\
@@ -1331,6 +1473,13 @@ $\lambda$ controls the trade-off: small $\lambda$ under-penalises violations; la
 enforces feasibility but introduces a stiff gradient term, requiring smaller step sizes for
 stability (here $\alpha = 0.03$ for $\lambda = 4.5$ vs.\ $\alpha = 0.05$ for $\lambda \leq 1.8$).
 
+\textbf{Interior-point (barrier) methods} provide a third paradigm: replace the constraint
+$x_1 \geq 0.5$ with a logarithmic barrier term $-\frac{1}{t}\log(x_1 - 0.5)$ added to the
+objective, with barrier parameter $t \to \infty$~\cite{bertsekas1999}.  This keeps all iterates
+strictly feasible while driving them towards the boundary of the optimal region.  Interior-point
+methods achieve $O(\sqrt{d} \log(1/\varepsilon))$ Newton iterations for linear and second-order
+cone programs, making them the method of choice for large-scale structured problems.
+
 \textbf{Augmented Lagrangian (Method of Multipliers):} An improved alternative builds a dual
 variable $\mu_k$ (Lagrange multiplier estimate) alongside the penalty:
 \begin{equation}
@@ -1339,8 +1488,23 @@ variable $\mu_k$ (Lagrange multiplier estimate) alongside the penalty:
 The multiplier is updated as $\mu_{k+1} = \mu_k + \lambda\max(0, 0.5 - x_k^{(1)})$ after each
 inner minimisation.  With a fixed moderate $\lambda$, the augmented Lagrangian converges to the
 exact constrained solution without requiring $\lambda \to \infty$, avoiding the ill-conditioning
-of the pure penalty approach~\cite{bertsekas1999}.  This is the theoretical justification for why
-large penalty weights must be accompanied by smaller step sizes in the experiments.
+of the pure penalty approach~\cite{bertsekas1999}.
+
+\begin{proposition}[Augmented Lagrangian convergence~\cite{bertsekas1999}]
+For the constrained problem~\eqref{eq:constrained} satisfying Slater's condition, the multiplier
+update $\mu_{k+1} = \mu_k + \lambda \max(0, 0.5 - x_k^{(1)})$ converges to the KKT multiplier
+$\mu^{\star}$ at a linear rate:
+$|\mu_k - \mu^{\star}| \leq (1 - \lambda\mu_f^{-1})^k |\mu_0 - \mu^{\star}|$,
+where $\mu_f$ is the strong convexity constant of $f$ (here $\approx 2$).
+The key insight is that dual-variable updates provide the ``memory'' of constraint violations
+across iterations, allowing the algorithm to converge to the exact feasible solution without
+increasing $\lambda$.  This contrasts with pure penalty methods, where $\lambda$ must grow
+without bound to achieve exact feasibility, causing the condition number of the penalised
+problem to grow as $O(\lambda)$.
+\end{proposition}
+
+This is the theoretical justification for why large penalty weights must be accompanied by
+smaller step sizes in the experiments.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1417,6 +1581,31 @@ an \emph{efficiently computable} upper bound on sub-optimality and a natural sto
 Note: the experiments use a \emph{fixed} $\beta$ (i.e.\ $\gamma_k = 1 - \beta$ constant) rather
 than the diminishing schedule $\gamma_k = 2/(k+2)$.  Fixed $\beta$ does not achieve the $O(1/k)$
 guarantee but is commonly used in practice for its simplicity.
+
+\begin{proposition}[Duality gap is a certificate of sub-optimality]
+For any convex $f$ and feasible $x_k \in \mathcal{X}$, the Frank--Wolfe duality gap
+$h_k = \langle \nabla f(x_k),\, x_k - z_k \rangle$ satisfies
+\begin{equation}
+h_k \geq f(x_k) - f^{\star}.
+\label{eq:fw_gap_bound}
+\end{equation}
+\end{proposition}
+\begin{proof}
+By convexity of $f$: $f(z_k) \geq f(x_k) + \langle \nabla f(x_k),\, z_k - x_k \rangle$, i.e.\
+$\langle \nabla f(x_k),\, x_k - z_k \rangle \geq f(x_k) - f(z_k)$.
+Since $z_k = \arg\min_{x \in \mathcal{X}} \langle \nabla f(x_k), x \rangle$, we have
+$\langle \nabla f(x_k), z_k \rangle \leq \langle \nabla f(x_k), x^{\star} \rangle$, so
+$f(z_k) \leq f^{\star}$ cannot be concluded directly; however, by the global minimality of
+$z_k$ in the LP:
+$\langle \nabla f(x_k),\, x_k - z_k \rangle
+  \geq \langle \nabla f(x_k),\, x_k - x^{\star} \rangle
+  \geq f(x_k) - f(x^{\star}) = f(x_k) - f^{\star}$,
+where the second inequality again uses convexity.
+\end{proof}
+
+This makes the duality gap a \emph{computable upper bound} on $f(x_k) - f^{\star}$: it can be
+evaluated at every iteration without knowing $f^{\star}$, serving as an efficient stopping criterion.
+When $h_k \leq \varepsilon$, the algorithm is guaranteed to be within $\varepsilon$ of optimal.
 
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
@@ -1499,6 +1688,15 @@ pattern~\cite{jaggi2013}.  The LMO vertex $z_k$ jumps between extreme points of 
 each iteration, and the convex combination gradually averages these jumps.  With the fixed $\beta$
 schedule, the step size does not decay, leading to residual oscillation near the optimum.  Using
 the standard $\gamma_k = 2/(k+2)$ schedule would eliminate this and recover the $O(1/k)$ bound.
+
+\textbf{Away-step Frank--Wolfe:} A key variant that achieves \emph{linear} convergence ($O((1-\mu/L)^k)$)
+for strongly convex objectives is the \emph{away-step} method, which alternates between the
+standard FW step (towards the LMO vertex $z_k$) and an \emph{away step} (moving away from the
+vertex with the largest weight in the current convex decomposition of $x_k$).  The away step
+explicitly reduces the contribution of poorly-positioned vertices, enabling geometric progress.
+For the interior objective $(x_1-1)^2 + (x_2-5)^2$ with strong convexity $\mu = 2$ and
+$L = 2$, the away-step rate would be $(1 - \mu/L)^k = 0^k$ --- convergence in one step, since
+the unconstrained minimum lies in the interior of $\mathcal{X}$.
 
 \textbf{Boundary optimum:} Frank--Wolfe is well suited to boundary optima because $z_k$ frequently
 selects the vertex closest to the constrained optimum ($x_1 = 0.5$), naturally driving the iterate
@@ -1771,8 +1969,8 @@ G.~Hinton, N.~Srivastava, and K.~Swersky, ``Neural networks for machine learning
 Y.~Nesterov, ``A method for solving the convex programming problem with convergence rate $O(1/k^2)$,''
 \textit{Doklady Akademii Nauk SSSR}, vol.~269, no.~3, pp.~543--547, 1983.
 
-\bibitem{nesterov2003}
-Y.~Nesterov, \textit{Introductory Lectures on Stochastic Optimization}.  Springer, 2003.
+\bibitem{nesterov2004}
+Y.~Nesterov, \textit{Introductory Lectures on Convex Optimization: A Basic Course}.  Springer, 2004.
 
 \bibitem{kingma2015}
 D.~P.~Kingma and J.~Ba, ``Adam: A method for stochastic optimization,''
@@ -1807,6 +2005,18 @@ R.~J.~Vanderbei, \textit{Linear Programming: Foundations and Extensions}, 4th ed
 J.~C.~Lagarias, J.~A.~Reeds, M.~H.~Wright, and P.~E.~Wright, ``Convergence properties of the
 Nelder--Mead simplex method in low dimensions,''
 \textit{SIAM Journal on Optimization}, vol.~9, no.~1, pp.~112--147, 1998.
+
+\bibitem{johnson2013}
+R.~Johnson and T.~Zhang, ``Accelerating stochastic gradient descent using predictive variance reduction,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)}, vol.~26, pp.~315--323, 2013.
+
+\bibitem{roux2012}
+N.~Le~Roux, M.~Schmidt, and F.~Bach, ``A stochastic gradient method with an exponential convergence rate for finite training sets,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)}, vol.~25, pp.~2663--2671, 2012.
+
+\bibitem{reddi2018}
+S.~J.~Reddi, S.~Kale, and S.~Kumar, ``On the convergence of Adam and beyond,''
+\textit{International Conference on Learning Representations (ICLR)}, 2018.
 
 \end{thebibliography}
 
