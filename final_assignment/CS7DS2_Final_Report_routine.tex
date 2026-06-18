@@ -874,6 +874,27 @@ same effect at the cost of more computation per step.  These trade-offs underlie
 used \emph{linear scaling rule}: doubling the batch size should be accompanied by doubling the
 learning rate to maintain the same convergence speed per epoch.
 
+\begin{remark}[Linear scaling rule and warm-up]
+The linear scaling rule (Krizhevsky 2014; Goyal et al.\ 2017) states: if the batch size is
+increased by a factor $\beta$, scale the learning rate by $\beta$.  The intuition is that
+$\beta$ mini-batch steps with learning rate $\alpha/\beta$ are approximately equivalent to one
+step with learning rate $\alpha$ (each step moves by $\alpha g_k$ in expectation; $\beta$ such
+steps accumulate to $\alpha \nabla f$, matching one full-batch step at rate $\alpha$).  More
+precisely, for a quadratic objective the noise ball radius scales as
+$r \propto \alpha \sigma_g^2 / b$; fixing $\alpha \cdot b = \text{const}$ keeps the noise ball
+fixed while delivering the same expected per-step decrease in the objective.
+
+The alternative \emph{square-root scaling rule} ($\alpha \propto \sqrt{b}$) is more conservative
+and arises from fixing the gradient noise $\alpha\sigma_g/\sqrt{b} = \text{const}$; it is
+appropriate when gradient noise is the binding constraint rather than per-epoch progress.  In
+practice, Goyal et al.\ found the linear rule valid up to $b \approx 8192$ on ImageNet
+(ResNet-50) provided a \emph{warm-up} period of 5 epochs is used: starting from a small
+$\alpha$ and linearly ramping to the scaled value avoids instability from large initial steps
+when the model is far from convergence.  For strongly convex objectives (as in Benchmark A),
+the linear scaling rule is exact: the noise ball radius condition determines convergence, and
+linear scaling keeps it constant as $b$ grows.
+\end{remark}
+
 \textbf{Irreducible noise floor for linear regression:}  When $y = X\theta^{\star} + \varepsilon$
 with $\varepsilon \sim \mathcal{N}(0, \sigma^2 I_m)$, the MSE loss at the OLS minimiser satisfies
 \begin{equation}
@@ -925,16 +946,26 @@ and exponential moving averages are common in deep learning: they apply Polyak--
 model parameters.
 \end{remark}
 
-\begin{remark}[Variance reduction methods]
+\begin{remark}[Variance reduction: SVRG and SAG]
 The fundamental limitation of mini-batch SGD is the residual gradient variance $\sigma_g^2/b$,
 which prevents convergence to the exact minimum for fixed $\alpha$.  \emph{Variance reduction}
-methods such as SVRG~\cite{johnson2013} and SAG~\cite{roux2012} eliminate this limitation by
-periodically recomputing the full gradient and using it to correct the stochastic direction.
-SVRG achieves linear convergence $O\bigl((1 - \mu/L)^k\bigr)$ \emph{without} decaying the
-step size, combining the computational advantage of SGD (one sample per iteration) with the
-convergence rate of full gradient descent.  This is particularly relevant for the linear
-regression benchmark, where SVRG would converge geometrically to $J^{\star}$ rather than to
-the noise ball of mini-batch SGD.
+methods eliminate this by correcting the stochastic gradient with a periodic full-gradient
+anchor.  The SVRG update (Johnson \& Zhang, 2013~\cite{johnson2013}) is:
+\begin{equation}
+x_{k+1} = x_k - \alpha\bigl[\underbrace{\nabla f_{i_k}(x_k)}_{\text{stoch.}} - \underbrace{\nabla f_{i_k}(\tilde{x})}_{\text{anchor}} + \underbrace{\tilde{g}}_{\text{full grad}}\bigr],
+\end{equation}
+where $\tilde{x}$ is a snapshot point (updated every $s$ iterations) and
+$\tilde{g} = \frac{1}{m}\sum_{i=1}^m \nabla f_i(\tilde{x})$ is the full gradient at $\tilde{x}$.
+The variance of the corrected estimator is $\mathbb{E}[\|\nabla f_{i_k}(x_k) - \nabla f_{i_k}(\tilde{x}) + \tilde{g} - \nabla f(x_k)\|^2]$,
+which goes to zero as $x_k \to \tilde{x} \to x^{\star}$.  This \emph{asymptotically eliminates}
+the noise floor.  SVRG achieves linear convergence $\mathbb{E}[f(x_k) - f^{\star}] \leq
+(1 - \mu/(10L))^{\lfloor k/s \rfloor}(f(x_0) - f^{\star})$ for $\mu$-strongly convex,
+$L$-smooth $f$, \emph{without} a decaying step size.  The per-iteration cost is the same as
+SGD (one gradient evaluation), plus $2m$ evaluations every $s$ steps for $\tilde{g}$; setting
+$s = 2m$ gives an amortised cost of $3\times$ SGD.  SAG~\cite{roux2012} avoids the snapshot
+recomputation by storing $m$ per-sample gradient estimates and averaging them, at a storage
+cost of $O(md)$.  Both methods would converge geometrically to $J^{\star}$ on Benchmark A
+rather than to the noise ball of mini-batch SGD.
 \end{remark}
 
 \begin{figure}[H]
@@ -999,6 +1030,25 @@ and $1/\sqrt{\hat{v}_t}$ approximates $F^{-1}$ via its diagonal.  This approxima
 Adam's strong performance on sparse language model objectives.  For Rosenbrock, however,
 $F \approx \nabla^2 f$ has a large off-diagonal entry $-400x_1$, and the diagonal approximation
 misses this coupling entirely --- exactly the reason Adam underperforms Nesterov on Benchmark C.
+\end{remark}
+
+\begin{remark}[Gradient clipping as an adaptive safeguard]
+In deep learning, particularly for recurrent networks and transformers, gradients can
+\emph{explode}: due to vanishing/exploding gradients through time, $\|\nabla f(x_k)\|$ can
+be many orders of magnitude larger than expected, causing divergent parameter updates.
+\emph{Gradient clipping by norm} (Pascanu et al.\ 2013) rescales the gradient if its norm
+exceeds a threshold $\tau$:
+\begin{equation}
+  g_k \;\leftarrow\; g_k \cdot \min\!\Bigl(1,\; \frac{\tau}{\|g_k\|}\Bigr).
+\end{equation}
+This preserves the gradient direction while bounding the step size to $\alpha\tau$.  For
+Adam, the adaptive scaling $m_t/(\sqrt{v_t}+\varepsilon)$ already provides implicit gradient
+modulation: in directions with consistently large gradients, $\sqrt{v_t}$ grows large and
+the effective step shrinks.  Explicit clipping adds an additional global safeguard for
+transient spikes.  Gradient clipping has a mirror-descent interpretation: it corresponds to
+a projected gradient step onto the $\ell_2$ ball of radius $\tau$, equivalent to PGD with
+the Euclidean ball as the constraint set.  This connection places clipping within the
+unifying framework of mirror descent with Euclidean Bregman divergence.
 \end{remark}
 
 \textbf{Why Adam underperforms Nesterov on Rosenbrock:} Adam applies independent per-coordinate
@@ -1115,6 +1165,33 @@ $f(x_k - \alpha p_k) \leq f(x_k) - c\alpha\,g_k^T p_k$ (with $c \approx 10^{-4}$
 descent at each iteration and is used in backtracking line searches.  Here we use fixed $\alpha$
 values tuned per benchmark (Table~\ref{tab:q3_params}), which achieves descent in practice
 but without a formal sufficient decrease guarantee.
+
+\begin{remark}[Wolfe line-search conditions~\cite{nocedal2006}]
+The Armijo condition alone allows the step $\alpha$ to be arbitrarily small (the condition is
+satisfied by any $\alpha \in (0, \alpha_0]$ for some $\alpha_0$).  The \emph{strong Wolfe
+conditions} add a curvature requirement to prevent excessively short steps:
+\begin{align}
+f(x_k - \alpha p_k) &\leq f(x_k) - c_1 \alpha\, g_k^T p_k
+  \quad \text{(sufficient decrease, }c_1 \approx 10^{-4}\text{)}, \\
+|g(x_k - \alpha p_k)^T p_k| &\leq c_2 |g_k^T p_k|
+  \quad \text{(curvature condition, }c_2 \approx 0.9\text{)}.
+\end{align}
+The curvature condition demands that the directional derivative at the new point be at most
+$c_2$ times its magnitude at the current point; it is satisfied whenever $\alpha$ lands in a
+region where the function has sufficiently ``flattened out'' along $p_k$.  Nocedal and Wright
+(Theorem 3.6) prove that a step satisfying both conditions always exists in the open interval
+$(0, \bar{\alpha})$ for any descent direction $p_k$ and $L$-smooth $f$.
+
+For \textbf{L-BFGS}, the strong Wolfe conditions are \emph{essential}: they guarantee
+$y_j^T s_j = (\nabla f(x_{j+1}) - \nabla f(x_j))^T (x_{j+1} - x_j) > 0$, the positive
+curvature condition required so that the rank-2 BFGS update
+$H_{k+1}^{-1} = (I - \rho_k s_k y_k^T)H_k^{-1}(I - \rho_k y_k s_k^T) + \rho_k s_k s_k^T$
+preserves positive definiteness.  With Armijo alone, a step could land on a slope where
+$\nabla f(x_{j+1})^T s_j < 0$, violating the curvature condition and causing the Hessian
+approximation to become indefinite.  In our implementation the step size $\alpha$ is fixed,
+so this positive curvature guarantee is not enforced; for production L-BFGS code, a Wolfe
+line search is mandatory.
+\end{remark}
 
 \begin{theorem}[Newton's quadratic convergence~\cite{nocedal2006}]
 Let $f$ be twice continuously differentiable and $x^{\star}$ be a local minimum with
@@ -2306,6 +2383,28 @@ For our box constraint, projection is $O(d)$ (per-coordinate clipping) and LP is
 $O((1-\mu/L)^k)$ rate, making it preferable here.  Frank--Wolfe's advantage emerges when
 the constraint set is a structured polytope (nuclear norm ball, flow polytope, Birkhoff polytope)
 where the LP oracle is tractable (e.g.\ via the Sinkhorn algorithm) but projection is not.
+
+\begin{remark}[Stochastic Frank--Wolfe and variance reduction]
+When the objective is a finite sum $f(x) = \frac{1}{m}\sum_{i=1}^m f_i(x)$ (as in Benchmark A
+with data-dependent loss), the full gradient $\nabla f(x_k)$ is expensive to compute and a
+stochastic estimate $\nabla f_{i_k}(x_k)$ is used instead.  The standard stochastic Frank--Wolfe
+algorithm (Hazan \& Luo, 2016; Reddi et al.\ 2016) runs:
+\begin{equation}
+z_k = \arg\min_{z \in \mathcal{X}} \langle \hat{g}_k, z \rangle, \qquad
+x_{k+1} = (1-\gamma_k) x_k + \gamma_k z_k,
+\end{equation}
+where $\hat{g}_k = \nabla f_{i_k}(x_k)$ is a mini-batch gradient.  For non-convex objectives
+with $L$-smooth $f_i$, stochastic FW guarantees finding a point with duality gap
+$\mathbb{E}[h_k] \leq \varepsilon$ in $O(1/\varepsilon^2)$ iterations, matching the stochastic
+first-order lower bound.  For convex objectives, the convergence deteriorates to $O(1/\sqrt{k})$
+from the deterministic $O(1/k)$ due to gradient noise.  \emph{SPIDER-Frank-Wolfe} (Yao et al.\
+2020) applies variance reduction (similar to SVRG) to recover the deterministic $O(1/k)$ rate
+in the stochastic setting by periodically re-anchoring the gradient estimate to the full gradient
+at a snapshot point.  This is analogous to SVRG's correction in mini-batch SGD, but the
+projection-free property of FW is maintained --- each iteration still requires only an LMO call,
+not a projection.  The duality gap upper-bound property, $h_k \geq f(x_k) - f^{\star}$, is
+preserved with the stochastic gradient as long as the LMO uses the same gradient estimate $\hat{g}_k$.
+\end{remark}
 
 \begin{remark}[Frank--Wolfe for matrix completion and the nuclear norm ball]
 A canonical application where FW dominates PGD is \emph{matrix completion}: given a low-rank
