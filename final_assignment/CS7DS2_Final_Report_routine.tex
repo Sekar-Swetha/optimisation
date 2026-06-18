@@ -159,6 +159,30 @@ C (Rosenbrock)  & Non-convex & $(1, 1)$ & $0$ & $\approx 500$ & Strongly ill-con
 \end{tabular}
 \end{table}
 
+\subsection{Role of Condition Number in Algorithm Performance}
+
+The condition number $\kappa = L/\mu$ (ratio of largest to smallest Hessian eigenvalue) is the
+single most important quantity predicting convergence speed.  For gradient descent on a strongly
+convex function, the asymptotic convergence rate is
+$(1 - 2/(\kappa + 1))^k \approx \exp(-2k/\kappa)$.  This means:
+\begin{itemize}[nosep]
+\item Benchmark A ($\kappa \approx 1.3$): GD contraction factor $\approx 0.13$ --- convergence in
+  $\sim$10 iterations.
+\item Benchmark B ($\kappa \approx 5$): GD contraction factor $\approx 0.67$ --- convergence in
+  $\sim$50 iterations.
+\item Benchmark C ($\kappa \approx 500$ near optimum): GD contraction $\approx 0.996$ per iteration
+  --- $\sim$2500 iterations to reduce error by $90\%$.  This explains why GD with $\alpha = 0.0012$
+  barely advances on Rosenbrock in 80--150 iterations.
+\end{itemize}
+
+Momentum methods improve upon GD by replacing the contraction factor $(1 - 2/(\kappa+1))$ with
+the accelerated rate $((\sqrt{\kappa} - 1)/(\sqrt{\kappa} + 1))^2 \approx 1 - 4/\sqrt{\kappa}$
+(for Heavy Ball at optimal tuning), reducing the number of iterations from $O(\kappa)$ to
+$O(\sqrt{\kappa})$.  Nesterov's method achieves $O(1/k^2)$ for general convex functions, equivalent
+to an $O(\sqrt{\kappa})$ iteration count for strongly convex objectives.  Newton's method reduces
+the iteration count to $O(\log\log(1/\varepsilon))$ (double-exponential convergence), essentially
+making the problem condition-number independent in the local regime.
+
 % ============================================================
 \section{Question 1: Adaptive Step-Size Methods \hfill [30 marks]}
 \label{sec:q1}
@@ -976,9 +1000,19 @@ regime for forward FD, explaining the performance difference.}
 This zeroth-order method requires only \emph{two} function evaluations per iteration regardless of
 dimension $d$.  The directional derivative $\hat{g}_k$ is a noisy estimate of the gradient:
 $\mathbb{E}[\hat{g}_k] = \nabla f_{\delta}(x_k)$ where $f_{\delta}$ is the Gaussian-smoothed
-objective.  The convergence rate is $O(d/k)$ --- a factor of $d$ slower than gradient-based
-methods --- reflecting the information loss from using a single random direction instead of the
-full gradient~\cite{nesterov2017}.
+objective with smoothing parameter $\delta$.  The convergence rate is $O(d/k)$ --- a factor of
+$d$ slower than gradient-based methods --- reflecting the information loss from using a single
+random direction instead of the full $d$-dimensional gradient~\cite{nesterov2017}.
+
+\begin{remark}
+The $O(d/k)$ rate can be interpreted as follows: the random direction $u_k \in \mathbb{R}^d$
+contributes only $1/d$ of the gradient information on average (in expectation over uniformly random
+directions, $\mathbb{E}[u_k u_k^T] = I_d/d$).  Consequently, $d$ random-search steps are
+needed to accumulate the same gradient signal as one exact gradient evaluation, explaining the
+dimension-dependent slow-down.  For $d = 2$ (our benchmarks), the factor-of-2 penalty is modest;
+for $d = 1000$, random search would be $500\times$ slower than gradient descent per unit of
+gradient information.
+\end{remark}
 
 \subsubsection{Results (Benchmark B)}
 
@@ -1023,6 +1057,16 @@ iteratively transforms it through four geometric operations:
 \end{enumerate}
 
 No gradient information is required.  Initial simplex step $= 0.35$, iterations $= 160$.
+
+\textbf{Convergence properties:} Nelder--Mead has no general convergence guarantee for dimensions
+$d \geq 2$~\cite{lagarias1998}: it is possible to construct examples where the simplex contracts
+to a non-stationary point.  In practice, however, it performs well on smooth low-dimensional
+functions.  The algorithm's power comes from its \emph{geometry-adaptive} nature: the simplex
+contracts, expands, and reflects to match the local curvature of the objective without any
+gradient computation.  On the Rosenbrock banana-shaped valley, the simplex must progressively
+rotate to align with the valley direction, which takes many operations but ultimately succeeds
+without any derivative information --- a feat impossible for gradient-free methods that do not
+maintain a geometric model of the search region.
 
 \begin{figure}[H]
 \centering
@@ -1123,6 +1167,21 @@ and unconstrained solutions coincide: $x^{\star} = (0.582, 2.0)$, $f^{\star} \ap
 The projection onto $\{x : x_1 \geq 0.5\}$ is simply $[\Pi_{\mathcal{X}}(z)]_1 = \max(0.5, z_1)$,
 $[\Pi_{\mathcal{X}}(z)]_2 = z_2$ --- a $O(1)$ operation.  For general convex sets $\mathcal{X}$,
 computing the projection can be expensive, but it guarantees \emph{exact} feasibility at every iterate.
+
+\begin{theorem}[PGD convergence rate~\cite{nocedal2006}]
+Let $f$ be $\mu$-strongly convex and $L$-smooth over $\mathcal{X}$.  Projected gradient descent
+with $\alpha = 1/L$ satisfies
+\begin{equation}
+\|x_k - x^{\star}\|^2 \leq \left(1 - \frac{\mu}{L}\right)^k \|x_0 - x^{\star}\|^2.
+\end{equation}
+The convergence rate $1 - \mu/L$ is \emph{identical} to unconstrained gradient descent.
+Feasibility does not degrade the convergence speed when the projection is non-expansive
+($\|\Pi(x) - \Pi(y)\| \leq \|x - y\|$), which holds for all convex sets.
+\end{theorem}
+
+This confirms that for the halfspace constraint $x_1 \geq 0.5$, PGD converges at the same
+rate as unconstrained GD on Benchmark B, with the only additional cost being the trivial
+$\max$ operation at each step.
 
 \begin{algorithm}[H]
 \caption{Quadratic Penalty Method}
@@ -1685,6 +1744,11 @@ H.~H.~Rosenbrock, ``An automatic method for finding the greatest or least value 
 
 \bibitem{vanderbei2014}
 R.~J.~Vanderbei, \textit{Linear Programming: Foundations and Extensions}, 4th ed.\ Springer, 2014.
+
+\bibitem{lagarias1998}
+J.~C.~Lagarias, J.~A.~Reeds, M.~H.~Wright, and P.~E.~Wright, ``Convergence properties of the
+Nelder--Mead simplex method in low dimensions,''
+\textit{SIAM Journal on Optimization}, vol.~9, no.~1, pp.~112--147, 1998.
 
 \end{thebibliography}
 
