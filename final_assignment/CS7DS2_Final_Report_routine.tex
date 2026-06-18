@@ -297,6 +297,18 @@ This \emph{monotonically decreases} with the gradient history, providing large u
 infrequent features and small updates for frequent ones.  The monotonic decrease can cause
 premature stalling on non-stationary objectives.
 
+\begin{proposition}[Adagrad Online Regret Bound]
+For an online convex sequence of functions $f_k$ with gradients bounded $\|g_k\|_\infty \le G$,
+Adagrad achieves a cumulative regret bound:
+\begin{equation}
+\sum_{k=1}^K f_k(x_k) - \min_{x^\star} \sum_{k=1}^K f_k(x^\star)
+\;\le\; \frac{\|x_0 - x^\star\|_2^2}{2\alpha_0} \sum_{j=1}^d \sqrt{\sum_{k=1}^K g_{k,j}^2}
+\;\le\; \frac{\alpha_0 d G \sqrt{K}}{2}.
+\end{equation}
+The regret is $O(\sqrt{K})$, matching the minimax optimal rate for online convex optimisation,
+and scales with the per-coordinate gradient magnitude (sparse features benefit more).
+\end{proposition}
+
 \begin{algorithm}[H]
 \caption{RMSprop}
 \label{alg:rmsprop}
@@ -313,7 +325,13 @@ premature stalling on non-stationary objectives.
 
 RMSprop fixes Adagrad's vanishing-rate problem by replacing the cumulative sum with an exponential
 moving average (EMA) with decay factor $\beta$.  The effective window size is $1/(1-\beta)$
-iterations, so $\beta=0.9$ gives a window of $\approx10$ recent gradients.
+iterations, so $\beta=0.9$ gives a window of $\approx10$ recent gradients.  The steady-state
+effective learning rate for coordinate~$j$ is $\alpha_0/\sqrt{\langle g_j^2\rangle_{1/(1-\beta)}}$,
+where $\langle\cdot\rangle$ denotes a weighted average over the recent window.  Note that RMSprop
+has no provably convergent regret bound for general online convex problems --- its analysis is
+heuristic, though it is highly effective in practice for non-convex deep learning objectives.
+Adam (Section~\ref{sec:q2}, Algorithm~\ref{alg:adam}) can be viewed as RMSprop with added
+Heavy Ball momentum and bias correction.
 
 \begin{algorithm}[H]
 \caption{Polyak Momentum / Heavy Ball}
@@ -458,8 +476,9 @@ escaping the displayed region.}
 \caption{Q1: Trajectories on Benchmark~C (Rosenbrock).  The banana-shaped valley
 $x_2 \approx x_1^2$ is visible.  All methods first descend rapidly towards the valley floor,
 then progress slowly along it towards $(1,1)$.  The Polyak trajectory (with correct $f^\star$)
-shows the most aggressive progress along the valley, while GD with $\alpha = 0.0012$ barely
-advances due to the conservative step size required for stability on $\kappa_C\approx2000$.}
+shows the most aggressive progress along the valley, while GD with $\alpha = 0.0012$ barely advances due to the conservative step size required for
+stability on the high-curvature Rosenbrock ($\kappa_C\approx500$ at the optimum, larger near
+the start).}
 \label{fig:q1_contour_C}
 \end{figure}
 
@@ -498,6 +517,26 @@ the method's $f^\star$-sensitivity.}
 \label{fig:q1_stepsize_C}
 \end{figure}
 
+\subsection{Effective Learning Rate Comparison}
+
+A key differentiating factor between Adagrad and RMSprop is how their effective learning rates
+evolve over iterations.  Figure~\ref{fig:q1_lr_decay} illustrates this on Benchmark~C.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/adagrad_vs_rmsprop_lr.pdf}
+\caption{Q1: Effective learning rate (mean over coordinates) vs.\ iteration on Benchmark~C.
+Adagrad's rate decays monotonically ($\propto O(1/\sqrt{k})$) as the cumulative squared
+gradient $G_k = \sum_{j=0}^{k} g_j^2$ grows without bound.  This permanent decay means
+Adagrad eventually takes near-zero steps, potentially stalling before convergence on
+non-convex or ill-conditioned problems.  RMSprop's exponential moving average
+$v_k = \beta v_{k-1} + (1-\beta)g_k^2$ stabilises around the recent gradient magnitude,
+giving a quasi-stationary effective learning rate after early transients.  The theoretical
+steady-state for RMSprop is $\alpha_0/\sqrt{(1-\beta)^{-1} \langle g^2\rangle}$ (dashed),
+which matches the empirical plateau.}
+\label{fig:q1_lr_decay}
+\end{figure}
+
 \subsection{Comparative Analysis}
 
 \begin{itemize}[nosep]
@@ -509,10 +548,10 @@ the method's $f^\star$-sensitivity.}
 \item \textbf{Stability:} GD baseline is most stable but slowest.  Polyak is \emph{unstable} when
   $f^\star$ is misspecified.  Adagrad is uniformly stable due to its monotonically decreasing
   step size, though this causes premature stalling on non-stationary problems.
-\item \textbf{Condition number effect:} On Benchmark~C ($\kappa\approx2000$), all first-order
-  methods without momentum perform poorly, as the optimal step for the steep direction is $\sim1000\times$
-  too large for the flat direction.  Heavy Ball's momentum partially alleviates this by building
-  speed along the valley floor.
+\item \textbf{Condition number effect:} On Benchmark~C ($\kappa\approx500$ at the optimum,
+  larger in other regions), all first-order methods without momentum perform poorly, as the
+  optimal step for the steep direction is $\sim250\times$ too large for the flat direction.
+  Heavy Ball's momentum partially alleviates this by building speed along the valley floor.
 \item \textbf{Practical implication:} In practice, exact $f^\star$ is rarely known, limiting
   Polyak's applicability.  RMSprop and Adagrad are more robust choices for general
   gradient-based machine learning problems.
@@ -870,6 +909,7 @@ step, which would move in the direction $-g'(0.25)<0$ but with no inherent sense
 \end{algorithm}
 
 \begin{theorem}[Newton's Quadratic Convergence]
+\label{thm:newton_quad}
 Let $f$ be twice continuously differentiable, with $\nabla^2 f(x^\star) \succ 0$ and
 $\|\nabla^2 f(x) - \nabla^2 f(y)\| \le M\|x-y\|$ (Lipschitz Hessian).  If $\|x_0 - x^\star\|$
 is sufficiently small, the undamped Newton iterates satisfy
@@ -1004,6 +1044,26 @@ update drops to machine precision after one step.  GD's magnitude decreases \emp
 log scale), reflecting its linear $O(\rho^k)$ convergence rate.  On Rosenbrock, Newton maintains
 larger updates than GD, indicating more aggressive and productive steps despite a small step size.}
 \label{fig:q3_update}
+\end{figure}
+
+\subsection{Quadratic Convergence Illustration}
+
+Figure~\ref{fig:newton_quad} provides a geometric illustration of quadratic vs.\ linear
+convergence by plotting $\log\|x_{k+1}-x^\star\|$ against $\log\|x_k-x^\star\|$.  For linear
+convergence (GD), these points lie on a line of slope~1; for quadratic convergence (Newton),
+the slope is~2.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/newton_quadratic_conv.pdf}
+\caption{Q3: Quadratic vs.\ linear convergence on Benchmark~A.  Left: distance to optimum
+$\|\theta_k - \theta^\star\|$ on semi-log scale.  Newton converges in 1 iteration (machine
+precision), while GD decreases linearly in log scale.  Right: log-log ``convergence order''
+plot: GD's cloud of points lies on slope~1 (linear), while Newton's few non-trivial steps
+fall on slope~$\approx2$ (quadratic).  The slope-2 alignment is the geometric signature of
+quadratic convergence $\|x_{k+1}-x^\star\| \le C\|x_k-x^\star\|^2$, confirming
+Theorem~\ref{thm:newton_quad} experimentally.}
+\label{fig:newton_quad}
 \end{figure}
 
 \subsection{Limitations of Newton's Method and Practical Considerations}
@@ -1206,6 +1266,17 @@ No gradient information is required; the method operates purely on function valu
 geometry adapts to the local landscape shape.  Settings: initial simplex step $= 0.35$, 160
 iterations.
 
+\begin{remark}[Nelder--Mead Convergence Theory]
+Unlike gradient methods, Nelder--Mead has no general convergence guarantee for $d \ge 2$.
+In one dimension it converges to a local minimum.  For $d=2$, convergence to a non-stationary
+point is possible even in theory (Lagarias et al.\ 1998 showed non-convergence examples for
+smooth objectives).  Despite this, Nelder--Mead performs well in practice on low-dimensional,
+moderately smooth functions like Benchmark~C, because its simplex geometry naturally adapts to
+elongate along the Rosenbrock valley floor and squeeze out of the transverse direction.  The
+final simplex diameter provides an empirical convergence certificate: when all simplex vertices
+agree to $\varepsilon$, the solution is $\varepsilon$-accurate.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q4_nelder_mead_C.pdf}
@@ -1262,6 +1333,21 @@ Grid search & None & $N^d$ total & $O(N^d)$ & Resolution-limited \\
 $d=2$, Nelder--Mead achieves better accuracy than grid search with fewer function evaluations.
 For high-dimensional problems, random search scales better than grid search, but the statistical
 efficiency decreases as $d$ grows.
+
+\textbf{Method selection guidelines:}
+\begin{itemize}[nosep]
+  \item \textbf{Gradients available:} Always prefer exact gradient methods (GD, Nesterov, Adam).
+    FD approximation adds $O(\delta)$ bias; use only when analytic gradient is unavailable.
+  \item \textbf{$d$ small ($d \le 10$), function is smooth:} Nelder--Mead is a strong choice
+    for derivative-free optimisation.  It uses local geometric information and adapts its step.
+  \item \textbf{$d$ moderate ($10 \le d \le 1000$):} Nesterov random search or evolution
+    strategies (CMA-ES).  Grid search is infeasible ($N^d$ evaluations for any grid resolution).
+  \item \textbf{$d$ large ($d > 1000$):} Requires gradient information or structured smoothing.
+    Zeroth-order methods lose efficiency as the random direction becomes increasingly orthogonal
+    to the true gradient in high dimensions ($\cos\theta \sim d^{-1/2}$).
+  \item \textbf{Discrete/non-differentiable:} Grid search (exhaustive) or genetic algorithms
+    (population-based).
+\end{itemize}
 
 % ============================================================
 \section{Question 5: Constrained Optimisation \hfill [30 marks]}
