@@ -15,6 +15,10 @@
 \usepackage{fancyhdr}
 \usepackage{microtype}
 
+% Math operators
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
 
 % Theorem-like environments
@@ -104,7 +108,12 @@ The $x_2$-direction has constant curvature 10, while the $x_1$-direction has cur
 \begin{equation}
 f(x_1, x_2) = (1 - x_1)^2 + 100(x_2 - x_1^2)^2.
 \end{equation}
-The global minimum is at $(1, 1)$ with $f^{\star} = 0$. The Hessian at the optimum has eigenvalues $\lambda_{\min} \approx 0.40$ and $\lambda_{\max} \approx 1001.6$, giving $\kappa \approx 2508$. This extreme ill-conditioning, combined with the narrow curved valley along $x_2 = x_1^2$, makes Rosenbrock the canonical benchmark for testing algorithm robustness. At the starting point $x_0 = [-1, 1]^T$, the Hessian eigenvalues are approximately 0.4 and 1001, so $L \approx 1002$; this constrains the maximum stable GD step to $\alpha < 2/L \approx 0.002$.
+The global minimum is at $(1, 1)$ with $f^{\star} = 0$. The Hessian at the optimum has eigenvalues $\lambda_{\min} \approx 0.40$ and $\lambda_{\max} \approx 1001.6$, giving $\kappa \approx 2508$. This extreme ill-conditioning arises from the factor of 100 in the second term: the $x_2 - x_1^2$ constraint creates a steep cross-valley curvature of order $200$, while the along-valley curvature is much smaller. The two challenges are:
+\begin{enumerate}[nosep]
+\item \textbf{Ill-conditioning}: the condition number $\kappa \approx 2508$ forces GD to use tiny step sizes ($\alpha \ll 1/L \approx 0.001$), making it extremely slow along the valley.
+\item \textbf{Curved valley}: the valley follows $x_2 = x_1^2$ (a parabola), so the optimal descent direction rotates continuously as $x_1$ varies. Unlike an elliptic bowl (where coordinate-aligned methods work well), the rotating valley demands that methods either use curvature information (Newton) or accumulate momentum along a curved path (Nesterov).
+\end{enumerate}
+At the starting point $x_0 = [-1, 1]^T$, $L \approx 1002$, constraining the maximum stable GD step to $\alpha < 2/L \approx 0.002$.
 
 \subsection{Benchmark D: Constrained Feasible Set}
 For constrained problems (Questions 5 and 6):
@@ -431,18 +440,20 @@ Note that Nesterov uses a slightly smaller step than GD ($\alpha = 0.06$ vs $0.0
 
 \begin{table}[H]
 \centering
-\caption{Q2: Final objective values after 150 iterations. Speedup factor relative to GD baseline shown in parentheses.}
+\caption{Q2: Final objective values after 150 iterations. Speedup on Rosenbrock relative to GD.}
 \label{tab:q2_final}
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} & \textbf{C speedup vs GD} \\
+\textbf{Method} & \textbf{Bench.\ A} & \textbf{Bench.\ B} & \textbf{Bench.\ C} & \textbf{Bench.\ C speedup} \\
 \midrule
-GD (baseline) & 0.4826 & 0.7244 & 3.3880 & 1$\times$ \\
+GD (baseline) & 0.4826 & 0.7244 & 3.3880 & 1.0$\times$ \\
 Nesterov & 0.4826 & 0.7244 & \textbf{0.4788} & $\mathbf{7.1\times}$ \\
-Adam & 0.4826 & 0.7244 & 1.5785 & $2.1\times$ \\
+Adam & 0.4826 & 0.7244 & 1.5785 & 2.1$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\noindent The discrepancy between Nesterov ($7.1\times$ speedup) and Adam ($2.1\times$ speedup) on Rosenbrock reflects a fundamental algorithmic difference. Nesterov accumulates directional momentum along the valley floor: since the valley-floor direction is consistent (always approximately towards $(1,1)$ once in the valley), the momentum term $z_k$ builds a strong bias in this direction. Adam, by contrast, adapts its step size \emph{per coordinate axis} ($x_1$ and $x_2$), which is beneficial for axis-aligned anisotropy but cannot address the rotating valley floor. The Hessian off-diagonal term $H_{12} = -400x_1 \approx -400$ creates strong correlation between $x_1$ and $x_2$ updates that coordinate-wise scaling cannot exploit.
 
 \subsection{Contour Trajectories}
 
@@ -584,7 +595,11 @@ Iterations & 80 & 20 & 80 & 20 & 80 & 20 \\
 \end{tabular}
 \end{table}
 
-Newton uses $\alpha = 1.0$ on Benchmark A (exact quadratic), $\alpha = 0.85$ on Benchmark B (near-quadratic, slight damping for the sinusoidal term), and $\alpha = 0.22$ on Rosenbrock (aggressive damping required because $\nabla^2 f$ changes rapidly along the curved valley; undamped Newton steps frequently overshoot).
+Newton uses $\alpha = 1.0$ on Benchmark A (exact quadratic), $\alpha = 0.85$ on Benchmark B (near-quadratic, slight damping for the sinusoidal term), and $\alpha = 0.22$ on Rosenbrock. On Rosenbrock, aggressive damping is required for the following reason: at the starting point $x_0 = (-1, 1)$, the Hessian is
+\[
+\nabla^2 f(-1, 1) = \begin{bmatrix} 2 + 1200(1) - 400(1) & -400(-1) \\ -400(-1) & 200 \end{bmatrix} = \begin{bmatrix} 802 & 400 \\ 400 & 200 \end{bmatrix},
+\]
+with eigenvalues $\approx 0.4$ and $\approx 1001.6$. The full Newton step $p = H^{-1}g$ can have large magnitude when $g$ has significant component in the direction of the small eigenvalue, causing overshoot. With $\alpha = 0.22$, the effective step is one fifth of the Newton step, ensuring the iterate stays close to the current local quadratic approximation.
 
 \subsection{Convergence Comparison}
 
@@ -649,6 +664,10 @@ On Benchmark C, Newton converges to $(0.183, 0.020)$, which lies partway along t
 \label{fig:q3_contour_C}
 \end{figure}
 
+\subsection{Limitations and Quasi-Newton Extensions}
+
+Newton's method requires computing and factorising the $d \times d$ Hessian at each step, costing $O(d^2)$ storage and $O(d^3)$ computation. For large-scale problems ($d \sim 10^6$ in modern machine learning), this is prohibitive. \emph{Quasi-Newton methods} bridge the gap between first- and second-order methods by constructing a low-cost Hessian approximation from gradient differences. The most widely used is L-BFGS (Limited-memory Broyden--Fletcher--Goldfarb--Shanno), which maintains a rank-$m$ approximation to $H^{-1}$ using only the last $m$ gradient differences, requiring $O(md)$ storage rather than $O(d^2)$. For the 2D benchmarks in this assignment, full Newton is tractable and L-BFGS would provide minimal advantage; the distinction becomes critical in high-dimensional settings.
+
 \subsection{Update Magnitude Analysis}
 
 \begin{figure}[H]
@@ -711,7 +730,7 @@ This zeroth-order method uses only \emph{two function evaluations} per iteration
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q4_fval_B.pdf}
-\caption{Q4A: Convergence comparison on Benchmark B. Exact GD converges fastest (120 iterations). FD GD with $\delta = 0.05$ closely tracks exact GD: the gradient approximation error is small relative to the gradient magnitude at this scale. FD GD with $\delta = 0.8$ converges poorly: the truncation error $L_2 \delta / 2$ with $L_2 \approx 10$ gives $\sim 4$ error in the gradient, causing the effective descent direction to deviate substantially. Nesterov random search converges slowest due to the high variance of single random directional estimates.}
+\caption{Q4A: Convergence comparison on Benchmark B. Exact GD converges fastest (120 iterations, to $f = 0.7244$). FD GD with $\delta = 0.05$ closely tracks exact GD: from the error analysis (Figure~\ref{fig:q4_fd_error}), $\delta = 0.05$ gives truncation error $L_2 \delta / 2 \approx 10 \times 0.05 / 2 = 0.25$, while the gradient magnitude at the starting point $(-1, 4)$ is $\|\nabla f\| = \|[2(-1-1)+\cos(-1), 10(4-2)]\| = \|[-4.54, 20]\| \approx 20.5$, giving a relative error of $0.25/20.5 \approx 1.2\%$ --- negligible. FD GD with $\delta = 0.8$: truncation error $\approx 4$, relative error $4/20.5 \approx 20\%$ --- the gradient direction deviates significantly. Nesterov random search converges slowest: the single-direction estimate has variance $\sim d$ times larger than the exact gradient, causing highly noisy steps.}
 \label{fig:q4_fval_B}
 \end{figure}
 
@@ -866,6 +885,23 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & None \\
 \end{tabular}
 \end{table}
 
+\begin{table}[H]
+\centering
+\caption{Q5: Comparison of constraint-handling approaches.}
+\label{tab:q5_comparison}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Feasibility} & \textbf{Requires} & \textbf{Condition} & \textbf{Exact at} \\
+ & \textbf{guarantee} & & \textbf{number} & \textbf{finite $\lambda/\alpha$?} \\
+\midrule
+Projected GD & Hard (every iter.) & Projection oracle & $O(\kappa)$ & N/A \\
+Penalty ($\lambda$ small) & None & Gradient only & $O(\kappa + \lambda)$ & No \\
+Penalty ($\lambda$ large) & Soft (asymptotic) & Gradient only & $O(\kappa + \lambda)$ & No \\
+Augmented Lagrangian & Hard (at solution) & Gradient only & $O(\kappa)$ & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \textbf{Projected GD} provides exact constraint satisfaction at every iteration. This is the fundamental advantage: feasibility is maintained as a hard invariant, not negotiated through penalty weights. The trade-off is the requirement for an efficient projection oracle; for the half-space $\{x_1 \geq 0.5\}$, the projection is trivial, but for general constraint sets (e.g., semidefinite constraints, $\ell_1$ balls), projection may be as expensive as solving the original problem.
 
 \textbf{Penalty methods} require no projection oracle, making them applicable whenever the penalised objective and its gradient can be evaluated. The key limitation is that the condition number of $F_{\lambda}$ grows with $\lambda$: the penalty term $\lambda\max(0, 0.5 - x_1)$ adds a curvature discontinuity at $x_1 = 0.5$, and for smooth approximations the effective added curvature is $O(\lambda)$. Thus the overall condition number of $F_{\lambda}$ grows as $O(\lambda)$, requiring the step size $\alpha \propto 1/\lambda$ for stability --- diminishing returns as $\lambda$ increases. This is observed empirically: the code uses $\alpha = 0.05$ for $\lambda \leq 1.8$ but must reduce to $\alpha = 0.03$ for $\lambda = 4.5$. The augmented Lagrangian (AL) method \cite{bertsekas1999nonlinear} resolves this: $F_{\lambda,\mu}(x) = f(x) + \mu g(x) + \frac{\lambda}{2}\|g(x)\|^2$ where $\mu_k$ are updated as $\mu_{k+1} = \mu_k + \lambda g(x_k)$. AL achieves exact constraint satisfaction at finite $\lambda$ while keeping the condition number of the penalised subproblem bounded.
@@ -922,7 +958,7 @@ f(x_k) - f^{\star} \leq \frac{2LD^2}{k+2} = O\!\left(\frac{L D^2}{k}\right).
 \end{equation}
 \end{theorem}
 
-This $O(1/k)$ rate is slower than projected gradient descent's $O(1/k)$ (same asymptotic rate, but Frank--Wolfe's constant is $2LD^2$ vs PGD's $\|x_0 - x^{\star}\|^2 / (2k)$ which is tighter). The advantage of Frank--Wolfe is structural: the LMO is often much cheaper than a projection for complex constraint sets (e.g., matrix nuclear norm balls, $\ell_1$ balls, polytopes given by a linear program).
+This $O(1/k)$ rate is the same asymptotic order as projected gradient descent, but Frank--Wolfe's constant $2LD^2$ involves the domain diameter $D$ rather than the initial distance $\|x_0 - x^{\star}\|$ in PGD's bound. For our box constraint, $D \approx 16.2$, so $2LD^2 \approx 2 \times 10 \times 263 = 5260$ (for the interior objective), while $\|x_0 - x^{\star}\|^2 = \|(1,1)-(1,5)\|^2 = 16$ gives PGD a constant $16/(2k) = 8/k$, three orders of magnitude tighter. The advantage of Frank--Wolfe is structural, not asymptotic: the LMO is often much cheaper than a projection for complex constraint sets (e.g., nuclear norm balls require a rank-1 SVD, while projection requires full SVD; simplex constraints require only sorting).
 
 The implementation here uses a fixed $\beta$ (retention fraction) rather than the standard $\gamma_k = 2/(k+2)$ schedule. The effective step size is $1 - \beta$; with $\beta = 0.90$, the step towards $z_k$ is 10\%, while $\beta = 0.985$ gives only 1.5\%.
 
@@ -976,9 +1012,11 @@ Boundary, $\beta = 0.93$ & $(0.500, -0.337)$ & 0.3637 & 0.25 & 0.1137 \\
 
 \textbf{Interior optimum:} When $x^{\star}$ is in the interior of $\mathcal{X}$, the Frank--Wolfe gap $h(x_k) = \nabla f(x_k)^T(x_k - z_k) \to 0$ as $x_k \to x^{\star}$, but the LP vertex $z_k$ still jumps to an extreme point of $\mathcal{X}$ at each iteration. The convex combination averages these extremal directions, creating an indirect, zig-zagging approach to the optimum. The Frank--Wolfe gap provides an \emph{optimality certificate}: $f(x_k) - f^{\star} \leq h(x_k)$, which can be computed without knowing $f^{\star}$. As $\nabla f(x_k) \to 0$ (first-order optimality), $h(x_k) \to 0$ and the iterate must be converging to the unconstrained optimum (which lies in the interior).
 
-\textbf{Boundary optimum:} Frank--Wolfe is structurally better suited to boundary optima because the LMO systematically selects the nearest constrained vertex to the unconstrained optimum. The iterate naturally approaches the boundary without explicit projection. The residual gap (0.1137 after 140 iterations) reflects the slow $O(1/k)$ convergence combined with the fixed $\beta$ schedule; using $\gamma_k = 2/(k+2)$ would eliminate the oscillation and guarantee convergence to $f^{\star} = 0.25$.
+\textbf{Boundary optimum:} Frank--Wolfe is structurally better suited to boundary optima because the LMO systematically selects the nearest constrained vertex to the unconstrained optimum. The iterate naturally approaches the boundary without explicit projection: once $x_{1,k} \approx 0.5$, the LMO selects $z_k = (0.5, -5)$ or $(0.5, 5)$ depending on the sign of $\nabla f_{x_2}$, and the convex combination gradually reduces $x_{2,k}$ towards 0. The residual gap (0.1137 after 140 iterations, above $f^{\star} = 0.25$) reflects two limitations: (1) the fixed $\beta = 0.93$ prevents the step size from diminishing, causing persistent oscillation; (2) the boundary optimum is on the \emph{edge} of $\mathcal{X}$ (not a vertex), so Frank--Wolfe's vertex-jumping mechanism is inefficient for converging to non-vertex boundary points. Using $\gamma_k = 2/(k+2)$ would provide the $O(LD^2/k)$ guarantee and converge to $f^{\star} = 0.25$.
 
-\textbf{Frank--Wolfe vs.\ Projected GD:} Frank--Wolfe is preferred when: (i)~the LMO is cheap (structured constraint sets), (ii)~a sparse or vertex-supported solution is desired (the iterate is a convex combination of vertices), or (iii)~projection is expensive. Projected GD is preferred when: (i)~a projection oracle is available, (ii)~faster convergence is needed, or (iii)~the function has strong convexity.
+\textbf{Frank--Wolfe vs.\ Projected GD:} Frank--Wolfe is preferred when: (i)~the LMO is cheap (structured constraint sets), (ii)~a sparse or vertex-supported solution is desired (the iterate is a convex combination of at most $k+1$ vertices after $k$ steps, a property called \emph{sparsifiability}), or (iii)~projection is expensive. Projected GD is preferred when: (i)~a projection oracle is available, (ii)~faster convergence is needed, or (iii)~the function has strong convexity (projected GD achieves $O((1-\mu/L)^k)$ vs.\ Frank--Wolfe's $O(1/k)$).
+
+
 
 % ============================================================
 \section{Overall Comparison and Conclusions}
