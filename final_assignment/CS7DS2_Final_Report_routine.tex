@@ -353,6 +353,25 @@ RMSprop addresses Adagrad's monotone decay by using an exponential moving averag
 gradients with forgetting factor $\beta$.  This allows the effective step size to adapt to
 recent curvature rather than the full gradient history.
 
+\begin{remark}[Adagrad as mirror descent with Mahalanobis geometry]
+Adagrad (Algorithm~\ref{alg:adagrad}) has a deep mirror-descent interpretation.  Define the
+accumulated diagonal preconditioner $G_k = \mathrm{diag}(G_k^{(1)}, \ldots, G_k^{(d)})$ where
+$G_k^{(i)} = \sum_{j=0}^k g_j^{(i)2}$, and the potential $\phi_k(x) = \frac{1}{2}x^T G_k^{1/2} x$.
+The induced Bregman divergence is $D_{\phi_k}(x, x_k) = \frac{1}{2}(x-x_k)^T G_k^{1/2}(x-x_k)$,
+which is the \emph{Mahalanobis norm} $\frac{1}{2}\|x - x_k\|_{G_k^{1/2}}^2$.  The mirror descent
+update with this potential recovers exactly the Adagrad update, with the regret bound:
+\begin{equation}
+\sum_{k=0}^{K-1}\bigl[f(x_k) - f^{\star}\bigr]
+  \;\leq\; \frac{\|x_0 - x^{\star}\|^2}{2\alpha_0}\, \operatorname{tr}\!\left(G_K^{1/2}\right)
+  = \frac{\alpha_0}{2}\sum_{i=1}^d \|x_0^{(i)}-x^{\star(i)}\|^2 \sqrt{G_K^{(i)}}.
+\end{equation}
+This is coordinate-adaptive: features (coordinates $i$) with small accumulated gradient $G_K^{(i)}$
+incur low regret even with large displacement $|x_0^{(i)} - x^{\star(i)}|$.  This explains
+Adagrad's advantage for sparse NLP embeddings: rarely-updated coordinates receive larger effective
+step sizes.  Adam extends this by replacing the full accumulation $G_K$ with an exponentially
+decaying window, sacrificing theoretical guarantees but gaining non-stationarity adaptivity.
+\end{remark}
+
 \begin{remark}[AMSGrad: restoring Adagrad's convergence guarantee]
 Reddi et al.~\cite{reddi2018} showed that Adam and RMSprop can fail to converge on simple convex
 online problems due to the exponential moving average of squared gradients increasing in some steps.
@@ -645,6 +664,29 @@ Hessian information).  For strongly convex functions, the optimal first-order ra
 $O\bigl((1 - \sqrt{\mu/L})^k\bigr)$, achieved by Nesterov's strongly-convex variant, reducing
 the iteration count from $O(\kappa)$ (GD) to $O(\sqrt{\kappa})$.
 \end{remark}
+
+\begin{theorem}[First-order oracle lower bound~\cite{nesterov2004}]
+\label{thm:lower_bound}
+For any deterministic first-order method generating iterates $x_1, \ldots, x_k$ using oracle
+information $\{f(x_j), \nabla f(x_j)\}_{j < k}$ (with $x_j \in \mathrm{span}\{x_0, \nabla
+f(x_0), \ldots, \nabla f(x_{j-1})\}$), there exists an $L$-smooth convex function
+$f : \mathbb{R}^d \to \mathbb{R}$ and a starting point $x_0$ such that, for all
+$k \leq \lfloor (d-1)/2 \rfloor$:
+\begin{equation}
+f(x_k) - f^{\star} \;\geq\; \frac{3L\|x_0 - x^{\star}\|^2}{32(k+1)^2}.
+\end{equation}
+The worst-case function is a tridiagonal quadratic on $\mathbb{R}^d$ whose structure ensures
+that each gradient oracle call reveals information about only one new coordinate.  Consequently,
+after $k$ steps, the method has ``seen'' at most $k+1$ coordinates, and the remaining $d-k-1$
+coordinates contribute an irreducible error of at least $\Omega(1/k^2)$.
+
+\textbf{Implications:} (i) No first-order method can do better than $O(1/k^2)$ on general convex
+functions, so Nesterov's method (Theorem~\ref{thm:nesterov}) achieves the \emph{information-theoretic
+limit}.  (ii) For strongly convex functions, the analogous lower bound is
+$\Omega(((\sqrt\kappa-1)/(\sqrt\kappa+1))^{2k})$, matched by Nesterov's strongly convex variant.
+(iii) Newton's method ($O(\log\log 1/\varepsilon)$ iterations) escapes this lower bound because it
+uses second-order (Hessian) information --- not captured by the first-order oracle model.
+\end{theorem}
 
 \begin{remark}[Adaptive restart for Nesterov's method]
 A practical limitation of Nesterov's method is that the momentum schedule $\beta_k = (k-1)/(k+2)
@@ -1654,6 +1696,29 @@ constraint bound, $\mu^{\star} = -\partial f^{\star}/\partial b$ where $b = 0.5$
 $\mu^{\star}$ indicates the constraint is more binding --- relaxing it would yield a greater
 improvement in the objective.  For our problem, $\mu^{\star} = 0$ confirms the constraint does
 not limit the optimal value.
+
+\begin{remark}[Active constraint KKT example]
+To illustrate the active constraint case, consider the \emph{shifted} objective
+$\tilde{f}(x) = (x_1 + 0.5)^2 + 5(x_2 - 2)^2$ whose unconstrained minimum is at
+$(-0.5, 2)$ --- outside the feasible region $x_1 \geq 0.5$.  The constrained optimum is
+$\tilde{x}^{\star} = (0.5, 2)$ (on the boundary), with $\tilde{f}(\tilde{x}^{\star}) = 1$.
+Checking the KKT conditions:
+\begin{itemize}[nosep]
+\item \textbf{Stationarity}: $\nabla\tilde{f}(\tilde{x}^{\star}) = [2(0.5+0.5),\;0]^T = [2, 0]^T = \mu^{\star} e_1$,
+  so $\mu^{\star} = 2$.
+\item \textbf{Dual feasibility}: $\mu^{\star} = 2 > 0$ \checkmark.
+\item \textbf{Primal feasibility}: $\tilde{x}_1^{\star} = 0.5 \geq 0.5$ \checkmark.
+\item \textbf{Complementary slackness}: $\mu^{\star}(\tilde{x}_1^{\star} - 0.5) = 2 \cdot 0 = 0$ \checkmark.
+\end{itemize}
+All four KKT conditions are satisfied.  The shadow price $\mu^{\star} = 2$ quantifies the
+sensitivity: relaxing the lower bound from $x_1 \geq 0.5$ to $x_1 \geq 0.5 - \varepsilon$
+reduces the optimal value by $\approx \mu^{\star}\varepsilon = 2\varepsilon$.  More precisely,
+the new optimum is $(\tilde{x}_1^{\star})' = 0.5 - \varepsilon$ with
+$\tilde{f}(0.5-\varepsilon, 2) = (0.5-\varepsilon+0.5)^2 = (1-\varepsilon)^2
+= 1 - 2\varepsilon + O(\varepsilon^2)$, confirming the first-order sensitivity $\partial f^{\star}/\partial b = -\mu^{\star} = -2$.
+In the original Benchmark B, the constraint is inactive ($\mu^{\star} = 0$) because the
+unconstrained minimum is already feasible.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Projected Gradient Descent (PGD)}
