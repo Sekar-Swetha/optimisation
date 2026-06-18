@@ -977,6 +977,25 @@ This lookahead corrects the momentum direction \emph{before} committing to the s
 theoretically optimal $O(1/k^2)$ convergence rate.  In experiments, Nesterov achieves $f = 0.479$
 on Rosenbrock vs.\ Heavy Ball's $f = 1.400$ after the same number of iterations, a $3\times$ improvement.
 
+\begin{remark}[Natural gradient and Adam's diagonal approximation]
+The \emph{natural gradient method} (Amari 1998) preconditions the steepest descent by the Fisher
+information matrix $F(\theta) = \mathbb{E}[\nabla\log p(y;\theta)\nabla\log p(y;\theta)^T]$:
+$\theta_{k+1} = \theta_k - \alpha F(\theta_k)^{-1}\nabla f(\theta_k)$.  For exponential family
+models, $F = \mathbb{E}[\nabla^2 f]$ (the expected Hessian), making natural gradient equivalent
+to Newton's method but derived from the geometry of the space of probability distributions
+(parameterised by $\theta$) rather than Euclidean parameter space.  The natural gradient step
+moves the same Euclidean distance as gradient descent but along the steepest descent \emph{in
+the statistical manifold}, invariant to reparameterisation of $\theta$.
+
+Adam can be interpreted as a diagonal approximation to the natural gradient:
+the second moment $\hat{v}_t^{(i)} \approx F^{(ii)}(\theta_t)$ estimates the diagonal Fisher,
+and $1/\sqrt{\hat{v}_t}$ approximates $F^{-1}$ via its diagonal.  This approximation is
+\emph{exact} when $F$ is diagonal (independent coordinates, as in NLP embeddings), which explains
+Adam's strong performance on sparse language model objectives.  For Rosenbrock, however,
+$F \approx \nabla^2 f$ has a large off-diagonal entry $-400x_1$, and the diagonal approximation
+misses this coupling entirely --- exactly the reason Adam underperforms Nesterov on Benchmark C.
+\end{remark}
+
 \textbf{Why Adam underperforms Nesterov on Rosenbrock:} Adam applies independent per-coordinate
 step-size scaling via $1/\sqrt{\hat{v}_t}$.  For Benchmark C, the Rosenbrock Hessian has a large
 off-diagonal term $\nabla^2 f(x)_{12} = -400x_1$, coupling the $(x_1, x_2)$ coordinates.  Adam's
@@ -1102,6 +1121,26 @@ $\nabla^2 f$ is $L_H$-Lipschitz, then the pure Newton iterates ($\alpha = 1$) sa
 where $\mu_H$ is the smallest eigenvalue of $\nabla^2 f(x^{\star})$.  This is \emph{quadratic}
 (superlinear) convergence, compared with gradient descent's linear rate $(1 - \mu/L)^k$.
 \end{theorem}
+\begin{proof}[Proof sketch]
+Let $e_k = x_k - x^{\star}$.  Since $\nabla f(x^{\star}) = 0$ and $\nabla^2 f$ is $L_H$-Lipschitz,
+\begin{equation}
+\nabla f(x_k) = \nabla f(x_k) - \nabla f(x^{\star}) = \int_0^1 \nabla^2 f(x^{\star} + te_k)\,e_k\,dt
+= \nabla^2 f(x_k)\,e_k + r_k,
+\label{eq:newton_grad_expand}
+\end{equation}
+where $\|r_k\| = \|\int_0^1 [\nabla^2 f(x^{\star}+te_k) - \nabla^2 f(x_k)]e_k\,dt\| \leq
+\frac{L_H}{2}\|e_k\|^2$ by Lipschitz continuity of $\nabla^2 f$.  The Newton update gives:
+\begin{align}
+e_{k+1} &= x_{k+1} - x^{\star} = x_k - [\nabla^2 f(x_k)]^{-1}\nabla f(x_k) - x^{\star} \notag \\
+&= e_k - [\nabla^2 f(x_k)]^{-1}(\nabla^2 f(x_k)\,e_k + r_k)
+ = -[\nabla^2 f(x_k)]^{-1} r_k.
+\end{align}
+Taking norms: $\|e_{k+1}\| \leq \|[\nabla^2 f(x_k)]^{-1}\| \cdot \|r_k\| \leq \frac{1}{\mu_H}
+\cdot \frac{L_H}{2}\|e_k\|^2 = \frac{L_H}{2\mu_H}\|e_k\|^2$, establishing quadratic convergence.
+The constant $C = L_H/(2\mu_H)$ depends on the Hessian's Lipschitz constant $L_H$ and minimum
+eigenvalue $\mu_H$ at $x^{\star}$; for Benchmark A (linear Hessian), $L_H = 0$, so Newton
+converges in \emph{exactly one step}.
+\end{proof}
 
 For a quadratic objective $f(\theta) = \frac{1}{2}\theta^T H \theta - b^T \theta + c$ with constant
 Hessian $H$, the pure Newton step is exact:
@@ -1641,21 +1680,23 @@ $\Delta x$, but requires $O(N^d)$ evaluations --- scaling catastrophically with 
 \begin{table}[H]
 \centering
 \caption{Q4: Comparison of derivative-free and gradient-based approaches.
-FE = function evaluations per iteration; $d$ = problem dimension.}
+FE = function evaluations per iteration; $d$ = problem dimension; $n$ = number of BO evaluations.}
 \label{tab:q4_comparison}
 \begin{tabular}{llcccc}
 \toprule
-\textbf{Method} & \textbf{Gradient Info} & \textbf{FE/iter} & \textbf{Convergence Rate} & \textbf{Scalability} & \textbf{Accuracy} \\
+\textbf{Method} & \textbf{Gradient} & \textbf{FE/iter} & \textbf{Convergence rate} & \textbf{Best use case} & \textbf{Guarantee} \\
 \midrule
-Exact GD & Full gradient & $1 + d$ & $O(1/k)$\textsuperscript{a} & Good & High \\
-FD GD ($\delta$ small) & Approx gradient & $d + 1$ & $O(1/k)$ & Moderate & High \\
-FD GD ($\delta$ large) & Poor approx & $d + 1$ & Poor & Moderate & Low \\
-Nesterov random & None & 2 & $O(d/k)$ & \textbf{Best} & Low \\
-Nelder--Mead & None & $\leq 3$ & Superlinear\textsuperscript{b} & Low-dim only & Moderate \\
-Grid search & None & $N^d$ total & N/A & Very poor & Grid-limited \\
+Exact GD & Full & $1 + d$ & $O(1/k)$ (s.c.) & Any smooth $f$ & Yes \\
+FD GD ($\delta$ optimal) & Approx ($O(\delta)$) & $d + 1$ & $O(1/k)$ & Low-$d$, smooth & Yes \\
+Central FD ($\delta$ opt.) & Approx ($O(\delta^2)$) & $2d$ & $O(1/k)$ & Low-$d$, smooth & Yes \\
+Auto-diff (AD) & Exact & $O(1)$ passes & $O(1/k)$ (s.c.) & Any $f$ via graph & Yes \\
+Nesterov random & None & 2 & $O(d/k)$ & High-$d$ gradient-free & Yes \\
+SPSA & None & 2 & $O(d/k)$ & High-$d$, Bernoulli pert. & Yes \\
+Nelder--Mead & None & 1--3 & Superlinear & $d \leq 10$, black-box & No ($d \geq 2$) \\
+Grid search & None & $N^d$ total & $O(\Delta x^2)$ bias & $d \leq 3$, cheap evals & Yes (global) \\
+Bayesian opt. & None & 1 (+$O(n^3)$) & Sub-linear regret & $d \leq 20$, expensive & Yes (regret) \\
 \bottomrule
-\multicolumn{6}{l}{\textsuperscript{a} Strongly convex: $(1 - \mu/L)^k$.
-\textsuperscript{b} No general convergence guarantee for non-smooth cases.} \\
+\multicolumn{6}{l}{\small s.c.\ = strongly convex; Bernoulli pert.\ = all coords perturbed simultaneously.} \\
 \end{tabular}
 \end{table}
 
