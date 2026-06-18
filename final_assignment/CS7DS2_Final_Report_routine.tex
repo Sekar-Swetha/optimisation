@@ -855,6 +855,29 @@ contrast, a fixed step size $\alpha$ (as used here) satisfies only the first con
 convergence to the noise ball of radius $O(\alpha G^2 / \mu)$ rather than to $x^{\star}$ itself.
 \end{remark}
 
+\begin{remark}[Polyak--Ruppert averaging]
+For SGD with decaying step sizes, the individual iterates $x_k$ have high variance even as they
+approach $x^{\star}$.  The Polyak--Ruppert averaging scheme (independently due to Polyak 1990
+and Ruppert 1988) replaces the last iterate with the running average
+$\bar{x}_k = \frac{1}{k}\sum_{j=1}^k x_j$.  For a $\mu$-strongly convex, $L$-smooth objective
+with bounded gradient noise $\mathbb{E}[\|g_k - \nabla f(x_k)\|^2] \leq \sigma^2$, averaged SGD
+with constant step $\alpha$ achieves:
+\begin{equation}
+\mathbb{E}\bigl[f(\bar{x}_k) - f^{\star}\bigr]
+  \;\leq\;
+  \frac{L\|x_0-x^{\star}\|^2}{2\mu k\alpha}
+  + \frac{\alpha\sigma^2}{2\mu}.
+\end{equation}
+Setting $\alpha = \|x_0-x^{\star}\|/({\sigma\sqrt{k}})$ gives the minimax-optimal rate
+$O(\sigma\|x_0-x^{\star}\|/\sqrt{k\mu})$, matching the Cram\'{e}r--Rao lower bound for stochastic
+first-order methods~\cite{nocedal2006}.  By contrast, the last iterate $x_k$ (without averaging)
+requires a decaying $\alpha_k \sim 1/k$ schedule to converge to $x^{\star}$, which is difficult
+to tune.  In practice, \emph{tail averaging} (averaging only the last $k/2$ iterates) discards
+the transient phase and achieves the same asymptotic variance.  This explains why batch normalisation
+and exponential moving averages are common in deep learning: they apply Polyak--Ruppert logic to
+model parameters.
+\end{remark}
+
 \begin{remark}[Variance reduction methods]
 The fundamental limitation of mini-batch SGD is the residual gradient variance $\sigma_g^2/b$,
 which prevents convergence to the exact minimum for fixed $\alpha$.  \emph{Variance reduction}
@@ -931,6 +954,38 @@ $k^2/1 = 150^2/1 = 22{,}500$ relative to GD, though in practice the constant in 
 differs; the empirically observed improvement factor is $3.39/0.479 \approx 7\times$, consistent
 with the theoretical prediction that acceleration becomes increasingly beneficial as the number of
 iterations grows.
+
+\begin{remark}[Continuous-time ODE interpretation of momentum methods]
+Gradient descent with step size $\alpha \to 0$ approximates the \emph{gradient flow} ODE
+$\dot{x}(t) = -\nabla f(x(t))$, whose solution converges to $x^{\star}$ at rate
+$f(x(t)) - f^{\star} \leq C e^{-2\mu t}$ for $\mu$-strongly convex $f$.  The Heavy Ball method
+corresponds to a \emph{second-order} ODE:
+\begin{equation}
+\ddot{x}(t) + \gamma\,\dot{x}(t) + \nabla f(x(t)) = 0,
+\label{eq:heavyball_ode}
+\end{equation}
+which is a \emph{damped harmonic oscillator}: the term $\gamma\dot{x}$ provides friction, while
+$\nabla f(x)$ provides the restoring force.  For a quadratic $f$ with eigenvalue $\lambda$, the
+solution oscillates as $x(t) \approx x^{\star} + e^{-\gamma t/2}(A\cos(\omega t) + B\sin(\omega t))$
+where $\omega = \sqrt{\lambda - \gamma^2/4}$.  \emph{Critical damping} ($\gamma = 2\sqrt{\lambda}$,
+no oscillation, fastest approach) mirrors the optimal momentum parameter $\beta^{\star} =
+((\sqrt\kappa-1)/(\sqrt\kappa+1))^2$ in the discrete case: for the worst-conditioned eigendirection
+(eigenvalue $\mu$), optimal damping is $\gamma^{\star} = 2\sqrt{\mu}$, with the damped Newton rate
+$e^{-\sqrt{\mu}t}$ matching Heavy Ball's $O(\sqrt\kappa)$ iteration count.
+
+Nesterov's method, in the continuous limit of Su, Boyd, and Cand\`es (2016), corresponds to a
+\emph{time-varying} damping:
+\begin{equation}
+\ddot{x}(t) + \frac{3}{t}\,\dot{x}(t) + \nabla f(x(t)) = 0.
+\label{eq:nesterov_ode}
+\end{equation}
+The damping coefficient $3/t \to 0$ decreases over time (less friction near the optimum), explaining
+the accelerating convergence.  The energy function $E(t) = t^2(f(x(t)) - f^{\star}) +
+2\|x(t) + \frac{t}{2}\dot{x}(t) - x^{\star}\|^2$ is non-increasing along trajectories of
+\eqref{eq:nesterov_ode}, proving the $O(1/t^2)$ rate.  This continuous-time viewpoint shows that
+Nesterov acceleration is \emph{not an ad hoc trick} but the natural discretisation of a specific
+damping schedule that balances inertia and friction.
+\end{remark}
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -1223,6 +1278,34 @@ $s_j = x_{j+1} - x_j$ and $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$, and compute
 direction $p_k = H_k^{-1}g_k$ via two passes over the history using the
 \emph{two-loop recursion}~\cite{nocedal2006}.  The result is an approximation to the true
 Newton direction that becomes exact as the history length $m \to d$.
+
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop Recursion (computes $p_k = H_k^{-1}g_k$)}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+\Require Gradient $g \gets \nabla f(x_k)$; history $\{(s_j, y_j)\}$, $j = k{-}m,\ldots,k{-}1$
+where $s_j = x_{j+1}-x_j$, $y_j = \nabla f(x_{j+1}) - \nabla f(x_j)$
+\State $q \gets g$ \Comment{Backward pass}
+\For{$j = k-1$ \textbf{downto} $k-m$}
+    \State $\rho_j \gets 1\,/\,(y_j^T s_j)$ \Comment{Curvature scaling (requires $y_j^T s_j > 0$)}
+    \State $\alpha_j \gets \rho_j\, s_j^T q$
+    \State $q \gets q - \alpha_j\, y_j$
+\EndFor
+\State $\gamma_k \gets s_{k-1}^T y_{k-1}\,/\,\|y_{k-1}\|^2$ \Comment{Initial Hessian scaling}
+\State $r \gets \gamma_k\, q$ \Comment{Forward pass}
+\For{$j = k-m$ \textbf{to} $k-1$}
+    \State $\beta_j \gets \rho_j\, y_j^T r$
+    \State $r \gets r + s_j(\alpha_j - \beta_j)$
+\EndFor
+\State \Return $p_k = r$ \quad (then $x_{k+1} \gets x_k - \alpha\,p_k$ with Wolfe line search)
+\end{algorithmic}
+\end{algorithm}
+
+Each pass iterates over the $m$ history pairs in $O(md)$ operations (vs $O(d^3)$ for a dense
+solve).  The curvature condition $y_j^T s_j > 0$ must hold at each step; if violated (e.g.\ near
+a saddle point), the offending pair is discarded.  Typical $m = 5$--$20$ is sufficient for
+superlinear convergence.  The initial scaling $\gamma_k$ sets the implicit Hessian to
+$\gamma_k^{-1} I$ before the rank-$2m$ update, matching the most recent curvature seen.
 
 \begin{table}[H]
 \centering
@@ -2138,6 +2221,53 @@ Nelder--Mead        & Q4  & Superlinear & No & No & --- & 160 \\
 \multicolumn{7}{l}{\textsuperscript{c} Local quadratic convergence; global convergence requires line search.} \\
 \end{tabular}
 \end{table}
+
+\subsection*{Unifying Framework: Mirror Descent and Bregman Divergences}
+
+Many of the methods studied in this report are special cases of a single framework:
+\emph{mirror descent}.  Given a strictly convex \emph{potential} $\phi : \mathcal{X} \to \mathbb{R}$,
+the Bregman divergence is:
+\begin{equation}
+D_\phi(x,\, y)
+  = \phi(x) - \phi(y) - \langle \nabla\phi(y),\, x - y \rangle \geq 0.
+\label{eq:bregman}
+\end{equation}
+The mirror descent update at step $k$ is:
+\begin{equation}
+x_{k+1}
+  = \arg\min_{x \in \mathcal{X}}\bigl\{\langle g_k,\, x \rangle
+    + \tfrac{1}{\alpha}D_\phi(x,\, x_k)\bigr\},
+\label{eq:mirror_descent}
+\end{equation}
+which minimises a \emph{linear} model of $f$ (using subgradient $g_k$) while staying close to
+$x_k$ in the Bregman sense.  The choice of $\phi$ tailors the geometry to the constraint set:
+
+\begin{itemize}[nosep]
+\item \textbf{Euclidean geometry} ($\phi(x) = \tfrac{1}{2}\|x\|^2$, $D_\phi(x,y) = \tfrac{1}{2}\|x-y\|^2$):
+  \eqref{eq:mirror_descent} solves $\min_x\{\langle g_k, x\rangle + \frac{1}{2\alpha}\|x-x_k\|^2\}$
+  over $\mathcal{X}$, yielding exactly \textbf{projected gradient descent}:
+  $x_{k+1} = \Pi_\mathcal{X}(x_k - \alpha g_k)$.  Used throughout Q5 (PGD) and all unconstrained
+  methods (where $\mathcal{X} = \mathbb{R}^d$, projection is trivial).
+
+\item \textbf{Negative entropy} ($\phi(x) = \sum_i x_i\log x_i$ on the simplex
+  $\mathcal{X} = \Delta_d$): $D_\phi(x,y) = \sum_i x_i\log(x_i/y_i)$ is the KL divergence.
+  Mirror descent recovers the \emph{exponentiated gradient} update
+  $x_{k+1}^{(i)} \propto x_k^{(i)}e^{-\alpha g_k^{(i)}}$, which is natural for probability
+  simplex constraints (e.g.\ online learning over strategies in a game).
+
+\item \textbf{Log-barrier geometry} on a polytope: replacing the Bregman proximity with a
+  linearisation at a vertex of $\mathcal{X}$ recovers \textbf{Frank--Wolfe}.  The LMO step
+  $z_k = \arg\min_{z \in \mathcal{X}}\langle g_k, z\rangle$ corresponds to a \emph{gradient
+  step in the dual space} induced by the log-barrier of the polytope, and the convex
+  combination $x_{k+1} = (1-\gamma_k)x_k + \gamma_k z_k$ mirrors a prox step in that geometry.
+\end{itemize}
+
+This unification clarifies the design principle: \emph{match the geometry of $\phi$ to the
+geometry of the constraint set}.  Euclidean geometry ($\phi = \tfrac{1}{2}\|x\|^2$) is optimal
+for $\ell_2$-ball and halfspace constraints; entropic geometry ($\phi = \sum x_i\log x_i$) for
+the probability simplex; log-barrier geometry for general polytopes.  The $O(1/k)$ convergence
+rate holds for all instances of mirror descent on $L$-smooth objectives~\cite{nocedal2006},
+unifying the convergence analyses of PGD, FW, and exponentiated gradient.
 
 \subsection*{Practical Recommendations}
 
