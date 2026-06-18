@@ -288,6 +288,20 @@ inverse (a $d\times d$ matrix).  Adaptive methods approximate this ideal cheaply
 All diagonal adaptive methods are therefore \emph{diagonal-matrix preconditioned} gradient
 descent, in contrast to the full-matrix preconditioning of Newton's method.
 
+\begin{remark}[Adagrad as Diagonal Natural Gradient]
+The \emph{natural gradient} (Amari 1998) is the steepest descent direction in the Riemannian
+geometry defined by the Fisher information matrix $F = \mathbb{E}[\nabla\log p(x;\theta)
+\nabla\log p(x;\theta)^T]$: the natural gradient step is $-F^{-1}(\theta)\nabla\mathcal{L}(\theta)$.
+For online learning with squared loss, $F \approx \mathbb{E}[g_k g_k^T]$.  Adagrad's diagonal
+preconditioning $\mathrm{diag}(G_k)^{-1/2}$ can be interpreted as a \emph{diagonal approximation}
+to $F^{-1/2}$: it scales each parameter by the inverse root of its accumulated squared gradient,
+approximating the Fisher curvature for each coordinate independently.  This connection explains
+Adagrad's particularly strong performance on sparse-gradient problems (e.g., natural language
+processing), where infrequent feature gradients have small Fisher curvature and benefit from
+larger effective steps.  The full-matrix generalisation (OnlineNewton, FGNL) achieves the optimal
+$O(\sqrt{k})$ regret using the full $F_k^{-1/2}$ preconditioning, but at $O(d^2)$ cost per step.
+\end{remark}
+
 \begin{definition}[Polyak Step Size]
 Given an estimate $f^\star$ of the optimal value, the Polyak step at $x_k$ is
 \begin{equation}
@@ -305,6 +319,26 @@ for strongly convex $f$ without requiring knowledge of $L$ or $\mu$.
 When $f^\star$ is misspecified (e.g.\ $f^\star=0$ but the true minimum is $\approx0.48$), as
 $\|\nabla f(x_k)\|\to0$ while $f(x_k)-f^\star\to f_{\mathrm{true}}^\star>0$, the step size
 $\alpha_k\to\infty$, causing divergence.
+\end{remark}
+
+\begin{remark}[Barzilai--Borwein Step: Gradient-Only Curvature Estimation]
+The \emph{Barzilai--Borwein} (BB) step~[8] offers a gradient-only approximation of the
+Newton step that sidesteps both the need for $f^\star$ (unlike Polyak) and the cost of
+computing the Hessian (unlike Newton):
+\begin{equation}
+\alpha_k^{\rm BB} = \frac{s_{k-1}^T y_{k-1}}{\|y_{k-1}\|^2},\quad
+s_{k-1} = x_k - x_{k-1},\quad y_{k-1} = \nabla f(x_k) - \nabla f(x_{k-1}).
+\end{equation}
+By the secant condition, $y_{k-1} \approx H_{k-1} s_{k-1}$, so
+$\alpha_k^{\rm BB} \approx s^T H s / \|Hs\|^2 = 1/L_{\rm local}$ along the previous
+step direction --- a data-driven estimate of the inverse local smoothness constant.
+Like the Polyak step, BB avoids specifying $L$ or $\mu$ globally.  Unlike Polyak, BB
+does \emph{not} require $f^\star$; instead it learns curvature from successive iterates.
+However, the BB step does \emph{not} satisfy the descent lemma: it can increase the
+objective value, requiring a non-monotone line search or the Grippo--Lampariello--Lucidi
+(GLL) condition $f(x_{k+1}) \le \max_{0\le j\le m} f(x_{k-j}) - c\alpha_k\|g_k\|^2$
+for convergence guarantees.  For quadratics, BB achieves superlinear convergence by
+exploiting secant curvature, in contrast to GD's linear $O(\rho^k)$ rate.
 \end{remark}
 
 \subsection{Algorithm Formulations}
@@ -622,6 +656,24 @@ optimisation --- no first-order method can achieve a better worst-case rate (per
 complexity lower bound proved in [1]).
 \end{theorem}
 
+\begin{proof}[Proof sketch of Theorem~1 (Lyapunov argument)]
+The key is the \emph{energy (Lyapunov) function}
+\begin{equation}
+E_k \;=\; k^2\bigl(f(x_k) - f^\star\bigr) + 2L\|v_k - x^\star\|^2,
+\end{equation}
+where $v_k$ is an auxiliary sequence maintained by the algorithm.  Using the $L$-smoothness
+descent lemma and the Nesterov momentum update rule, one can show $E_{k+1} \le E_k$ for all
+$k\ge1$.  Since $E_0 = 2L\|x_0-x^\star\|^2$, telescoping gives $E_k \le E_0$, hence
+\begin{equation}
+f(x_k) - f^\star \;\le\; \frac{E_0}{k^2} = \frac{2L\|x_0-x^\star\|^2}{k^2}.
+\end{equation}
+The momentum schedule $\beta_k = (k-1)/(k+2)$ is chosen precisely to make the Lyapunov
+decrease $E_{k+1} \le E_k$ hold: it satisfies $(1-\beta_k)k^2 = k(k-1)$, which ensures the
+cancellation of cross terms in the energy inequality.  For Heavy Ball, no such telescoping
+Lyapunov function exists for \emph{general} convex $f$, which is why Heavy Ball does not achieve
+$O(1/k^2)$ outside of quadratics.
+\end{proof}
+
 \begin{remark}[Heavy Ball vs.\ Nesterov]
 The Heavy Ball method (Section~\ref{sec:q1}, Algorithm~\ref{alg:heavyball}) also uses a momentum
 term but does \emph{not} evaluate the gradient at the lookahead point.  This subtle difference
@@ -631,11 +683,42 @@ Section~\ref{sec:q1}) but fails to achieve $O(1/k^2)$ on general convex problems
 diverge on some non-strongly-convex problems~[8].  Nesterov's lookahead
 $\tilde{x}_k = x_k + \beta_k z_k$ enables a ``corrected gradient'' that accounts for where the
 iterate is \emph{going}, not just where it is, yielding the universally optimal $O(1/k^2)$ rate.
+The Lyapunov proof above explains \emph{why}: the lookahead provides the precise algebraic
+cancellation needed for $E_{k+1}\le E_k$.  Without it (Heavy Ball), no such universal energy
+decrease is guaranteed.
+\end{remark}
+
+\begin{remark}[Oracle Complexity Lower Bound]
+The $O(1/k^2)$ rate in Theorem~1 is \emph{optimal} in a precise sense: Nemirovsky and
+Yudin~[8] proved that for any first-order method (one that uses only $\nabla f$ evaluations),
+there exists an $L$-smooth convex function such that, after $k$ gradient evaluations starting
+from $x_0$:
+\begin{equation}
+f(x_k) - f^\star \;\ge\; \frac{3L\|x_0-x^\star\|^2}{32(k+1)^2}.
+\end{equation}
+No first-order method can improve the $1/k^2$ rate in the worst case.  Nesterov's method
+achieves this lower bound (up to constant factors), making it \emph{minimax optimal} among
+all first-order methods.  This is a fundamental result: any attempt to improve further must
+use more than one gradient evaluation per step (e.g., conjugate gradient) or higher-order
+information (Newton, L-BFGS).
 \end{remark}
 
 Compare with the $O(1/k)$ rate of vanilla gradient descent.  Nesterov's key insight is the
 \emph{lookahead}: computing the gradient at the \emph{extrapolated} point $\tilde{x}_k$
 rather than $x_k$ allows the method to correct its trajectory before overshooting.
+
+For strongly convex $f$ ($\mu > 0$), Nesterov acceleration also achieves the optimal
+\emph{linear} convergence rate:
+\begin{equation}
+f(x_k) - f^\star \;\le\; 2(f(x_0) - f^\star)\exp\!\left(-\frac{k}{\sqrt{\kappa}}\right),
+\end{equation}
+with contraction per iteration $\exp(-1/\sqrt{\kappa}) \approx 1-1/\sqrt{\kappa}$, vs.\
+GD's $1-1/\kappa$.  The $\sqrt{\kappa}$ factor in the exponent represents the fundamental
+improvement of acceleration: on Benchmark~C ($\kappa\approx500$), GD requires
+$\kappa\ln(1/\varepsilon)\approx 500\times6.9 \approx 3450$ iterations to reduce the gap
+by $10^{3}$, while Nesterov requires only $\sqrt{500}\times\ln(1/\varepsilon)\approx22\times6.9
+\approx 154$ iterations --- a $\sqrt{500}\approx22$-fold reduction.  This theoretical gap is
+the key motivation for Nesterov acceleration on ill-conditioned problems.
 
 Figure~\ref{fig:nesterov_lookahead} visualises the lookahead mechanism on Benchmark~B and
 contrasts Nesterov with Heavy Ball, illustrating why the gradient evaluation point matters.
@@ -874,6 +957,30 @@ step-size SGD converges to a neighbourhood of the optimum:
 \end{equation}
 \end{proposition}
 
+\begin{theorem}[Mini-Batch Linear Speedup and Optimal Batch Size]
+For a $\mu$-strongly convex, $L$-smooth objective with per-sample noise variance $\sigma^2$,
+mini-batch SGD with diminishing step size achieves, after $T$ total gradient steps (each
+computing $b$ samples):
+\begin{equation}
+\mathbb{E}[f(\theta_T)] - f^\star \;\le\;
+\underbrace{\frac{C\sigma}{\mu\sqrt{bT}}}_{\text{stochastic term}}
++ \underbrace{\frac{L\|\theta_0-\theta^\star\|^2}{2} e^{-\mu T/L}}_{\text{deterministic term}}.
+\end{equation}
+The first term decreases as $O(1/\sqrt{bT})$: a $c$-fold increase in batch size $b$ reduces
+the noise by $\sqrt{c}$, providing \emph{linear speedup} in the batch size.  However, this
+speedup only holds in the \emph{stochastic-dominated regime}, when $k\le O(L\sigma^2/(b\mu^2))$.
+For larger $k$, the deterministic exponential decay dominates, and further increasing $b$
+gives no benefit.  The crossover defines the \emph{optimal batch size} for a fixed iteration
+budget~$T$:
+\begin{equation}
+b^\star = \frac{\sigma^2}{\mu^2 \|\theta_0-\theta^\star\|^2} \cdot \frac{1}{T}.
+\end{equation}
+In practice, for the linear regression Benchmark~A: $\sigma^2\approx7.3$ (per-sample gradient
+variance at $\theta_0$, from Figure~\ref{fig:q2_sgd_variance}), $\mu\approx L$ (well-conditioned),
+so $b^\star\sim\sigma^2/(\mu^2 T)\ll 1000$ for $T=50\times 25=1250$ updates, confirming that
+both tested batch sizes (5 and 40) lie in the linear speedup regime.
+\end{theorem}
+
 For Benchmark~A: $\sigma^2$ is the noise from the data labels, so $f^\star = J^\star = \sigma^2_{\rm obs}/(2)$
 plus contributions from the finite dataset.  With observation noise $\varepsilon^{(i)}\sim\mathcal{N}(0,\sigma^2_{\rm obs})$
 and the Bayes-optimal linear predictor fitting $\theta^\star$, the irreducible loss is
@@ -1048,6 +1155,28 @@ to maintain the quadratic model accuracy across each Newton iterate.  Backtracki
 would automate this damping adaptively.
 \end{remark}
 
+\begin{definition}[Newton Decrement]
+The \emph{Newton decrement} $\lambda(x)$ at a point $x$ is defined as:
+\begin{equation}
+\lambda(x) \;=\; \bigl(\nabla f(x)^T\, [\nabla^2 f(x)]^{-1}\, \nabla f(x)\bigr)^{1/2}
+\;=\; \|p_k\|_{H_k},
+\end{equation}
+where $p_k = H_k^{-1}g_k$ is the Newton direction.  The quantity $\lambda(x)^2/2$ is the
+predicted decrease in $f$ from the quadratic model: $m_k(x - p_k) = f(x) - \lambda(x)^2/2$.
+The Newton decrement is an affine-invariant measure of proximity to $x^\star$:
+$\lambda(x^\star)=0$, and $\lambda(x)\to0$ certifies convergence without knowing $f^\star$.
+It also determines the two phases of damped Newton:
+\begin{itemize}[nosep]
+  \item \emph{Damping phase} ($\lambda(x) > \eta$ for some threshold $\eta\sim1$): a backtracking
+    line search step $\alpha_k < 1$ is required; convergence is at least linear.
+  \item \emph{Quadratic phase} ($\lambda(x) \le \eta$): full step $\alpha_k=1$ is safe;
+    quadratic convergence begins.
+\end{itemize}
+In our implementation, Tikhonov damping $\lambda_{\rm reg}=10^{-8}$ ensures positive definiteness
+but the step size $\alpha < 1$ is fixed, placing us in the damping phase throughout ---
+which explains why Newton does not achieve exact quadratic convergence on Benchmark~C.
+\end{definition}
+
 Settings: GD uses 80 iterations; Newton uses 20 iterations with Hessian damping $\lambda = 10^{-8}$.
 
 \begin{table}[H]
@@ -1210,6 +1339,34 @@ from the $m$ most recent gradient differences, achieving superlinear convergence
 per step with only $O(md)$ memory.  L-BFGS with $m=10$--$30$ is the de facto standard
 second-order method for unconstrained ML problems.
 
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop Recursion}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+\Require Gradient $g_k$, stored pairs $\{(s_i, y_i)\}_{i=k-m}^{k-1}$ where
+  $s_i = x_{i+1}-x_i$, $y_i = \nabla f(x_{i+1})-\nabla f(x_i)$
+\State $q \gets g_k$
+\For{$i = k-1,\; k-2,\; \ldots,\; k-m$} \Comment{Backward pass: accumulate curvature}
+    \State $\rho_i \gets 1/(y_i^T s_i)$
+    \State $\alpha_i \gets \rho_i\, s_i^T q$;\quad $q \gets q - \alpha_i\, y_i$
+\EndFor
+\State $r \gets H_k^0\, q$ \Comment{Apply initial approximation; typically $H_k^0 = \frac{s_{k-1}^Ty_{k-1}}{\|y_{k-1}\|^2}I$}
+\For{$i = k-m,\; k-m+1,\; \ldots,\; k-1$} \Comment{Forward pass: apply updates}
+    \State $\beta_i \gets \rho_i\, y_i^T r$;\quad $r \gets r + s_i(\alpha_i - \beta_i)$
+\EndFor
+\State \Return $d_k = -r$ \Comment{L-BFGS search direction approximating $-H_k^{-1}g_k$}
+\end{algorithmic}
+\end{algorithm}
+
+The two-loop recursion applies $m$ rank-2 BFGS updates to $H_k^0 g_k$ in $O(md)$ operations,
+without forming the $d\times d$ inverse Hessian.  The curvature pairs $(s_i, y_i)$ encode
+second-order information: the secant condition $H_k s_i \approx y_i$ is satisfied by
+construction.  L-BFGS achieves \emph{superlinear} convergence near $x^\star$: after entering
+the quadratic regime, the number of correct digits approximately doubles every $m$ iterations,
+faster than GD's linear rate but slower than Newton's exact quadratic.  For this report's
+problems ($d=2$), full Newton is feasible; the algorithm above illustrates the scalable
+alternative for large $d$.
+
 \begin{table}[H]
 \centering
 \caption{Computational cost comparison for second-order methods ($d$ = dimension).}
@@ -1255,6 +1412,13 @@ for double precision.  The assignment tests $\delta = 0.05$ (close to useful) an
 $\delta = 0.8$ (truncation-dominated, poor).  This requires $d+1 = 3$ function evaluations per
 iteration for $d=2$.
 
+\textbf{Cost comparison:} Forward FD requires $d+1$ evaluations per gradient (one at $x$ plus
+one perturbation per coordinate).  Central FD requires $2d$ evaluations (two perturbations per
+coordinate, no re-use of $f(x)$).  For $d=2$ (this assignment): FD costs 3 vs.\ central 4
+evaluations --- a small difference.  For large $d$: FD costs $d+1$ while central costs $2d$,
+a factor of $\sim2$ --- this doubles the wall-clock time per gradient step, a significant
+overhead in expensive simulations.
+
 \textbf{Central differences} offer a higher-order alternative:
 \begin{equation}
 \frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x - \delta e_i)}{2\delta}.
@@ -1282,6 +1446,25 @@ Complex step & $O(\delta^2)$ (exact) & $d$ & $\delta \to 0$ (no roundoff) \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}[Complex-Step Differentiation: Eliminating Roundoff Error]
+The \emph{complex-step} method achieves $O(\delta^2)$ accuracy with only $d$ function
+evaluations (same as forward FD) and \emph{no roundoff error}:
+\begin{equation}
+\frac{\partial f}{\partial x_i}(x) = \frac{\mathrm{Im}[f(x + \mathrm{i}\delta e_i)]}{\delta}
++ O(\delta^2),
+\end{equation}
+where $\mathrm{i} = \sqrt{-1}$ and $f$ is analytically continued to the complex plane.
+The key: by perturbing in the \emph{imaginary} direction rather than the real direction,
+the $O(\delta)$ truncation term appears in the \emph{real part} (which is discarded), while
+the gradient appears in the imaginary part.  Crucially, there is \emph{no subtraction of
+nearly-equal floating-point numbers}, so roundoff error does not amplify as $\delta\to0$.
+The optimal step $\delta\approx10^{-100}$ (or even machine epsilon) achieves near-exact
+gradients in double precision.  The limitation: $f$ must be analytically extensible to
+$\mathbb{C}$ (analytic functions satisfy this; non-smooth functions, branching, and
+integer operations do not).  For the smooth objectives in this assignment, complex-step
+would give essentially exact gradients at the cost of complex arithmetic in the forward pass.
+\end{remark}
 
 \begin{figure}[H]
 \centering
@@ -1628,8 +1811,21 @@ provide additional safety margin.}
 
 \textbf{Augmented Lagrangian methods} (not implemented here) address this conditioning issue
 by combining penalty terms with explicit Lagrange multiplier updates:
-$L_\lambda(x, \mu) = f(x) + \mu g(x) + \frac{\lambda}{2}[\max(0, g(x))]^2$.  This achieves
-exact feasibility at finite penalty while maintaining better conditioning than pure penalty methods.
+\begin{equation}
+L_\lambda(x, \mu) = f(x) + \mu g(x) + \frac{\lambda}{2}[\max(0, g(x))]^2.
+\end{equation}
+The Augmented Lagrangian (Method of Multipliers) algorithm alternates:
+\begin{align}
+x^{k+1} &= \arg\min_x\; L_\lambda(x, \mu^k) \quad \text{(unconstrained subproblem)}, \\
+\mu^{k+1} &= \mu^k + \lambda\, \max(0, g(x^{k+1})) \quad \text{(Lagrange multiplier update)}.
+\end{align}
+At each outer iteration $k$, the multiplier $\mu^k$ adapts so that the penalised objective
+$L_\lambda$ has a stationary point that approaches the true constrained optimum as $\mu^k$
+converges.  The key advantage: with correct $\mu^\star$, the augmented Lagrangian achieves
+exact feasibility at \emph{finite} $\lambda$, avoiding the ill-conditioning that grows as
+$\lambda\to\infty$ in the pure penalty method.  The condition number of $\nabla^2 L_\lambda$ at
+the solution is bounded by $\max(h_{11}+\lambda p, h_{22})/\min(h_{11}, h_{22})$ where $p\in[0,1]$
+is the penalty activation fraction, which is $O(1)$ when $\mu$ is well-calibrated.
 
 \textbf{Projection-free alternative:} For constraint sets where the LMO is cheap but the
 projection $\Pi_\mathcal{X}$ is expensive (e.g., nuclear norm ball, spectrahedra), the
@@ -1876,6 +2072,26 @@ without knowing $f^\star$.  A practical stopping rule is $g_k \le \varepsilon$, 
 that $f(x_k) - f^\star \le \varepsilon$.  This is in contrast with gradient descent, where one
 must monitor $\|\nabla f(x_k)\|^2 \le 2\mu\varepsilon$ (requiring knowledge of $\mu$), or use
 a relative criterion $f(x_k) - f(x_{k-1}) \le \varepsilon$.
+
+\begin{remark}[Away-Step Frank--Wolfe: Resolving the Zig-Zag]
+The standard FW zig-zag (visible in Figure~\ref{fig:q6_evolution}) can be resolved by the
+\emph{Away-Step Frank--Wolfe} (AFW) variant~[7].  At each iteration, AFW computes both the
+standard FW vertex $z_k^+ = \arg\min_{z\in\mathcal{X}}\nabla f(x_k)^Tz$ (the move-towards
+direction) and the \emph{away vertex} $z_k^- = \arg\max_{v\in S_k}\nabla f(x_k)^Tv$, where
+$S_k$ is the active set of vertices with positive weight in the current convex decomposition
+of $x_k$.  The step is:
+\begin{equation}
+x_{k+1} = \begin{cases}
+x_k + \gamma_k(z_k^+ - x_k) & \text{if the FW step gives more descent,}\\
+x_k - \gamma_k(z_k^- - x_k) & \text{if the away step gives more descent.}
+\end{cases}
+\end{equation}
+The away step \emph{reduces} the weight on $z_k^-$ in the active set, effectively moving away
+from a bad vertex.  AFW achieves \emph{linear} convergence $O(\rho^k)$ for strongly convex
+$f$~(vs.\ $O(1/k)$ for standard FW), at the cost of maintaining the active set $S_k$
+($O(k)$ memory per iteration).  This linear rate matches projected GD's rate for constrained
+strongly convex problems, while preserving the projection-free (LMO-only) property of FW.
+\end{remark}
 
 \begin{table}[H]
 \centering
