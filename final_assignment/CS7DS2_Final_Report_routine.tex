@@ -184,13 +184,21 @@ $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \leq 5,\; -5 \leq x_2 \leq 10
 
 \subsection{Theoretical Background}
 
-Let $f:\mathbb{R}^d\to\mathbb{R}$ be $L$-smooth (gradient $L$-Lipschitz) and $\mu$-strongly
-convex.  Standard gradient descent with constant step $\alpha\le 1/L$ satisfies
+Let $f:\mathbb{R}^d\to\mathbb{R}$ be $L$-smooth (i.e., $\|\nabla f(x) - \nabla f(y)\| \le L\|x-y\|$
+for all $x,y$) and $\mu$-strongly convex ($f(y) \ge f(x) + \nabla f(x)^T(y-x) + \frac{\mu}{2}\|y-x\|^2$).
+Standard gradient descent with constant step $\alpha\le 1/L$ satisfies
 \begin{equation}
 f(x_k) - f^\star \;\le\; \left(1 - \frac{\mu}{L}\right)^k \bigl(f(x_0) - f^\star\bigr),
 \end{equation}
-converging linearly at rate $1-1/\kappa$ where $\kappa=L/\mu$.  Large $\kappa$ forces a small
-step size $\alpha \approx 1/L$ and slow convergence, motivating adaptive methods.
+converging \emph{linearly} at rate $\rho = 1-\mu/L = 1 - 1/\kappa$ per iteration, where
+$\kappa=L/\mu$ is the condition number.  On Benchmark~A ($\kappa\approx1$), GD converges in
+a few tens of iterations.  On Benchmark~C ($\kappa\approx500$), GD's rate is $\approx1-1/500$
+per iteration, requiring hundreds of iterations for a single order-of-magnitude reduction ---
+motivating the adaptive and momentum methods studied here.
+
+A larger step $\alpha > 2/L$ causes divergence due to the descent lemma violation.  The
+condition $\alpha \le 1/L$ guarantees $f(x_{k+1}) \le f(x_k) - \frac{\alpha}{2}\|\nabla f(x_k)\|^2$
+(sufficient decrease), which each method in this section attempts to improve upon.
 
 \begin{definition}[Polyak Step Size]
 Given an estimate $f^\star$ of the optimal value, the Polyak step at $x_k$ is
@@ -372,11 +380,23 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 \\
 \end{tabular}
 \end{table}
 
-\textbf{Key finding:} The Polyak step size is highly sensitive to the accuracy of $f^\star$.  When
-$f^\star = 0$ deviates from the true minimum (Benchmarks A and B), the method diverges because
-$\alpha_k = (f(x_k) - 0)/(\|\nabla f(x_k)\|^2 + \varepsilon) \to \infty$ as $\|\nabla f\| \to 0$
-while $f(x_k) \to f^\star_{\mathrm{true}} > 0$.  On Benchmark~C where $f^\star = 0$ is exact,
-Polyak achieves the best convergence among all Q1 methods.
+\textbf{Key finding:} The Polyak step size is highly sensitive to the accuracy of $f^\star$.
+When $f^\star = 0$ deviates from the true minimum (Benchmarks A and B), the iterates eventually
+enter a regime where $f(x_k) \to f^\star_{\mathrm{true}} > 0$ while $\|\nabla f(x_k)\| \to 0$,
+causing $\alpha_k = (f(x_k) - 0)/(\|\nabla f(x_k)\|^2 + \varepsilon) \to \infty$.  An
+unbounded step size violates the descent lemma, leading to overshoot and oscillation.
+This sensitivity is the fundamental weakness of the Polyak rule in practice.
+
+\textbf{Adagrad's coordinate-wise adaptation} provides a notable advantage on Benchmark~C:
+the large transverse gradient (magnitude $\sim$hundreds near the start) accumulates rapidly
+in $G_k$, reducing the effective step in that direction while maintaining a larger step along
+the flatter valley floor.  This implicit anisotropic preconditioning helps navigate the
+banana-shaped valley.
+
+\textbf{RMSprop's limitation on Rosenbrock} stems from its exponential forgetting factor
+$\beta=0.9$: with an effective window of $1/(1-0.9)=10$ iterations, it ``forgets'' the
+history of large transverse gradients quickly, so it cannot exploit the long-term curvature
+difference as effectively as Adagrad.
 
 \subsection{Contour Plots with Optimisation Trajectories}
 
@@ -650,8 +670,12 @@ $b \in \{5, 40\}$, 50~epochs, with data shuffled at every epoch.
 \end{algorithm}
 
 With $m=1000$ samples, batch size $b=5$ gives $200$ gradient steps per epoch, while $b=40$ gives
-$25$ steps per epoch.  The variance of the stochastic gradient is $\mathrm{Var}[\hat{g}] \propto
-1/b$, so smaller batches provide noisier but more frequent updates.
+$25$ steps per epoch.  The stochastic gradient $\hat{g}_{\mathcal{B}} = \frac{1}{b}X_\mathcal{B}^T
+(X_\mathcal{B}\theta - y_\mathcal{B})$ is an unbiased estimator of $\nabla J(\theta)$, with
+variance $\mathrm{Var}[\hat{g}] = \frac{1}{b}\sigma_{\mathrm{batch}}^2$ where
+$\sigma_{\mathrm{batch}}^2$ depends on the data spread.  SGD with constant step size cannot
+converge to $J^\star$ but oscillates within a ball of radius $O(\alpha\sigma^2_{\mathrm{batch}}/b)$
+around the optimum.  This explains the oscillation visible near the noise floor.
 
 \begin{figure}[H]
 \centering
@@ -774,6 +798,16 @@ A key advantage of Newton's method is affine invariance: the Newton step $p_k = 
 identical for any invertible linear reparameterisation of the problem.  This means Newton's method
 is unaffected by poor conditioning, unlike gradient descent.  For Benchmark~A~(quadratic), this
 implies exact convergence in one step.
+\end{remark}
+
+\begin{remark}[Damped Newton on Non-Quadratic Problems]
+For the Rosenbrock function, the undamped Newton step ($\alpha=1$) frequently overshoots
+because the quadratic model is only locally accurate in a small neighbourhood of radius
+$\approx \|(\nabla^2 f)^{-1}\nabla f\| / M$ where $M$ is the Lipschitz constant of the Hessian.
+The Rosenbrock Hessian changes rapidly along the curved valley (the mixed partial $h_{12}=-400x_1$
+varies from $400$ to $-400$ as $x_1$ crosses the valley), requiring the damped step $\alpha=0.22$
+to maintain the quadratic model accuracy across each Newton iterate.  Backtracking line search
+would automate this damping adaptively.
 \end{remark}
 
 Settings: GD uses 80 iterations; Newton uses 20 iterations with Hessian damping $\lambda = 10^{-8}$.
@@ -1173,10 +1207,17 @@ stability.  In this experiment, $\lambda=4.5$ requires $\alpha=0.03$ vs.\ $\alph
 $\lambda\le1.8$, illustrating this trade-off.
 
 \textbf{Theoretical connection:} As $\lambda\to\infty$, the penalty method solution
-$x^\star(\lambda)$ converges to the true constrained optimum $x^\star$.  At each finite $\lambda$,
-the method solves an unconstrained problem and introduces a controllable amount of constraint
-violation.  Augmented Lagrangian methods address this by combining penalty terms with Lagrange
-multiplier updates, achieving exact feasibility at finite penalty.
+$x^\star(\lambda)$ converges to the true constrained optimum $x^\star$.  More precisely, for a
+convex problem with inactive constraint at optimality (as here), $\|x^\star(\lambda)-x^\star\|
+= O(1/\lambda)$.  At each finite $\lambda$, the method solves an unconstrained problem
+$F_\lambda$ with an ill-conditioned objective (condition number $\approx\kappa_0\cdot(1+\lambda)$
+where $\kappa_0$ is the original problem's condition number), explaining why large $\lambda$
+requires smaller step sizes.
+
+\textbf{Augmented Lagrangian methods} (not implemented here) address this conditioning issue
+by combining penalty terms with explicit Lagrange multiplier updates:
+$L_\lambda(x, \mu) = f(x) + \mu g(x) + \frac{\lambda}{2}[\max(0, g(x))]^2$.  This achieves
+exact feasibility at finite penalty while maintaining better conditioning than pure penalty methods.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1335,9 +1376,20 @@ $f^\star=0.25$ after 140 iterations) reflects the $O(1/k)$ convergence; a decayi
 $\gamma_k=2/(k+2)$ would reduce this gap.
 
 \textbf{The Frank--Wolfe gap} $g_k = \nabla f(x_k)^T(x_k - z_k)$ serves as a primal convergence
-certificate: $g_k \ge f(x_k) - f^\star$ always holds, and $g_k\to0$ implies convergence to the
-optimum.  This certificate is computable without knowing $f^\star$, which is a practical advantage
-over the Polyak step (which requires $f^\star$).
+certificate: since $z_k = \arg\min_{z\in\mathcal{X}}\nabla f(x_k)^Tz$ and $x^\star\in\mathcal{X}$:
+\begin{equation}
+g_k = \nabla f(x_k)^T(x_k - z_k) \ge \nabla f(x_k)^T(x_k - x^\star) \ge f(x_k) - f^\star,
+\end{equation}
+where the last inequality uses convexity.  Thus $g_k\ge f(x_k)-f^\star\ge0$, and $g_k\to0$
+certifies convergence.  This certificate is computable without knowing $f^\star$, which is a
+practical advantage over the Polyak step.
+
+\textbf{Vertex oscillation} (visible in Figure~\ref{fig:q6_evolution}) is a characteristic
+of FW: since $z_k$ is always a vertex of $\mathcal{X}$, it alternates between nearby vertices
+as the gradient direction rotates around the interior minimum.  The iterate $x_k$ smooths this
+oscillation by taking only a $1-\beta$ fraction of the step towards each vertex.  The open
+problem of FW oscillation has motivated variants such as the Away-Step Frank--Wolfe and
+Pairwise Frank--Wolfe, which allow steps away from ``bad'' vertices.
 
 % ============================================================
 \section{Summary and Conclusions}
@@ -1393,6 +1445,17 @@ budgets.  Best per column in bold.  GD results are baselines from Q1/Q2/Q3 at 80
 \multicolumn{5}{l}{\footnotesize $^\dagger$ Diverges due to $f^\star=0$ misspecification.}
 \end{tabular}
 \end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/summary_bar_rosenbrock.pdf}
+\caption{Bar chart comparing final objective values on Benchmark~C (Rosenbrock) for all
+methods at their respective iteration budgets.  The gold-outlined bar (Polyak, $f=0.0094$)
+achieves the best final value among all methods, but only because $f^\star=0$ is known exactly.
+Among methods not requiring $f^\star$, Nesterov ($f=0.4788$) is the clear winner, followed by
+Newton ($f=0.6864$, despite only 20 iterations vs.\ 120--150 for first-order methods).}
+\label{fig:summary_bar}
+\end{figure}
 
 \subsection{Key Findings by Algorithm Family}
 
