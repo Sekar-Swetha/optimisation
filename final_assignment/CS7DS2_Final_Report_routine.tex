@@ -618,7 +618,17 @@ adaptive scaling (via $v_t$, a second-moment estimate), inheriting the advantage
 RMSprop and heavy-ball momentum.  The bias correction terms $(1 - \beta_1^t)$ and
 $(1 - \beta_2^t)$ are critical during early iterations: without them, the initialisation
 $m_0 = v_0 = 0$ would bias the estimates toward zero, causing spuriously large or small
-effective step sizes.
+effective step sizes.  The effective step size on coordinate $i$ at step $t$ is approximately
+\[
+\alpha_{\text{eff},i}(t) = \alpha \cdot \frac{\hat{m}_{t,i}}{\sqrt{\hat{v}_{t,i}} + \varepsilon}
+  \approx \alpha \cdot \frac{\mathbb{E}[g_i]}{\sqrt{\mathbb{E}[g_i^2]} + \varepsilon},
+\]
+which is bounded in $[-\alpha, \alpha]$ regardless of the gradient magnitude.  This ``step
+normalisation'' is what makes Adam robust to badly scaled gradients (e.g.\ different gradient
+magnitudes in $x_1$ vs $x_2$ on Rosenbrock).  The $\beta_2 = 0.999$ choice ensures the
+second-moment estimate adapts slowly, providing a stable normaliser; the smaller $\beta_1
+\approx 0.80$--$0.82$ (compared to typical $0.9$) was found empirically to give faster
+initial convergence on these small, deterministic problems where the gradient is not stochastic.
 
 \subsection{Hyperparameter Settings}
 
@@ -819,6 +829,42 @@ contributed by the observation noise model $\operatorname{Var}[\varepsilon] = \s
 dominates the mini-batch sampling variance, making batch size less decisive.}
 \label{fig:q2_sgd_noisy}
 \end{figure}
+
+\subsection{Comparative Analysis: Nesterov vs Adam vs SGD}
+
+\begin{itemize}[nosep]
+\item \textbf{Nesterov vs GD on ill-conditioned problems:}
+  On Rosenbrock ($\kappa \approx 2000$), Nesterov achieves $f = 0.479$ vs GD's $f = 3.39$
+  in the same 150 iterations --- a $7\times$ improvement.  The theoretical speedup for
+  strongly convex functions is $(1-1/\sqrt{\kappa})^k$ vs $(1-1/\kappa)^k$: the ratio is
+  $\sqrt{\kappa} = \sqrt{2000} \approx 45$, meaning Nesterov requires $\sqrt{\kappa}$ fewer
+  iterations for the same accuracy.  This is consistent with the empirical factor of 7 at
+  150 iterations (not yet in the asymptotic regime).
+
+\item \textbf{Adam's per-coordinate scaling:}
+  Adam achieves $f = 1.578$ on Rosenbrock vs Nesterov's $f = 0.479$.  Adam's second-moment
+  scaling $v_t \approx \mathbb{E}[g_t^2]$ effectively uses a diagonal preconditioner
+  $\text{diag}(v_t)^{-1/2}$.  For Rosenbrock, the gradient magnitudes differ by a factor
+  $\approx 100$ between coordinates (steep $x_2$ direction vs shallow valley $x_1$ direction),
+  so Adam's per-coordinate scaling narrows the effective condition number.  However, the
+  \emph{off-diagonal} curvature (large $h_{12}$ term in the Hessian) is not captured by a
+  diagonal preconditioner, limiting Adam's advantage over Nesterov on this non-separable problem.
+
+\item \textbf{Adam vs Adagrad:} Both adapt learning rates per coordinate, but Adam's exponential
+  forgetting ($v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2$ with $\beta_2 = 0.999$) prevents the
+  effective step from collapsing to zero.  Adagrad's monotonically growing $G_k$ can stall
+  early training in sparse-gradient settings; the Adam bias correction $(1-\beta_2^t)^{-1}$
+  additionally warms up the effective step during the first $1/(1-\beta_2) = 1000$ iterations.
+
+\item \textbf{SGD vs full-batch:} Mini-batch SGD with $b = 5$ performs more parameter updates
+  per epoch (200 vs 25 for $b = 40$), reaching the noise floor faster in epoch count.  However,
+  the high gradient variance means each individual step is less informative.  The
+  \emph{noise-corrected} comparison (function value vs total gradient evaluations) shows $b = 40$
+  is more evaluation-efficient near the minimum.  This matches the critical batch size analysis
+  in Remark~\ref{rem:sgd_variance}: for $J^\star \approx 0.4826$ and $\mu \approx 0.8$, the
+  critical batch $b^\star \approx \sigma_g/\sqrt{\mu \varepsilon}$ lies between 5 and 40 for
+  the target accuracy $\varepsilon = J^\star - 0.4826 + 0.01 \approx 0.01$.
+\end{itemize}
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -1814,28 +1860,34 @@ following broad conclusions emerge.
 \begin{table}[H]
 \centering
 \caption{Cross-question comparison: best method on each benchmark.  ``Iters'' = number of
-iterations run; methods within a question share the same iteration budget.}
+iterations run; methods within a question share the same iteration budget.  Q5 and Q6 use a
+different setup (constrained Benchmark~B / D) so Bench.\ A/C entries are ``---''.}
 \label{tab:cross_comparison}
 \small
-\begin{tabular}{lcccc}
+\begin{tabular}{lcccl}
 \toprule
 \textbf{Question (method family)} & \textbf{Best method} & \textbf{Bench.\ A $f$} &
 \textbf{Bench.\ B $f$} & \textbf{Bench.\ C $f$} \\
 \midrule
 Q1: Adaptive (120 iters) & Adagrad / HB & 0.4826 & 0.7244 & 1.400 \\
-Q1 best (Polyak on C) & Polyak & --- & --- & 0.0094 \\
+Q1 best (Polyak, C) & Polyak ($f^\star$ known) & --- & --- & 0.0094 \\
 Q2: Momentum (150 iters) & Nesterov & 0.4826 & 0.7244 & 0.479 \\
-Q3: Newton (20 iters) vs GD (80) & Newton & 0.4826 & 0.7244 & 0.686 \\
-Q4: Derivative-free & Nelder--Mead (C) & --- & 0.724 & $\approx 0.01$ \\
+Q3: Newton (20) vs GD (80) & Newton & 0.4826 & 0.7244 & 0.686 \\
+Q4A: Deriv.-approx.\ (Bench B) & FD GD ($\delta=0.05$) & --- & 0.7244 & --- \\
+Q4B: Deriv.-free (Bench C) & Nelder--Mead & --- & --- & $\approx 0.01$ \\
+Q5: Constrained Bench B & Proj.\ GD / Penalty $\lambda=4.5$ & --- & 0.7244 & --- \\
+Q6: Frank--Wolfe (Bench D) & FW ($\beta=0.985$) & --- & 0.0046 & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:cross_comparison} shows that for the ill-conditioned Rosenbrock function,
-Newton's method (20 iterations) achieves $f = 0.686$, significantly better than GD with 80
-iterations ($f = 3.73$), while Nesterov (150 iterations) achieves $f = 0.479$, and the Polyak
-step with correct $f^\star$ achieves $f = 0.009$ in 120 iterations --- the best result across
-all first-order methods.
+Table~\ref{tab:cross_comparison} shows the full cross-question comparison.  For the
+ill-conditioned Rosenbrock function, the ordering of first-order methods by final objective
+is: Polyak ($f=0.009$, with $f^\star$ known) $\ll$ Nesterov ($f=0.479$) $<$ Newton ($f=0.686$,
+second-order, $4\times$ fewer iters) $<$ Heavy Ball ($f=1.400$) $<$ GD ($f=3.39$).
+The derivative-free Nelder--Mead achieves $f \approx 0.01$ on Rosenbrock using no gradient
+information, comparable to Polyak with known $f^\star$ --- a remarkable result demonstrating
+how the simplex's geometric adaptation can compensate for the absence of gradient information.
 
 \textbf{On adaptive step sizes (Q1):} The Polyak step is theoretically optimal when
 $f^\star$ is known exactly, as demonstrated on Rosenbrock where it achieves $f = 0.0094$ in
@@ -1879,6 +1931,20 @@ convexity of the objective; (ii)~the availability of gradient or Hessian informa
 (iii)~the structure of the constraint set; and (iv)~the problem's condition number.  No single
 method dominates across all criteria, and the experiments here illustrate how algorithm
 properties connect to benchmark structure in theoretically predictable ways.
+
+\textbf{Unifying theme --- condition number governs everything:}
+Across all experiments, the condition number $\kappa$ is the single most predictive quantity.
+On Benchmark~A ($\kappa \approx 1.5$), all methods converge rapidly regardless of order or
+adaptivity.  On Benchmark~B ($\kappa \approx 5$--7), first-order methods with momentum
+(Nesterov, Adam) provide a modest speedup over GD.  On Benchmark~C ($\kappa \approx 2000$),
+the gap between methods explodes: GD makes negligible progress in 80 iterations, Nesterov
+achieves a $7\times$ improvement, and Newton (which is affine-invariant and $\kappa$-independent
+by Theorem) achieves a $5.4\times$ lower objective in $4\times$ fewer iterations.  The Frank--Wolfe
+gap provides an online $\kappa$-independent suboptimality certificate (Remark~\ref{prop:fw}).
+These results empirically validate the theoretical convergence rates derived throughout the
+report (Equations~\ref{eq:gd_rate}, \ref{eq:polyak_rate}, \ref{eq:nesterov_rate},
+\ref{eq:newton_quadratic}, \ref{eq:fw_rate}) and the optimal Heavy Ball parameter analysis
+(Equation~\ref{eq:hb_optimal}).
 
 \subsection*{Practical Algorithm Selection Guidelines}
 
