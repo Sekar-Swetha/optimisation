@@ -199,10 +199,11 @@ ax.set_ylim(0, 1.0)
 ax.grid(True, alpha=0.3)
 
 ax2 = axes[1]
-# Use Benchmark C: L ~ 1680 at start (dominant eigenvalue of Hessian at x0=(-1,1))
-L_C_approx = 1680  # ~lambda_max of H at x0
+# Use Benchmark C: L ~ 1002 at start (lambda_max of Hessian at x0=(-1,1))
+# H_C(-1,1): h11 = 2 + 1200*1 - 400*1 = 802, h12=400, h22=200 -> lambda_max ~ 1002
+L_C_approx = 1002  # correct lambda_max of H at x0=(-1,1)
 mu_C_approx = 0.4  # small eigenvalue near optimum
-kappa_C = L_C_approx / mu_C_approx  # ~4200, even worse than 2504
+kappa_C = L_C_approx / mu_C_approx  # ~2505
 
 alphas_C = np.linspace(0, 2.5/L_C_approx, 300)
 betas_C = np.linspace(0, 0.999, 300)
@@ -214,7 +215,7 @@ ax2.contourf(AC * L_C_approx, BC, stable_C.astype(float), levels=[0.5, 1.5],
 ax2.contour(AC * L_C_approx, BC, (AC*(1+BC) - 2.0/L_C_approx), levels=[0.0],
             colors=['red'], linewidths=2)
 
-# Mark experimental settings: alpha=0.0008, beta=0.86  -> alpha*L = 0.0008*1680 = 1.344
+# Mark experimental settings: alpha=0.0008, beta=0.86  -> alpha*L = 0.0008*1002 = 0.802
 ax2.plot(0.0008 * L_C_approx, 0.86, 'g^', ms=10, zorder=5,
          label=f'Experiment ($\\alpha L={0.0008*L_C_approx:.2f}$, $\\beta=0.86$)')
 
