@@ -1224,16 +1224,29 @@ function values:
 \begin{equation}
 \frac{\partial f}{\partial x_i}(x) \approx \frac{f(x + \delta e_i) - f(x)}{\delta},
 \end{equation}
-where $e_i$ is the $i$-th unit vector.  The error has two competing components:
-\begin{itemize}[nosep]
-\item \textbf{Truncation error} $O(\delta)$ from the Taylor expansion residual.
-\item \textbf{Round-off error} $O(\varepsilon_{\mathrm{mach}}/\delta)$ from finite-precision
-  arithmetic.
-\end{itemize}
-Balancing these gives the optimal $\delta^\star \sim \sqrt{\varepsilon_{\mathrm{mach}}} \approx
-10^{-8}$ for 64-bit floating point, yielding error $O(\varepsilon_{\mathrm{mach}}^{1/2}) \approx
-10^{-8}$.  The assignment tests $\delta = 0.05$ (acceptable for this smooth function) and
-$\delta = 0.8$ (poor: large truncation error spanning a region of significant curvature change).
+where $e_i$ is the $i$-th unit vector.  Taylor-expanding $f(x + \delta e_i) = f(x) + \delta
+\partial_i f(x) + \frac{\delta^2}{2}\partial_{ii}f(x) + O(\delta^3)$ gives
+\begin{equation}
+\frac{f(x + \delta e_i) - f(x)}{\delta} = \partial_i f(x) + \underbrace{\frac{\delta}{2}\partial_{ii}f(x)}_{\text{truncation}} + O(\delta^2).
+\label{eq:fd_taylor}
+\end{equation}
+In floating-point arithmetic, both function values carry rounding error $\sim\varepsilon_{\mathrm{mach}}|f|$,
+so the computed difference has absolute error $\sim 2\varepsilon_{\mathrm{mach}}|f|/\delta$.
+The total error is therefore
+\begin{equation}
+\left|\frac{f(x+\delta e_i)-f(x)}{\delta} - \partial_i f\right| \lesssim
+\underbrace{\frac{\delta}{2}|\partial_{ii}f|}_{\text{truncation}\ O(\delta)}
++ \underbrace{\frac{2\varepsilon_{\mathrm{mach}}|f|}{\delta}}_{\text{round-off}\ O(\varepsilon/\delta)}.
+\label{eq:fd_error}
+\end{equation}
+Minimising \eqref{eq:fd_error} over $\delta$ gives $\delta^\star = \sqrt{4\varepsilon_{\mathrm{mach}}|f|/|\partial_{ii}f|}
+\approx \sqrt{\varepsilon_{\mathrm{mach}}} \approx 10^{-8}$ for 64-bit floating point, yielding
+total error $O(\varepsilon_{\mathrm{mach}}^{1/2}) \approx 10^{-8}$.  The \emph{centred} FD
+formula $[f(x+\delta e_i) - f(x-\delta e_i)]/(2\delta)$ eliminates the $O(\delta)$ truncation
+term (it appears at $O(\delta^2)$ instead), requiring 3 FEs per coordinate but achieving
+optimal error $O(\varepsilon_{\mathrm{mach}}^{2/3})$ at $\delta^\star \sim \varepsilon_{\mathrm{mach}}^{1/3}
+\approx 10^{-5}$.  The assignment tests $\delta = 0.05$ (truncation dominates but acceptable)
+and $\delta = 0.8$ (poor: large truncation spanning a region of significant curvature change).
 
 Implementation: FD GD is run with $\alpha = 0.08$ and $d + 1 = 3$ function evaluations per
 gradient (one base evaluation plus one per coordinate).
@@ -1525,16 +1538,21 @@ $\mu^\star = 0$ (by complementary slackness) confirms zero duality gap, as expec
 problems with Slater's condition.
 
 \begin{proposition}[Projected GD Convergence]
+\label{prop:pgd}
 Let $f$ be $\mu$-strongly convex and $L$-smooth on a closed convex set $\mathcal{X}$.  Then
 projected gradient descent $x_{k+1} = \Pi_{\mathcal{X}}(x_k - \alpha\nabla f(x_k))$ with
 $\alpha = 1/L$ satisfies
 \[
 f(x_{k+1}) - f^\star \leq \left(1 - \frac{\mu}{L}\right)^k (f(x_0) - f^\star).
 \]
-The key property is the \emph{non-expansiveness} of the projection:
-$\|\Pi_{\mathcal{X}}(a) - \Pi_{\mathcal{X}}(b)\| \leq \|a - b\|$ for all $a, b$, which
-preserves the contraction from the gradient step.  Thus projected GD achieves \emph{the same
-linear convergence rate as unconstrained GD} whenever the projection is cheap.
+\emph{Proof sketch.}  By the non-expansiveness of the Euclidean projection
+($\|\Pi_{\mathcal{X}}(a) - \Pi_{\mathcal{X}}(b)\| \leq \|a - b\|$ for all $a, b$),
+the distance-to-optimum satisfies
+$\|x_{k+1} - x^\star\|^2 \leq \|x_k - \alpha\nabla f(x_k) - x^\star\|^2$, since
+$\Pi_{\mathcal{X}}(x^\star) = x^\star$.  Expanding and using the gradient descent analysis
+on the unconstrained quadratic lower bound gives the same $(1-\mu/L)^k$ contraction as
+for unconstrained GD.  Thus projected GD achieves \emph{the same linear convergence rate
+as unconstrained GD} whenever the projection is $O(d)$.
 \end{proposition}
 
 \begin{algorithm}[H]
@@ -1921,6 +1939,29 @@ $f(x_{140}) - f^\star \leq 2 \times 2 \times 15.7^2 / 142 \approx 6.9$, which is
 because the bound uses the worst-case diameter.  The empirical gap $f(x_{140}) - 0 \approx
 0.36$ for the boundary case is much smaller, reflecting the tighter effective diameter once
 the iterates concentrate near the optimum.
+
+\begin{remark}[Frank--Wolfe vs Proximal Methods (ISTA/FISTA)]
+Both Frank--Wolfe and projected GD handle constraints, but via different oracles.  The
+\emph{proximal gradient} method (ISTA) solves
+$x_{k+1} = \arg\min_{x \in \mathcal{X}} \nabla f(x_k)^T(x - x_k) + \frac{1}{2\alpha}\|x - x_k\|^2$,
+which is a Euclidean projection of $(x_k - \alpha\nabla f(x_k))$ onto $\mathcal{X}$.  The
+\emph{FISTA} variant adds Nesterov acceleration, achieving the same $O(1/k^2)$ rate as
+Nesterov's method.  By contrast, Frank--Wolfe solves a \emph{linear} objective over
+$\mathcal{X}$ (the LMO), which is cheaper than a projection when $\mathcal{X}$ has a
+simple LP structure but complex geometry.  The key trade-off:
+\begin{itemize}[nosep]
+\item Projected GD / ISTA: converges at $O(1/k)$ or $O((1-1/\kappa)^k)$, requires projection
+  oracle.
+\item FISTA: converges at $O(1/k^2)$ via Nesterov acceleration, requires projection oracle.
+\item Frank--Wolfe: converges at $O(1/k)$, requires LMO only; naturally preserves sparsity
+  (vertices of polytopes are often sparse).
+\end{itemize}
+For the box constraints in Question~6, projection and LMO are both $O(d)$, so FW's $O(1/k)$
+vs FISTA's $O(1/k^2)$ makes FISTA the better choice if speed is paramount and only box
+constraints are involved.  FW's advantage appears for nuclear-norm balls ($\mathcal{X} = \{M :
+\|M\|_* \leq R\}$), where the LMO is a rank-1 SVD ($O(mn)$) but projection requires a full SVD
+and soft-thresholding ($O(mn\min(m,n))$).
+\end{remark}
 
 % ============================================================
 \section{Convergence Guarantees Summary}
