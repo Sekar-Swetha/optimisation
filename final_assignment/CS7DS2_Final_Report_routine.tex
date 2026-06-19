@@ -91,6 +91,15 @@ Three properties of the objective function fundamentally govern algorithm behavi
 Throughout this report: $f^\star = \min_{x} f(x)$ denotes the optimal value; $x^\star$ the optimal point; $\nabla f$ the gradient; $\nabla^2 f$ the Hessian; $\|\cdot\|$ the Euclidean norm; $\odot$ element-wise product; $I_d$ the $d \times d$ identity; $\mathcal{O}$ big-O notation; $\mathbb{E}[\cdot]$ expectation; and $\text{Var}[\cdot]$ variance.
 All experiments use \texttt{np.random.seed(42)} for reproducibility.
 
+Figure~\ref{fig:rate_hierarchy} summarises the key convergence rate distinctions that run throughout this report: the $O(1/k)$ vs $O(1/k^2)$ divide for convex objectives, the linear vs $\sqrt{\kappa}$ speedup from strong convexity, and the doubly-exponential acceleration from Newton's quadratic convergence.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/convergence_rate_hierarchy.pdf}
+\caption{Convergence rate hierarchy. Left (log--log): on convex $L$-smooth problems, GD achieves $O(1/k)$ and Nesterov $O(1/k^2)$ (both straight lines with slopes $-1$ and $-2$ respectively). Strongly convex GD/Heavy Ball/Nesterov all achieve linear rates $(1-2/(\kappa+1))^k$ or $(1-2/\sqrt{\kappa})^k$, appearing as straight lines on a log scale. Newton's quadratic convergence (orange markers) is barely visible since the gap reaches machine precision in $\sim 10$ steps. Right: linear convergence rates for GD (solid) and Nesterov (dashed) for six condition numbers $\kappa \in \{2, 5, 10, 50, 100, 1000\}$; the advantage of momentum over GD grows dramatically as $\kappa$ increases.}
+\label{fig:rate_hierarchy}
+\end{figure}
+
 % ============================================================
 \section{Benchmark Problems and Experimental Setup}
 \label{sec:benchmarks}
@@ -246,6 +255,12 @@ For strongly convex quadratics with condition number $\kappa$, the optimal param
 For our benchmarks, the theoretically optimal Heavy Ball momentum parameters are: Bench.\ A: $\beta^\star \approx 0.001$ (near $\kappa \approx 1.12$, momentum barely helps); Bench.\ B: $\beta^\star \approx 0.201$ (rate $0.448$ vs GD rate $0.749$); Bench.\ C: $\beta^\star \approx 0.923$ (rate $0.961$ vs GD rate $0.9996$).
 The tuned $\beta = 0.86$--$0.90$ values used in experiments are close to these optima, explaining why Heavy Ball substantially outperforms GD on Rosenbrock.
 
+\begin{remark}[Chebyshev polynomials and optimal linear momentum]
+For strongly convex quadratics, the optimal Heavy Ball method is equivalent to applying the \emph{Chebyshev iteration}: the iterate sequence $\{x_k\}$ minimises the error polynomial $\|p_k(H)(x_0 - x^\star)\|_H$ over all degree-$k$ polynomials satisfying $p_k(0) = 1$ (the ``zero residual'' condition).
+The Chebyshev polynomial $T_k$ minimises the sup-norm on $[\mu, L]$ subject to $T_k(0) = 1$, yielding the convergence factor $\bigl((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)\bigr)^k$ --- the same rate as optimal Heavy Ball.
+This connection to approximation theory proves that Heavy Ball is \emph{optimal} among all two-term linear recurrences for quadratic objectives.
+\end{remark}
+
 \begin{remark}[Heavy Ball instability on non-quadratics]
 The optimal Heavy Ball parameters ($\alpha^\star, \beta^\star$) are derived for \emph{quadratic} objectives; for general non-quadratic functions, Heavy Ball has \emph{no global convergence guarantee}.
 Polyak (1987) and later Lessard et al.~(2016) showed that for non-quadratic strongly convex functions, the optimal quadratic parameters can cause divergence.
@@ -370,6 +385,18 @@ This demonstrates why knowledge of $f^\star$ is not merely a technical assumptio
 \includegraphics[width=0.85\textwidth]{figures/q1_stepsize_C.pdf}
 \caption{Q1: Step-size evolution on Benchmark C. With correct $f^\star = 0$, the Polyak step decreases smoothly as $f(x_k) \to 0$ --- the numerator shrinks proportionally. This well-behaved decay explains Polyak's superior performance on Rosenbrock when $f^\star$ is known.}
 \label{fig:q1_stepsize_C}
+\end{figure}
+
+\subsection{Theoretical Validation on Quadratics}
+
+Figure~\ref{fig:kappa_sensitivity} validates the theoretical convergence rates for GD, Nesterov, and Heavy Ball on pure quadratic problems with known condition numbers $\kappa \in \{2, 10, 100\}$.
+This is the canonical setting where all three theories are exact.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/condition_number_sensitivity.pdf}
+\caption{Q1: Empirical vs theoretical convergence rates on quadratic objectives for $\kappa \in \{2, 10, 100\}$. Solid lines are empirical trajectories; dotted lines are the predicted linear rate $(1 - 2/(\kappa+1))^k$ (GD), $(1 - 1/\sqrt{\kappa})^k$ (Nesterov), and $((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^{2k}$ (Heavy Ball). All three methods match theory exactly on quadratics, confirming the implementation correctness. As $\kappa$ increases from 2 to 100, the gap between GD and Heavy Ball/Nesterov widens dramatically: at $\kappa=100$, Nesterov converges $\sim 10\times$ faster than GD in iteration count.}
+\label{fig:kappa_sensitivity}
 \end{figure}
 
 \subsection{Comparative Analysis and Conclusions}
@@ -551,6 +578,20 @@ At each epoch, the dataset of $m = 1000$ samples is randomly permuted and split 
 
 The mini-batch gradient $g_{\mathcal{B}}$ is an unbiased estimator of the full gradient $\nabla J(\theta)$ with variance $\text{Var}[g_{\mathcal{B}}^{(i)}] = \sigma^2_{\text{grad}} / b$, where $\sigma^2_{\text{grad}}$ is the per-sample gradient variance.
 A larger batch size reduces gradient noise (at cost of more computation per step), while a smaller batch size introduces more stochasticity but allows more updates per epoch.
+
+\begin{theorem}[SGD convergence and noise floor]
+For a $\mu$-strongly convex, $L$-smooth objective, mini-batch SGD with constant learning rate $\alpha$ satisfies:
+\[
+  \mathbb{E}[f(\theta_k)] - f^\star \leq (1 - \mu\alpha)^k (f(\theta_0) - f^\star) + \frac{\alpha\sigma^2}{2\mu b},
+\]
+where $\sigma^2 = \mathbb{E}[\|g(\theta^\star; \xi)\|^2]$ is the per-sample gradient variance at the optimum.
+The first term decays linearly; the second term is the irreducible \emph{noise floor} of size $O(\alpha\sigma^2/(\mu b))$.
+To achieve $\varepsilon$-accuracy requires $\alpha = O(\varepsilon\mu b / \sigma^2)$ (small enough step) and $O(\sigma^2 / (\mu^2\varepsilon b))$ iterations.
+\end{theorem}
+
+\noindent
+The noise floor explains the persistent oscillation of small-batch SGD near the optimum: reducing the batch size $b$ increases the floor, while decreasing the step size $\alpha$ reduces it but slows the initial convergence.
+SVRG eliminates this tradeoff by driving $\sigma^2_{\rm effective} \to 0$ as iterates converge.
 
 \begin{figure}[H]
 \centering
@@ -794,8 +835,14 @@ The BFGS update rule maintains a positive definite approximation $B_k \approx \n
 \begin{equation}
 B_{k+1} = B_k + \frac{y_k y_k^T}{y_k^T s_k} - \frac{B_k s_k s_k^T B_k}{s_k^T B_k s_k}, \quad s_k = x_{k+1} - x_k,\quad y_k = \nabla f(x_{k+1}) - \nabla f(x_k).
 \end{equation}
-This satisfies the quasi-Newton secant condition $B_{k+1}s_k = y_k$ and achieves \emph{superlinear} convergence ($\|x_{k+1}-x^\star\|/\|x_k - x^\star\| \to 0$), without requiring explicit Hessian computation.
-The limited-memory variant L-BFGS stores only the last $m$ updates (typically $m = 5$--$20$), giving $O(md)$ storage and $O(md)$ per-step cost --- the standard method for large-scale smooth optimisation.
+This satisfies the quasi-Newton \emph{secant condition} $B_{k+1}s_k = y_k$ --- ensuring the approximation is consistent with the observed gradient change over the last step --- and achieves \emph{superlinear} convergence: $\|x_{k+1}-x^\star\|/\|x_k - x^\star\| \to 0$ as $k \to \infty$.
+The limited-memory variant L-BFGS stores only the last $m$ updates (typically $m = 5$--$20$), giving $O(md)$ storage and $O(md)$ per-step cost via the two-loop recursion --- the standard method for large-scale smooth unconstrained optimisation.
+
+\begin{remark}[Why L-BFGS in practice]
+Full BFGS requires $O(d^2)$ storage for the $d\times d$ approximation matrix, prohibitive for $d \geq 10^4$.
+L-BFGS circumvents this by implicitly representing the inverse Hessian through the last $m$ ($s_k$, $y_k$) pairs, making it the \emph{de facto} standard for smooth optimisation in machine learning (L-BFGS-B in SciPy, L-BFGS in PyTorch).
+On our benchmarks, L-BFGS would converge in $O(\sqrt{\kappa})$ iterations (superlinear rate) with only $O(md)$ cost per step, bridging the gap between first-order methods ($O(\kappa)$ or $O(\sqrt{\kappa})$ iterations, $O(d)$ per step) and full Newton ($O(\log\log 1/\varepsilon)$ iterations, $O(d^3)$ per step).
+\end{remark}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -1180,11 +1227,17 @@ requiring only $O(d)$ operations.
 Crucially, since $z_k \in \mathcal{X}$ and $x_k \in \mathcal{X}$, the convex combination $\beta x_k + (1-\beta)z_k \in \mathcal{X}$ --- \emph{no projection is needed at any step}.
 
 The Frank--Wolfe gap $G_k = \nabla f(x_k)^T(x_k - z_k)$ measures the quality of the current iterate; $G_k = 0$ at optimality.
-For convex, $L$-smooth objectives, the standard convergence rate is:
+
+\begin{theorem}[Frank--Wolfe convergence, \emph{Frank \& Wolfe 1956}]
+For a convex, $L$-smooth objective with the standard step size $\gamma_k = 2/(k+2)$:
 \begin{equation}
-f(x_k) - f^\star \leq \frac{2L D^2}{k + 2},
+f(x_k) - f^\star \leq \frac{2L D^2}{k + 2}, \qquad G_k \leq \frac{4L D^2}{k+2},
 \end{equation}
-where $D = \max_{x, y \in \mathcal{X}} \|x - y\|$ is the diameter of $\mathcal{X}$.
+where $D = \max_{x, y \in \mathcal{X}} \|x - y\|$ is the diameter of $\mathcal{X}$ and $G_k = \nabla f(x_k)^T(x_k - z_k)$.
+For our box $\mathcal{X}$: $D^2 = (5 - 0.5)^2 + (10 + 5)^2 = 20.25 + 225 = 245.25$, so after $k = 100$ iterations with $L_{\rm interior} \approx 12$ (eigenvalue of $\text{diag}(2,10)$), the bound gives $f(x_{100}) - f^\star \leq 2 \times 12 \times 245.25 / 102 \approx 57.7$ --- a loose bound, as the empirical gap at $k=100$ is already $< 0.05$, illustrating that the diameter $D$ bound is conservative for interior optima.
+\end{theorem}
+
+\noindent
 This $O(1/k)$ rate is achievable but generally cannot be improved for Frank--Wolfe without additional assumptions.
 
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
