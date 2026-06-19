@@ -176,7 +176,13 @@ avoids estimating $L$ by using curvature information directly: $\alpha_k = (f(x_
 f^\star)/\|\nabla f(x_k)\|^2$.  This is theoretically optimal for convex functions when
 $f^\star$ is known \cite{polyak1987introduction}, achieving convergence in $O(1/k)$ steps.
 \emph{Adagrad} \cite{duchi2011adaptive} accumulates squared-gradient statistics to rescale each
-coordinate independently, adapting to the geometry of the loss landscape.  \emph{RMSprop}
+coordinate independently, adapting to the geometry of the loss landscape.  The key theoretical
+result for Adagrad is an \emph{online regret bound}: for a sequence of convex losses
+$f_1, \ldots, f_T$, the regret $R_T = \sum_{t=1}^T f_t(x_t) - \min_x \sum_{t=1}^T f_t(x)$
+satisfies $R_T \leq \frac{\alpha_0}{\sqrt{2}}\sum_{i=1}^{d}\|g_{1:T,i}\|$, where
+$g_{1:T,i} = \sqrt{\sum_{t=1}^T g_{t,i}^2}$.  This automatically exploits \emph{coordinate
+sparsity}: if coordinate $i$ has rarely non-zero gradients, its effective learning rate decays
+slowly.  \emph{RMSprop}
 introduces an exponential forgetting factor to prevent Adagrad's learning rate from decaying to
 zero on non-stationary problems.  The \emph{Heavy Ball} (Polyak momentum) method augments
 gradient descent with a momentum term that accelerates convergence on quadratic objectives.
@@ -548,7 +554,11 @@ Adam \cite{kingma2014adam} combines per-coordinate adaptive scaling (from RMSpro
 first-moment momentum (heavy ball).  While Adam converges empirically in fewer iterations on
 many deep learning tasks, it is \emph{not} guaranteed to converge to the global minimum on
 non-convex problems without careful hyperparameter tuning, and counter-examples of divergence
-exist \cite{reddi2018convergence}.
+exist \cite{reddi2018convergence}.  The root cause is that the second-moment estimate
+$v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2$ can decrease in later iterations, leading to
+increasing effective step sizes that can diverge.  The \emph{AMSGrad} fix maintains a
+non-decreasing second-moment estimate $\hat{v}_t = \max(\hat{v}_{t-1}, v_t)$, restoring
+convergence guarantees, at the cost of slightly slower initial adaptation.
 
 \subsection{Algorithm Formulations}
 
@@ -816,6 +826,25 @@ $b = 5$ shows more oscillation than $b = 40$.  Under schedule (1), batch $b$ ach
 same $O(1/k)$ rate as full-batch GD but with constant $\sigma^2/b$ inflation; the optimal
 batch size trades between this inflation and per-step compute cost.
 
+\begin{remark}[Variance Reduction: Bridging SGD and GD]
+A fundamental limitation of mini-batch SGD with constant step size is the irreducible noise floor
+$O(\alpha\sigma^2/\mu)$.  \emph{Variance reduction} methods eliminate this floor by periodically
+recomputing a reference full-gradient $\nabla f(\tilde x)$ and correcting the stochastic gradient:
+\begin{equation}
+g_k^{\mathrm{SVRG}} = \nabla f_i(x_k) - \nabla f_i(\tilde x) + \nabla f(\tilde x),
+\label{eq:svrg}
+\end{equation}
+where $i$ is a random sample.  The estimator is unbiased ($\mathbb{E}[g_k^{\mathrm{SVRG}}] =
+\nabla f(x_k)$) and its variance vanishes as $x_k \to \tilde x$.  SVRG achieves \emph{linear}
+convergence $O((1 - \mu/L)^k)$ for strongly convex objectives at $O(n + n/b)$ gradient
+evaluations per epoch, matching GD's rate while retaining SGD's data-access pattern.  The
+periodic reference update costs one full gradient pass ($n$ evaluations) every $m$ inner steps;
+setting $m = O(n)$ amortises this cost.  SAG, SAGA, and SARAH are variants with different
+memory-accuracy trade-offs.  These methods are not implemented here (fixed step size with no
+reference gradient), but explain why Figure~\ref{fig:q2_sgd_batch} cannot achieve exact
+convergence: the standard SGD noise floor is unavoidable with constant $\alpha$.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -946,6 +975,7 @@ used when Hessian information is reliable; damped steps ($\alpha < 1$) are used 
 where the rapidly varying Hessian can make full steps overshoot.
 
 \begin{theorem}[Quadratic Convergence of Newton's Method]
+\label{thm:newton}
 Let $f$ be twice continuously differentiable with $M$-Lipschitz Hessian:
 $\|\nabla^2 f(x) - \nabla^2 f(y)\| \leq M\|x-y\|$ for all $x, y$.
 If $x_0$ is sufficiently close to a local minimum $x^\star$ where $\nabla^2 f(x^\star) \succ 0$
@@ -1412,10 +1442,12 @@ From an \emph{oracle complexity} perspective, the information-theoretic lower bo
 convex optimisation requires at least $\Omega(d/\varepsilon^2)$ function evaluations to achieve
 $\varepsilon$-accuracy \cite{nesterov2017random}.  Nesterov random search
 (Algorithm~\ref{alg:nrs}) achieves $O(d^2/\varepsilon^2)$ evaluations, so it is within a
-factor $d$ of the lower bound.  This matches the intuition that the random direction estimator
-discards $d-1$ gradient components per step, requiring $d$ extra function evaluations to
-compensate.  Grid search requires $O((1/\varepsilon)^d)$ evaluations, which is exponential in
-dimension --- illustrating the \emph{curse of dimensionality} for exhaustive search.
+factor $d$ of the lower bound.  The gap is precisely explained by the bias equation
+\eqref{eq:nrs_bias}: since $\mathbb{E}[\hat{g}_k] = \nabla f(x)/d$, the effective gradient
+signal per step is $1/d$ that of a true gradient, so $d$ steps of NRS are needed to extract
+the same information as one true gradient evaluation.  Grid search requires $O((1/\varepsilon)^d)$
+evaluations, which is exponential in dimension --- illustrating the \emph{curse of dimensionality}
+for exhaustive search.
 
 \begin{table}[H]
 \centering
@@ -1881,7 +1913,7 @@ the condition number, $d$ is the problem dimension, and FE denotes function eval
 rates in the table are derived formally in the respective sections: Polyak
 (Proposition~\ref{prop:polyak}, Eq.~\ref{eq:polyak_rate}), Nesterov
 (Remark~\ref{rem:nesterov_schedule}, Eq.~\ref{eq:nesterov_rate}), Newton
-(Theorem, Eq.~\ref{eq:newton_quadratic}), and Frank--Wolfe
+(Theorem~\ref{thm:newton}, Eq.~\ref{eq:newton_quadratic}), and Frank--Wolfe
 (Proposition~\ref{prop:fw}, Eq.~\ref{eq:fw_rate}).  Heavy Ball rates come from the optimal
 parameter analysis (Remark~\ref{rem:hb_optimal}, Eq.~\ref{eq:hb_optimal}).
 
@@ -2041,7 +2073,7 @@ adaptivity.  On Benchmark~B ($\kappa \approx 5$--7), first-order methods with mo
 (Nesterov, Adam) provide a modest speedup over GD.  On Benchmark~C ($\kappa \approx 2000$),
 the gap between methods explodes: GD makes negligible progress in 80 iterations, Nesterov
 achieves a $7\times$ improvement, and Newton (which is affine-invariant and $\kappa$-independent
-by Theorem) achieves a $5.4\times$ lower objective in $4\times$ fewer iterations.  The Frank--Wolfe
+by Theorem~\ref{thm:newton}) achieves a $5.4\times$ lower objective in $4\times$ fewer iterations.  The Frank--Wolfe
 gap provides an online $\kappa$-independent suboptimality certificate (Proposition~\ref{prop:fw}).
 These results empirically validate the theoretical convergence rates derived throughout the
 report (Equations~\ref{eq:gd_rate}, \ref{eq:polyak_rate}, \ref{eq:nesterov_rate},
