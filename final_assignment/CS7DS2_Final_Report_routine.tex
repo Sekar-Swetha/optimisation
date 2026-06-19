@@ -676,9 +676,37 @@ For strongly convex functions, SVRG achieves \emph{linear convergence} $O(\rho^k
 
 \textbf{SAGA} (Defazio et al.~2014): instead of a single snapshot, SAGA maintains a table of the last gradient for each data point.
 The corrected gradient for sample $i$ is $\nabla J_i(\theta_t) - \nabla J_i(\phi_i) + \frac{1}{n}\sum_j \nabla J_j(\phi_j)$, where $\phi_i$ is the stored point for index $i$.
-SAGA achieves the same linear convergence as SVRG but with better constant factors.
+SAGA achieves the same linear convergence as SVRG but with better constant factors, and allows non-uniform sampling and proximal operators.
 
-Figure~\ref{fig:sgd_variance_reduction} illustrates the reduction in gradient variance and the resulting faster convergence on Benchmark A.
+\begin{algorithm}[H]
+\caption{SAGA (Defazio, Bach, Lacoste-Julien 2014)}
+\label{alg:saga}
+\begin{algorithmic}[1]
+\Require Step size $\alpha$, initialisation $\theta_0$, gradient table $g^{(i)} \gets \nabla J_i(\theta_0)$ for all $i$, $\bar{g} \gets \frac{1}{n}\sum_i g^{(i)}$
+\For{$t = 0, 1, 2, \ldots$}
+    \State Sample $i \sim \text{Uniform}(\{1,\ldots,n\})$
+    \State Compute new gradient $v \gets \nabla J_i(\theta_t)$
+    \State SAGA update: $\theta_{t+1} \gets \theta_t - \alpha\bigl(v - g^{(i)} + \bar{g}\bigr)$
+    \State Update table: $g^{(i)} \gets v$; \quad $\bar{g} \gets \bar{g} + (v - g^{(i)\,\text{old}})/n$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\noindent \textbf{Key differences between SVRG and SAGA:}
+\begin{itemize}[nosep]
+  \item \textbf{SVRG} requires a full pass over all $n$ data points once per epoch (to compute $\mu = \nabla J(\tilde\theta)$), then $O(m)$ stochastic steps with variance-reduced gradients. Memory: $O(d)$ (only the snapshot point $\tilde\theta$).
+  \item \textbf{SAGA} avoids the full epoch pass but requires storing one gradient per data point: $O(nd)$ memory (e.g., $n=10^6$, $d=100$: 100M floats = 0.8 GB). SAGA achieves a tighter convergence constant than SVRG ($\rho_{\rm SAGA} \approx 1 - \mu\alpha$ vs $\rho_{\rm SVRG} \approx 1 - 1/(4\kappa)$ for optimal $\alpha$).
+  \item \textbf{Proximal extension:} SAGA admits a proximal step $\theta_{t+1} = \mathrm{prox}_{\alpha\psi}(\theta_t - \alpha \tilde{g}_t)$ for composite objectives $J(\theta) + \psi(\theta)$ (e.g., $\ell_1$ regularisation), enabling sparse solutions.
+\end{itemize}
+
+Figure~\ref{fig:sgd_variance_reduction} illustrates gradient variance reduction, and Figure~\ref{fig:saga_svrg_comparison} shows a detailed three-way comparison on Benchmark A.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/saga_svrg_comparison.pdf}
+\caption{Q2: SGD vs SVRG vs SAGA on Benchmark A (linear regression, $m=1000$, batch=40). Left: convergence in epochs ($f(\theta_k) - f^\star$, log scale). SVRG and SAGA both achieve linear convergence (straight line on log scale) while SGD stagnates at the noise floor. SAGA's gradient table enables faster descent per epoch. Right: SGD gradient variance (estimated over 50 mini-batches) compared with SVRG suboptimality proxy; the SGD variance is bounded below zero, while SVRG suboptimality (a proxy for variance) decays monotonically to zero, explaining its linear convergence.}
+\label{fig:saga_svrg_comparison}
+\end{figure}
 
 \begin{figure}[H]
 \centering
@@ -924,6 +952,40 @@ Full BFGS requires $O(d^2)$ storage for the $d\times d$ approximation matrix, pr
 L-BFGS circumvents this by implicitly representing the inverse Hessian through the last $m$ ($s_k$, $y_k$) pairs, making it the \emph{de facto} standard for smooth optimisation in machine learning (L-BFGS-B in SciPy, L-BFGS in PyTorch).
 On our benchmarks, L-BFGS would converge in $O(\sqrt{\kappa})$ iterations (superlinear rate) with only $O(md)$ cost per step, bridging the gap between first-order methods ($O(\kappa)$ or $O(\sqrt{\kappa})$ iterations, $O(d)$ per step) and full Newton ($O(\log\log 1/\varepsilon)$ iterations, $O(d^3)$ per step).
 \end{remark}
+
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop Recursion}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+\Require Initial $x_0$, memory $m$, gradient $g_0 = \nabla f(x_0)$, empty lists $\{s_k\}$, $\{y_k\}$, $\{\rho_k\}$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State \textbf{Compute descent direction} $p_k$ via two-loop recursion:
+    \State \quad $q \gets g_k$
+    \For{$i = k-1, k-2, \ldots, k-m$} \Comment{backward pass}
+        \State $\alpha_i \gets \rho_i\, s_i^T q$; \quad $q \gets q - \alpha_i\, y_i$
+    \EndFor
+    \State $r \gets \gamma_k\, q$ \quad where $\gamma_k = s_{k-1}^T y_{k-1} / (y_{k-1}^T y_{k-1})$ (initial Hessian scaling)
+    \For{$i = k-m, \ldots, k-1$} \Comment{forward pass}
+        \State $\beta \gets \rho_i\, y_i^T r$; \quad $r \gets r + s_i (\alpha_i - \beta)$
+    \EndFor
+    \State $p_k \gets -r$ \Comment{quasi-Newton descent direction}
+    \State Choose $\alpha_k > 0$ via Wolfe line search; set $x_{k+1} \gets x_k + \alpha_k\, p_k$
+    \State $s_k \gets x_{k+1} - x_k$; \quad $y_k \gets g_{k+1} - g_k$; \quad $\rho_k \gets 1/(y_k^T s_k)$
+    \State Maintain only last $m$ pairs; discard oldest if $|\{s_i\}| > m$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\noindent The two-loop recursion computes the product $H_k^{-1} g_k$ implicitly in $O(md)$ time, where $H_k$ is the L-BFGS inverse Hessian approximation.
+The secant condition $H_k y_{k-1} = s_{k-1}$ is satisfied by construction.
+The scaling $\gamma_k = s_{k-1}^T y_{k-1}/\|y_{k-1}\|^2$ initialises the implicit inverse Hessian at each step using the most recent curvature information, providing a dimension-free adaptive learning rate.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/lbfgs_comparison.pdf}
+\caption{Q3: L-BFGS ($m=5$ and $m=20$) vs Newton vs Nesterov vs GD on Rosenbrock. Left: full 150-iteration view. L-BFGS with $m=5$ converges faster than Nesterov (first-order optimal) and closely tracks full Newton despite using only $O(md)=O(10)$ storage vs $O(d^2)=O(4)$ for Newton. Right: zoom on first 40 iterations, revealing L-BFGS superlinear convergence: the log-convergence curve bends sharply downward around iteration 25--30, characteristic of the self-correcting quasi-Newton Hessian approximation accumulating curvature information. Newton (circles) shows similarly rapid convergence from iteration 1.}
+\label{fig:lbfgs_comparison}
+\end{figure}
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -1290,6 +1352,29 @@ The $x$ and $z$ subproblems are solved alternately (hence ``alternating directio
 ADMM is widely used in large-scale regularised regression (LASSO, elastic net), distributed machine learning, and network flow problems.
 \end{remark}
 
+\begin{algorithm}[H]
+\caption{ADMM (Alternating Direction Method of Multipliers)}
+\label{alg:admm}
+\begin{algorithmic}[1]
+\Require Penalty $\rho > 0$, initial $(x^0, z^0, \nu^0)$; problem: $\min_{x,z}\, f(x) + g(z)$ s.t.\ $Ax + Bz = c$
+\For{$k = 0, 1, 2, \ldots$}
+    \State $x^{k+1} \gets \arg\min_x \Bigl[ f(x) + \frac{\rho}{2}\|Ax + Bz^k - c + \nu^k/\rho\|^2 \Bigr]$ \Comment{$x$-update}
+    \State $z^{k+1} \gets \arg\min_z \Bigl[ g(z) + \frac{\rho}{2}\|Ax^{k+1} + Bz - c + \nu^k/\rho\|^2 \Bigr]$ \Comment{$z$-update}
+    \State $\nu^{k+1} \gets \nu^k + \rho\,(Ax^{k+1} + Bz^{k+1} - c)$ \Comment{dual update}
+\EndFor
+\State \textbf{Stopping criterion:} $\|Ax^{k+1} + Bz^{k+1} - c\| \leq \varepsilon_{\rm prim}$ and $\|\rho A^T B(z^{k+1} - z^k)\| \leq \varepsilon_{\rm dual}$
+\end{algorithmic}
+\end{algorithm}
+
+\noindent Applied to Q5 ($\min (x_1-1)^2 + (x_2-5)^2$ s.t.\ $x_1 \geq 0.5$), we introduce a splitting variable $z = x_1$ with indicator constraint $z \geq 0.5$: the $x$-update has a closed form (solve $2\times2$ linear system), and the $z$-update is a clipping $z \gets \max(x_1 + \nu/\rho,\ 0.5)$---both cheap.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/admm_comparison.pdf}
+\caption{Q5: ADMM vs Projected GD vs Penalty on the constrained problem $\min (x_1-1)^2 + (x_2-5)^2$ s.t.\ $x_1 \geq 0.5$, starting from $(3, 2)$. Left: objective convergence ($f^\star = 0$ since the constraint is inactive at the unconstrained optimum $(1,5)$). ADMM with $\rho=5$ converges in $\sim 15$ iterations; Projected GD is competitive; Penalty ($\lambda=10$) is slower due to the stiffened objective. Centre: ADMM primal ($|x_1^k - z^k|$) and dual residuals decay to zero, providing a built-in stopping criterion. Larger $\rho$ increases dual residual initially but accelerates primal convergence. Right: ADMM iterate trajectory in the $(x_1, x_2)$ plane; both $\rho$ settings converge to the optimum $(1, 5)$ without ever violating $x_1 \geq 0.5$ after the first few iterations.}
+\label{fig:admm_comparison}
+\end{figure}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/penalty_alm_comparison.pdf}
@@ -1466,6 +1551,45 @@ The $O(1/k)$ rate of Frank--Wolfe is \emph{slower} than projected gradient desce
 For strongly convex objectives, FW converges at the linear rate $O(\rho^k)$ only with the ``away-step'' modification (Lacoste-Julien \& Jaggi, 2015), which also solves a linear programme over $\mathcal{X}$ to identify the active constraint vertex to move away from.
 The standard FW algorithm has only a sublinear $O(1/k)$ rate even under strong convexity.
 \end{remark}
+
+\subsection{Away-Step Frank--Wolfe for Linear Convergence}
+
+Under strong convexity, the standard FW algorithm cannot achieve linear convergence because vertex-jumping repeatedly undoes progress.
+The \emph{away-step} variant of Lacoste-Julien \& Jaggi (2015) fixes this by also considering a step \emph{away from} the active vertex that contributes most to the gradient, reducing its weight in the iterate representation:
+
+\begin{algorithm}[H]
+\caption{Away-Step Frank--Wolfe (Lacoste-Julien \& Jaggi 2015)}
+\label{alg:fw_away}
+\begin{algorithmic}[1]
+\Require $x_0 \in \mathcal{X}$ (vertex of $\mathcal{X}$), active set $S_0 = \{x_0\}$, weights $\lambda_0 = \{1\}$
+\For{$k = 0, 1, \ldots, N-1$}
+    \State $z_k^{\rm FW} \gets \arg\min_{v \in \mathcal{X}} \nabla f(x_k)^T v$ \Comment{FW vertex (LMO)}
+    \State $v_k^{\rm A} \gets \arg\max_{v \in S_k} \nabla f(x_k)^T v$ \Comment{Away vertex (max over active set)}
+    \State $G_k^{\rm FW} \gets \nabla f(x_k)^T(x_k - z_k^{\rm FW})$; \quad $G_k^{\rm A} \gets \nabla f(x_k)^T(v_k^{\rm A} - x_k)$ \Comment{Gaps}
+    \If{$G_k^{\rm FW} \geq G_k^{\rm A}$}
+        \State $d_k \gets z_k^{\rm FW} - x_k$; \quad $\gamma_{\max} \gets 1$ \Comment{FW step}
+    \Else
+        \State $d_k \gets x_k - v_k^{\rm A}$; \quad $\gamma_{\max} \gets \lambda_k(v_k^{\rm A}) / (1 - \lambda_k(v_k^{\rm A}))$ \Comment{Away step}
+    \EndIf
+    \State $\gamma_k \gets \arg\min_{0 \leq \gamma \leq \gamma_{\max}} f(x_k + \gamma d_k)$ \Comment{Exact or Wolfe line search}
+    \State $x_{k+1} \gets x_k + \gamma_k\, d_k$; update active set $S_{k+1}$ and weights $\lambda_{k+1}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\noindent The away step drops the weight of the vertex $v_k^A$ most aligned with the gradient, reducing the component of $x_k$ pointing in the gradient direction.
+When the FW gap exceeds the away gap, the standard FW step is preferred; otherwise, the away step removes a problematic vertex from the active representation.
+Under strong convexity, this eliminates the sublinear oscillation of standard FW and achieves:
+\begin{equation}
+  f(x_k) - f^\star \leq \left(1 - \frac{\mu}{L}\right)^k (f(x_0) - f^\star) \qquad \text{(linear convergence)}.
+\end{equation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/away_step_fw.pdf}
+\caption{Q6: Standard FW vs Away-step FW on a strongly convex quadratic over the probability simplex $\Delta^5$. Left: convergence of $f(x_k) - f^\star$ (log scale). Standard FW (blue) achieves sublinear $O(1/k)$ convergence even for the strongly convex objective (parallel to the $O(1/k)$ dashed reference). Away-step FW (red) breaks away from the sublinear envelope after 20--30 iterations and achieves linear convergence, confirming the theory of Lacoste-Julien \& Jaggi (2015). Right: the same data on a log scale with the fitted linear rate $\hat{\rho}$; the away-step trajectory is parallel to the exponential fit (dashed), demonstrating linear convergence. The simplex setting ensures that both the FW vertex (arg min of gradient) and the away vertex (arg max over active set) require only $O(d)$ computation per iteration.}
+\label{fig:away_step_fw}
+\end{figure}
 
 % ============================================================
 \section{Conclusion}
