@@ -814,6 +814,34 @@ batch-sampling noise, is the limiting factor.}
 \label{fig:q2_sgd_per_update}
 \end{figure}
 
+\subsection{Variance Reduction and the SGD Noise Floor}
+
+A fundamental limitation of mini-batch SGD with a fixed learning rate $\alpha$ is that it
+cannot converge to $f^\star$ exactly for strongly convex objectives: the final iterate satisfies
+\begin{equation}
+  \mathbb{E}[f(\theta_k)] - f^\star \;\geq\; \frac{\alpha\sigma^2}{2b}
+  \qquad (\text{irreducible SGD noise floor})
+\end{equation}
+where $\sigma^2 = \mathrm{Var}[g_i(\theta^\star)]$ is the per-sample gradient variance and $b$
+is the batch size. This is seen in Figure~\ref{fig:q2_sgd_batch}: even with $b=40$, the
+objective plateaus above $J^\star$ unless $\alpha \to 0$.
+
+\textbf{Variance reduction techniques} break this barrier. The SVRG algorithm
+(Stochastic Variance Reduced Gradient, Johnson \& Zhang 2013) computes a full-batch gradient
+$\tilde g = \frac{1}{m}X^T(X\theta - y)$ every $m$ inner iterations and uses it as a control variate:
+$g_{\mathrm{SVRG}} = g_{\mathcal{B}}(\theta) - g_{\mathcal{B}}(\tilde\theta) + \tilde g$.
+This estimator satisfies $\mathrm{Var}[g_{\mathrm{SVRG}}] \to 0$ as iterates converge to $\theta^\star$
+(since both terms approach $\nabla J(\theta^\star)$ when $\theta = \tilde\theta = \theta^\star$).
+The resulting convergence rate is \emph{linear} (geometric), matching full-batch GD but with
+$O(m/b)$ fewer gradient evaluations per outer iteration. For Benchmark~A, SVRG would achieve
+$J(\theta_k) - J^\star \leq \rho^k$ for some $\rho < 1$, in contrast to mini-batch SGD's
+$O(1/k) + \alpha\sigma^2/(2b)$ floor visible in the experiments.
+
+\textbf{Practical implication:} For finite-sum objectives ($J = \frac{1}{m}\sum_i f_i$), variance
+reduction methods (SVRG, SAG, SAGA) achieve the best of both worlds: $O(m)$-evaluation inner
+loops with convergence rates comparable to full-batch gradient methods, effectively eliminating
+the noise floor that limits plain SGD.
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
 \label{sec:q3}
@@ -1090,6 +1118,36 @@ are needed --- the valley traversal from $(0.183, 0.020)$ to $(1,1)$ still requi
 $\approx 30$--$50$ additional Newton steps with $\alpha=0.22$.}
 \label{fig:q3_rosenbrock_detail}
 \end{figure}
+
+\subsection{Quasi-Newton Methods and Adam as Diagonal Newton}
+
+\textbf{Practical limitation of Newton's method.}
+Theorem~\ref{thm:newton} guarantees quadratic convergence but requires forming and inverting
+the $d \times d$ Hessian at each step, costing $O(d^3)$ per iteration.
+For $d > 10^4$, this is infeasible (e.g., $d = 10^6$ for a neural network requires
+$8 \times 10^{12}$ bytes for $H$ alone). \emph{Quasi-Newton} methods approximate the inverse
+Hessian $H^{-1}$ without computing it explicitly:
+
+\begin{itemize}[nosep]
+  \item \textbf{L-BFGS} (Limited-memory BFGS): stores $m \ll d$ past curvature pairs
+        $(s_k, y_k) = (x_k - x_{k-1}, \nabla f_k - \nabla f_{k-1})$ and uses the
+        secant condition $H_k s_k = y_k$ to build a rank-$2m$ update to $H_0 = I$.
+        Storage: $O(md)$; convergence: superlinear; preferred for $d \leq 10^7$.
+  \item \textbf{Adam as diagonal quasi-Newton}: the Adam update can be written as
+        $x_{t+1} = x_t - D_t^{-1}\hat m_t$ where $D_t = \mathrm{diag}(\sqrt{\hat v_t} + \varepsilon)$.
+        The matrix $D_t$ approximates $\mathrm{diag}(|\nabla^2 f(x_t)|)^{1/2}$ via the
+        gradient second-moment estimator $\hat v_{t,i} \approx [\nabla^2 f]_{ii}$
+        (squared gradient $\approx$ diagonal Hessian entry for well-separated eigenvalues).
+        Thus Adam is a \emph{diagonal quasi-Newton method}, which explains both its
+        effectiveness for axis-aligned curvature (Benchmark~B, $7$:$1$ ratio) and its
+        inferiority to exact Newton on problems with strong off-diagonal coupling (Rosenbrock,
+        Figure~\ref{fig:q3_hessian_geometry}).
+\end{itemize}
+
+The performance hierarchy on Rosenbrock (Figure~\ref{fig:all_methods_rosenbrock}) exactly
+mirrors this theoretical ordering: exact Newton $\gg$ first-order methods with diagonal
+scaling (Adam, Adagrad) $\geq$ first-order methods without scaling (GD), as predicted
+by the completeness of each method's curvature approximation.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
