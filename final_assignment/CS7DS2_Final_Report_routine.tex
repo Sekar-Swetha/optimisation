@@ -265,9 +265,14 @@ fails to vanish as $x_k \to x^{\star}_{\text{true}}$, causing $\alpha_k \to \inf
 The effective per-coordinate step for Adagrad is
 $\alpha_k^{(i)} = \alpha_0 / \sqrt{\sum_{j=0}^{k} (g_j^{(i)})^2}$.
 Coordinates with consistently large gradients receive smaller steps; rare or small-gradient
-coordinates retain larger steps. This makes Adagrad well-suited to sparse or anisotropic
-problems. However, the monotonically \emph{decreasing} step can cause premature slowdown
-on dense problems, which RMSprop addresses.
+coordinates retain larger steps. This is equivalent to \emph{diagonal preconditioning}:
+if $D_k = \operatorname{diag}(\sqrt{G_k} + \varepsilon)^{-1}$, then
+$x_{k+1} = x_k - \alpha_0 D_k g_k$, which approximates Newton's step when
+$D_k \approx [\nabla^2 f(x_k)]^{-1}$ (true when the Hessian is approximately diagonal
+with its diagonal proportional to the accumulated squared gradients).
+This makes Adagrad well-suited to sparse or anisotropic problems. However, the
+monotonically \emph{decreasing} step can cause premature slowdown on dense problems
+(because $G_k \to \infty$ coordinate-wise), which RMSprop addresses.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -558,6 +563,16 @@ This is optimal among first-order methods (matching the information-theoretic lo
 Compared to GD's $O(1/k)$ rate (or the linear rate $O(\rho^k)$ for strongly convex $f$),
 the $O(1/k^2)$ rate represents a qualitative improvement that manifests as substantially
 faster convergence on moderately ill-conditioned problems.
+
+\begin{remark}[Information-theoretic optimality]
+Nesterov (1983) established that \emph{no} first-order method (using only gradient
+evaluations $\nabla f(x_0), \ldots, \nabla f(x_{k-1})$) can achieve better than
+$O(1/k^2)$ on $L$-smooth convex functions in the worst case.  The lower bound is attained
+by the adversarial quadratic $f(x) = \frac{L}{2}(x_1^2 + \sum_{i=1}^{k-1}(x_i - x_{i+1})^2 - x_k^2)$
+which is designed so that any first-order method needs $\Omega(1/k^2)$ excess loss after
+$k$ steps starting from the origin.  Nesterov acceleration matches this lower bound,
+making it the \emph{optimal} first-order algorithm for this problem class.
+\end{remark}
 
 \begin{remark}[Why $\beta_k = (k-1)/(k+2)$ is optimal]
 The momentum schedule $\beta_k = (k-1)/(k+2)$ is derived from the Lyapunov function
@@ -1045,16 +1060,33 @@ Hessian variation.}
 \label{fig:q3_update}
 \end{figure}
 
+\begin{theorem}[Newton's quadratic convergence]
+\label{thm:newton}
+Let $f$ be twice continuously differentiable, $\nabla^2 f$ Lipschitz-continuous with
+constant $M$ in a neighbourhood of the minimiser $x^{\star}$, and suppose
+$\nabla^2 f(x^{\star}) \succ 0$ with smallest eigenvalue $\mu > 0$.  For the full Newton
+step ($\alpha = 1$) and $x_0$ sufficiently close to $x^{\star}$:
+\begin{equation}
+  \label{eq:newton_quad}
+  \|x_{k+1} - x^{\star}\| \;\leq\; \frac{M}{2\mu}\,\|x_k - x^{\star}\|^2.
+\end{equation}
+This \emph{quadratic convergence} means the number of correct decimal digits roughly
+doubles each iteration.  For damped Newton ($\alpha < 1$) or far from the minimum,
+\eqref{eq:newton_quad} does not apply; a global phase with linear-rate convergence
+(Armijo backtracking guarantees $f(x_{k+1}) \leq f(x_k) - c\alpha_k\|\nabla f(x_k)\|^2$)
+precedes the local quadratic phase.
+\end{theorem}
+
 \subsection{Comparative Summary}
 
 \begin{itemize}[nosep]
-\item \textbf{Quadratic functions:} Newton is exact in one step. This is an extreme advantage
-  over all first-order methods.
+\item \textbf{Quadratic functions:} Newton is exact in one step (Theorem~\ref{thm:newton}
+  with $M = 0$). This is an extreme advantage over all first-order methods.
 \item \textbf{Near-quadratic functions (Benchmark B):} Newton converges in $O(5)$ steps vs
   GD's $O(80)$ steps --- a $16\times$ reduction.
 \item \textbf{Highly nonlinear functions (Rosenbrock):} Newton still substantially outperforms
   GD but requires damping ($\alpha < 1$) to maintain stability, losing the full quadratic
-  convergence rate.
+  convergence rate (the global phase dominates in 20 iterations).
 \item \textbf{Computational cost:} Each Newton step requires forming and inverting the Hessian:
   $O(n^2)$ memory and $O(n^3)$ arithmetic (or $O(n^2)$ with structured factorisation). For
   large-scale problems, quasi-Newton methods (BFGS, L-BFGS) approximate the Hessian without
@@ -1582,16 +1614,31 @@ demonstrating the necessity of sufficiently large $\lambda$ for active constrain
 A more principled approach is the \emph{augmented Lagrangian method} (ALM), which
 adds both a penalty and a Lagrange multiplier estimate:
 \begin{equation}
+\label{eq:alm_obj}
 F_{\rho,\mu}(x) = f(x) + \mu \max(0,\, g(x)) + \frac{\rho}{2}[\max(0,\, g(x))]^2.
 \end{equation}
 The multiplier $\mu$ is updated between outer iterations as
 $\mu^{(t+1)} \leftarrow \mu^{(t)} + \rho\, g(x^{(t)}_\star)$, where $x^{(t)}_\star$
-minimises $F_{\rho,\mu^{(t)}}$. This dual ascent step drives $\mu$ towards the
-true Lagrange multiplier $\mu^{\star}$. At the true $\mu^{\star}$, the ALM objective
-is exact even at finite $\rho$, which is the key advantage over the pure penalty
-method (which requires $\rho \to \infty$). The ADMM (Alternating Direction Method of
-Multipliers) is a popular special case used extensively in distributed optimisation
-and compressed sensing.
+minimises $F_{\rho,\mu^{(t)}}$.
+
+\begin{proposition}[ALM convergence]
+\label{prop:alm}
+Under constraint qualification (LICQ) at $x^{\star}$, the ALM dual ascent update drives
+$\mu^{(t)} \to \mu^{\star}$ at a linear rate $|\mu^{(t)} - \mu^{\star}| \leq C(1 - \rho/c)^t$
+for some $c > 0$ depending on the problem.  At the true multiplier $\mu^{\star}$, the ALM
+subproblem is equivalent to the constrained problem at finite $\rho$, whereas the pure
+penalty method requires $\rho \to \infty$ to enforce the constraint exactly.  This is the
+fundamental advantage of maintaining a dual estimate.
+\end{proposition}
+\begin{remark}
+The penalty sub-problems in \eqref{eq:alm_obj} may be ill-conditioned for large $\rho$
+(condition number grows as $O(\rho)$ for equality constraints), but the ALM keeps $\rho$
+moderate while achieving exact feasibility through the multiplier update.
+ADMM (Alternating Direction Method of Multipliers) is a popular distributed variant that
+splits the primal update into two alternating steps, enabling parallel computation over
+separable constraint structures, with applications in compressed sensing and distributed
+machine learning.
+\end{remark}
 
 % ============================================================
 \section[Question 6: Frank--Wolfe Algorithm]{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1880,20 +1927,21 @@ condition number, $L$ is the Lipschitz gradient constant, $\mu$ is strong convex
 the constraint set diameter. Rates are for deterministic, smooth, strongly convex objectives
 unless otherwise noted. ``conv.''\ = convergence.}
 \label{tab:convergence_rates}
-\begin{tabular}{lllc}
+\begin{tabular}{lllcc}
 \toprule
-\textbf{Method} & \textbf{Conv.\ Rate} & \textbf{Setting} & \textbf{Hessian needed?} \\
+\textbf{Method} & \textbf{Conv.\ Rate} & \textbf{Setting} & \textbf{Hessian?} & \textbf{Result} \\
 \midrule
-Gradient Descent & $O\!\left(\left(1-\tfrac{2}{\kappa+1}\right)^k\right)$ linear & Str.\ convex & No \\
-Heavy Ball (optimal) & $O\!\left(\left(\tfrac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^{2k}\right)$ & Quadratic & No \\
-Nesterov & $O(1/k^2)$ / linear$^*$ & Convex / SC & No \\
-Adam & $O(1/\sqrt{k})$ & Non-convex / stoch. & No \\
-Newton (quadratic) & Exact in 1 step & Quadratic & Yes (constant) \\
-Newton (general) & Quadratic $\|e_{k+1}\| \leq C\|e_k\|^2$ & Near minimum & Yes (varying) \\
-Frank--Wolfe & $O(LD^2/k)$ & Convex over $\mathcal{X}$ & No \\
-Projected GD & $O\!\left(\rho^k\right)$ linear & Str.\ convex, proj. & No \\
+Gradient Descent & $O\!\left(\left(1-\tfrac{2}{\kappa+1}\right)^k\right)$ linear & Str.\ convex & No & \S\ref{sec:q1} \\
+Heavy Ball (optimal) & $O\!\left(\left(\tfrac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^{2k}\right)$ & Quadratic & No & \S\ref{sec:q1} \\
+Nesterov & $O(1/k^2)$ / linear$^*$ & Convex / SC & No & Thm.~\ref{thm:nesterov} \\
+Adam & $O(1/\sqrt{k})$ & Non-convex / stoch. & No & \S\ref{sec:q2} \\
+Newton (quadratic) & Exact in 1 step & Quadratic & Yes (constant) & Thm.~\ref{thm:newton} \\
+Newton (general) & Quadratic $\|e_{k+1}\| \leq C\|e_k\|^2$ & Near minimum & Yes (varying) & Thm.~\ref{thm:newton} \\
+BFGS & Super-linear & Near minimum & Approx.\ only & Prop.~\ref{prop:bfgs} \\
+Frank--Wolfe & $O(LD^2/k)$ & Convex over $\mathcal{X}$ & No & Prop.~\ref{prop:fw_conv} \\
+Projected GD & $O\!\left(\rho^k\right)$ linear & Str.\ convex, proj. & No & Prop.~\ref{prop:pgd_conv} \\
 \midrule
-\multicolumn{4}{l}{$^*$For strongly convex: $O\!\left(\left(1 - 1/\sqrt{\kappa}\right)^k\right)$.} \\
+\multicolumn{5}{l}{$^*$For strongly convex: $O\!\left(\left(1 - 1/\sqrt{\kappa}\right)^k\right)$.} \\
 \bottomrule
 \end{tabular}
 \end{table}
