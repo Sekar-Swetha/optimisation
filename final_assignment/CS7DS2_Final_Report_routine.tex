@@ -581,8 +581,14 @@ The effective step size per coordinate is bounded as $|\Delta x_t^{(i)}| \leq \a
 
 \begin{remark}[Adam convergence and AMSGrad]
 Reddi et al.~(2018) showed that Adam can \emph{fail to converge} on convex online optimisation problems: the exponential moving average of $v_t$ can ``forget'' large past gradients, causing the effective step size to increase spuriously and preventing convergence.
-Their proposed fix, \emph{AMSGrad}, uses $\hat{v}_t = \max(\hat{v}_{t-1}, v_t)$ (a running maximum) instead of the direct EMA, restoring convergence guarantees while preserving Adam's adaptivity.
-In practice on non-convex deep learning objectives, the failure modes of Adam are rarely observed, and Adam with careful learning-rate tuning remains the default optimiser for training neural networks.
+The canonical counterexample (Reddi et al., Thm.\ 1) uses the 1-D online convex problem:
+\[
+  f_t(x) = \begin{cases} Cx & \text{if } t \equiv 1 \pmod{3} \\ -x & \text{otherwise} \end{cases},
+  \quad \mathcal{X} = [-1, 1], \quad C > 2.
+\]
+For large $C$ and small $\beta_2 < 1$, the gradient $C$ at steps $t \equiv 1$ gets ``forgotten'' by the EMA $v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2$ faster than the optimum can track, leading Adam to converge to the \emph{wrong point} $x^\star_{\rm bad} = +1$ instead of $x^\star = -1$.
+AMSGrad fixes this with $\hat{v}_t = \max(\hat{v}_{t-1}, v_t)$ (a running maximum) instead of the direct EMA, restoring convergence guarantees while preserving Adam's adaptivity.
+In practice on non-convex deep learning objectives, the failure modes of Adam are rarely observed because the loss landscapes of neural networks behave very differently from worst-case convex examples, and Adam with careful learning-rate tuning remains the default optimiser for training neural networks.
 \end{remark}
 
 \begin{remark}[Gradient clipping and heavy-tailed noise]
@@ -783,6 +789,23 @@ SAGA achieves the same linear convergence as SVRG but with better constant facto
   \item \textbf{SAGA} avoids the full epoch pass but requires storing one gradient per data point: $O(nd)$ memory (e.g., $n=10^6$, $d=100$: 100M floats = 0.8 GB). SAGA achieves a tighter convergence constant than SVRG ($\rho_{\rm SAGA} \approx 1 - \mu\alpha$ vs $\rho_{\rm SVRG} \approx 1 - 1/(4\kappa)$ for optimal $\alpha$).
   \item \textbf{Proximal extension:} SAGA admits a proximal step $\theta_{t+1} = \mathrm{prox}_{\alpha\psi}(\theta_t - \alpha \tilde{g}_t)$ for composite objectives $J(\theta) + \psi(\theta)$ (e.g., $\ell_1$ regularisation), enabling sparse solutions.
 \end{itemize}
+
+\begin{remark}[SVRG convergence proof sketch]
+To see why SVRG achieves linear convergence, note that the corrected gradient satisfies:
+\[
+  \mathbb{E}[\|\tilde{g}_t\|^2] \leq 4L(J(\theta_t) - J^\star) + 4L(J(\tilde\theta) - J^\star),
+\]
+since $\mathbb{E}[\|\nabla J_i(\theta) - \nabla J_i(\theta')\|^2] \leq 2L(J(\theta)-J^\star) + 2L(J(\theta')-J^\star)$ by $L$-smoothness.
+Taking the inner loop to have $m$ steps and choosing step $\alpha \leq 1/(4L)$, a single epoch of SVRG satisfies:
+\[
+  \mathbb{E}[J(\tilde\theta^{(s+1)}) - J^\star]
+  \leq \frac{1}{m\alpha\mu - 2}\bigl(J(\tilde\theta^{(s)}) - J^\star\bigr)
+  = \rho_{\rm SVRG}\,\bigl(J(\tilde\theta^{(s)}) - J^\star\bigr),
+\]
+where $\rho_{\rm SVRG} = 1/(m\alpha\mu - 2) < 1$ for $m > (2+1)/(\alpha\mu)$.
+With $\alpha = 0.1/L$ and $m = 2n$, this gives $\rho_{\rm SVRG} \approx 1 - \mu/(10L) = 1 - 1/(10\kappa)$, which is worse than the GD rate $(1-1/\kappa)$ per full gradient evaluation but equivalent per individual gradient evaluation since SVRG uses only $1/n$ of the data per step.
+Comparing on a per-data-point basis (epoch = $n$ stochastic steps + $n$ snapshot steps = $2n$ evaluations): SVRG needs $O(2n\kappa\log(1/\varepsilon))$ vs GD's $O(n\kappa\log(1/\varepsilon))$ per gradient evaluation---the same rate with a factor of 2 overhead from the snapshot, but with the crucial advantage that SVRG also works when the per-step cost is $O(b) \ll O(n)$.
+\end{remark}
 
 Figure~\ref{fig:sgd_variance_reduction} illustrates gradient variance reduction, and Figure~\ref{fig:saga_svrg_comparison} shows a detailed three-way comparison on Benchmark A.
 
@@ -1068,6 +1091,18 @@ The Newton decrement also equals $\|p_k\|_H = \sqrt{p_k^T H_k p_k}$ (the Newton 
 On Benchmark A, the Newton decrement drops from $\lambda_0 \approx 5.3$ (at $\theta_0 = [0,0]^T$) to $\lambda_1 < 10^{-8}$ after a single step, explaining the one-step convergence.
 \end{remark}
 
+\begin{remark}[Trust-region interpretation of regularised Newton]
+The damped Newton step $x_{k+1} = x_k - (H_k + \lambda I)^{-1} g_k$ with regularisation $\lambda > 0$ (Levenberg--Marquardt) is equivalent to solving the \emph{trust-region subproblem}:
+\[
+  \min_{p} \; g_k^T p + \tfrac{1}{2} p^T H_k p \quad \text{s.t.} \quad \|p\| \leq \Delta_k,
+\]
+where the constraint radius $\Delta_k$ and regulariser $\lambda$ are related by the complementary slackness condition $\lambda(\|p^\star\| - \Delta_k) = 0$.
+When $H_k$ is positive definite and $\|H_k^{-1}g_k\| \leq \Delta_k$, the unconstrained Newton step is optimal ($\lambda = 0$).
+When the Newton step is too long (outside the trust region), $\lambda > 0$ regularises the Hessian and shortens the step.
+This provides a principled global convergence strategy: in the damped phase ($\lambda(x_k) \geq 1/4$), the Hessian may be ill-conditioned or have negative curvature (for non-convex objectives), and trust-region regularisation is necessary.
+The Hessian regularisation used in this report ($H_{\rm reg} = H + \delta I$, $\delta = 10^{-8}$) is a simplified version: constant $\delta$ avoids non-positive-definite Hessians but does not adapt to the current iterate's curvature.
+\end{remark}
+
 \begin{remark}[Why L-BFGS in practice]
 Full BFGS requires $O(d^2)$ storage for the $d\times d$ approximation matrix, prohibitive for $d \geq 10^4$.
 L-BFGS circumvents this by implicitly representing the inverse Hessian through the last $m$ ($s_k$, $y_k$) pairs, making it the \emph{de facto} standard for smooth optimisation in machine learning (L-BFGS-B in SciPy, L-BFGS in PyTorch).
@@ -1262,6 +1297,22 @@ The grid search cost scales as $N^d$ where $N$ is the number of grid points per 
 At the resolution $N = 55$ and tolerance $\Delta x \approx 0.074$ used here: $d=2$ costs $3{,}025$ evaluations; $d=5$ would cost $55^5 \approx 5 \times 10^8$; $d=10$ costs $55^{10} \approx 2.5 \times 10^{17}$ --- beyond all computation.
 This \emph{curse of dimensionality} (Bellman 1957) means grid search is only practical for $d \leq 3$ at any reasonable resolution, and motivates all gradient-based and derivative-free iterative methods for higher-dimensional problems.
 Bayesian optimisation (using a Gaussian process surrogate) is the practical global optimisation method for $d \leq 20$; evolutionary algorithms scale to moderate $d \leq 100$; but all global methods require exponential samples in the worst case.
+\end{remark}
+
+\begin{remark}[Coordinate descent as a structured derivative-free method]
+\emph{Coordinate descent} (CD) is a hybrid approach that computes exact partial derivatives along one coordinate at a time, using the update:
+\[
+  x_{k+1} = x_k - \alpha_k \frac{\partial f}{\partial x_{i_k}}(x_k) \cdot e_{i_k},
+\]
+where $i_k$ is either cyclic ($i_k = k \bmod d$) or randomly sampled.
+CD lies between derivative-free methods (no gradient required) and full gradient methods (all $d$ partial derivatives computed per step):
+\begin{itemize}[nosep]
+  \item \emph{Cost:} 1 partial derivative per step (can be computed by a single FD evaluation if analytic is unavailable), vs $d$ for full gradient descent.
+  \item \emph{Rate:} $O(\kappa d / \varepsilon)$ (cyclic CD on $L$-smooth objective) or $O(\kappa d / \varepsilon)$ (random CD); factor $d$ slower than GD per coordinate evaluation, but often the same \emph{per gradient evaluation} as GD when $d$ gradient components are available.
+  \item \emph{Proximal extension:} Coordinate-wise proximal updates enable efficient LASSO/elastic net solving. The \emph{LASSO coordinate descent} algorithm (Friedman et al., 2010) uses soft-thresholding on each coordinate: $x_i \gets S_{\alpha\lambda}(x_i - \alpha (\nabla_i f_{\rm smooth})(x))$, which is the basis of \texttt{sklearn}'s \texttt{ElasticNet} solver.
+  \item \emph{L-smoothness structure:} For block-separable objectives, each coordinate update has Lipschitz constant $L_i$ (the $i$-th diagonal of the Hessian), and the optimal step $\alpha_i = 1/L_i$ differs per coordinate---analogous to Adagrad's per-coordinate scaling.
+\end{itemize}
+CD is most competitive when computing a single partial derivative is cheap (e.g., sparse models) and $d$ is large; it is dominated by full-gradient methods when all $d$ partials can be computed jointly at the same cost.
 \end{remark}
 
 \begin{figure}[H]
@@ -1618,6 +1669,26 @@ For our box $\mathcal{X}$: $D^2 = (5 - 0.5)^2 + (10 + 5)^2 = 20.25 + 225 = 245.2
 
 \noindent
 This $O(1/k)$ rate is achievable but generally cannot be improved for Frank--Wolfe without additional assumptions.
+
+\begin{remark}[FW gap as a dual certificate]
+The Frank--Wolfe gap $G_k = \nabla f(x_k)^T(x_k - z_k)$ provides a computable \emph{dual certificate of optimality}, stronger than merely a primal feasibility check.
+By convexity:
+\[
+  f(x_k) - f^\star = f(x_k) - \min_{x \in \mathcal{X}} f(x)
+  \leq f(x_k) - \bigl[f(x_k) + \nabla f(x_k)^T(x^\star - x_k)\bigr]
+  = \nabla f(x_k)^T(x_k - x^\star)
+  \leq G_k,
+\]
+where the last step uses $z_k = \arg\min_{z \in \mathcal{X}} \nabla f^T z \leq \nabla f^T x^\star$, so $\nabla f^T(x_k - z_k) \geq \nabla f^T(x_k - x^\star)$.
+Thus $G_k \geq f(x_k) - f^\star$ at every iteration: the gap is always an \emph{upper bound} on the true optimality gap.
+
+This makes $G_k$ directly usable as a stopping criterion: terminate when $G_k < \varepsilon$.
+No knowledge of $f^\star$ is required (unlike Polyak steps), and no expensive dual problem solve is needed (unlike Lagrangian approaches).
+The FW gap simultaneously certifies the quality of $x_k$ as a primal solution \emph{and} provides a dual lower bound on $f^\star$:
+\[
+  f(x_k) - G_k \leq f^\star \leq f(x_k).
+\]
+\end{remark}
 
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 
