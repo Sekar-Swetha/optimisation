@@ -710,6 +710,37 @@ Note that Newton's final position on Benchmark A $(3.028, 4.017)$ closely approx
 
 Each Newton iteration requires: (i) evaluating $\nabla^2 f(x_k)$ at cost $O(d^2)$; (ii) solving the linear system $H_k p_k = g_k$ at cost $O(d^3)$ via Cholesky factorisation. For $d = 2$ the cost is negligible, but for large $d$ (e.g., deep learning with $d \sim 10^7$), the $O(d^3)$ cost is prohibitive. In contrast, GD costs $O(d)$ per iteration. Despite requiring far fewer iterations, Newton's per-iteration cost limits its practical use to low-dimensional problems or Quasi-Newton approximations (e.g., L-BFGS) that avoid the full Hessian.
 
+\subsection{Newton Decrement and Stopping Criterion}
+
+The \textbf{Newton decrement} $\lambda(x)$ provides a natural, affine-invariant stopping criterion for Newton's method:
+\begin{equation}
+\lambda(x) = \sqrt{\nabla f(x)^T\,[\nabla^2 f(x)]^{-1}\,\nabla f(x)} = \|p\|_H,
+\end{equation}
+where $\|p\|_H = \sqrt{p^T H p}$ denotes the Hessian-weighted norm of the Newton direction $p = H^{-1}\nabla f(x)$. Since $p^T H p = (H^{-1}g)^T H (H^{-1}g) = g^T H^{-1} g$, this equals $\lambda(x) = \sqrt{g^T H^{-1} g}$. For a strongly convex function, the Newton decrement bounds the suboptimality:
+\begin{equation}
+f(x) - f^{\star} \leq \frac{\lambda(x)^2}{2},
+\end{equation}
+up to higher-order terms when $x$ is near $x^{\star}$. This motivates the standard stopping criterion $\lambda(x)^2/2 < \varepsilon_{\mathrm{tol}}$.
+
+A crucial advantage over the gradient norm $\|\nabla f(x)\|$ is \emph{affine invariance}: $\lambda(Ax)$ is unchanged under any invertible linear transformation $A$ of the domain, making the stopping criterion independent of the coordinate scaling. In contrast, $\|\nabla f(x)\|$ grows or shrinks proportionally to coordinate scaling, making it a less reliable indicator of proximity to the optimum.
+
+For the Newton implementation in this assignment (Benchmark A, B, C), the Newton decrement can be computed from the quantities already available ($g$ and $H^{-1}$). On Benchmark A after 1 iteration, $\lambda(x_1)^2/2 \approx 10^{-14}$ (machine precision), confirming one-step convergence. On Rosenbrock after 20 iterations with damping $\alpha = 0.22$, the iterate has not yet entered the basin where the quadratic model is accurate, so $\lambda^2/2 \gg \varepsilon$ signals that more iterations are needed.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_newton_decrement.pdf}
+\caption{Q3: Newton decrement $\lambda^2/2 = \frac{1}{2}g_k^T H_k^{-1} g_k$ (blue circles) vs.\ suboptimality $f(x_k) - f^{\star}$ (red squares), Newton iteration $k$, all three benchmarks. The Newton decrement upper-bounds the suboptimality near $x^{\star}$, making it a valid stopping criterion. On Benchmark A both quantities collapse to machine precision after iteration 1 (exact one-step convergence). On Benchmark B they decay rapidly and coincide by iteration $\sim$5. On Rosenbrock with fixed $\alpha = 0.22$, both remain well above a tolerance of 0.5 (grey dotted line) after 20 iterations, indicating that more iterations or a backtracking schedule would be needed.}
+\label{fig:q3_newton_decrement}
+\end{figure}
+
+\begin{remark}[Backtracking Line Search as Alternative to Fixed Damping]
+Instead of fixing $\alpha = 0.22$ for all iterates on Rosenbrock, practical Newton implementations use \textbf{Armijo backtracking line search}: starting from $\alpha = 1$ (full Newton step), reduce $\alpha \leftarrow \rho\, \alpha$ (with $\rho \in (0,1)$, typically $\rho = 0.5$) until the sufficient decrease (Armijo) condition
+\begin{equation}
+f(x_k - \alpha\, p_k) \leq f(x_k) - c\,\alpha\,\nabla f(x_k)^T p_k
+\end{equation}
+is satisfied, where $c \in (0, 1/2)$ (typically $c = 10^{-4}$). Since $p_k = H_k^{-1} g_k$ is a descent direction ($\nabla f^T p_k = g_k^T H_k^{-1} g_k = \lambda(x_k)^2 > 0$), the condition ensures each step achieves a guaranteed fraction $c$ of the first-order predicted decrease. Far from the optimum (where the quadratic model is inaccurate), $\alpha$ is reduced until the step is safe; near the optimum, the full step $\alpha = 1$ is typically accepted immediately, recovering quadratic convergence. The fixed $\alpha = 0.22$ in the experiments is a conservative constant chosen to be safe throughout the Rosenbrock trajectory; backtracking would allow larger steps in the early phase (more like $\alpha \approx 0.5$--$0.8$) and recover full-step ($\alpha = 1$) convergence near the optimum, likely halving the iteration count required.
+\end{remark}
+
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
 \label{sec:q4}
@@ -783,6 +814,12 @@ The Nelder--Mead algorithm maintains a simplex of $n+1 = 3$ vertices in $\mathbb
 \item \textbf{Shrink} ($\sigma = 0.5$): if contraction fails, contract all non-best vertices towards the best.
 \end{enumerate}
 No gradient or Hessian information is required. Settings: initial simplex step $= 0.35$, 160 iterations.
+
+\begin{remark}[Convergence Rate and Degeneracy of Nelder--Mead]
+Nelder--Mead has \textbf{no known convergence rate} for $d \geq 2$. McKinnon (1998) constructed an explicit counterexample in $\mathbb{R}^2$ where Nelder--Mead converges to a non-stationary point---a point that is not even a local minimum---despite all simplex operations reducing the vertex values. The mechanism is \emph{simplex degeneracy}: when the $n+1 = 3$ vertices become nearly collinear (degenerate simplex), reflection steps move the worst vertex back along the same line, and no expansion can restore non-degeneracy. In this degenerate state, the algorithm loses its ability to explore directions transverse to the degenerate edge.
+
+In practice, degeneracy is mitigated by: (1) monitoring the simplex diameter $\max_{i,j}\|v_i - v_j\|$ and restarting with a fresh non-degenerate simplex if it falls below a threshold; (2) ensuring the initial step $> 0$ so that $v_0, v_1, v_2$ are non-collinear; and (3) periodic shrink operations. For the $d=2$ Rosenbrock problem, Nelder--Mead typically works well because the banana-shaped valley is smooth and the simplex can track it: reflection moves the worst vertex across the valley, expansion extends it further, and the simplex gradually aligns with the valley direction. In higher dimensions ($d \geq 6$), simplex degeneracy is common and Nelder--Mead is generally not recommended; derivative-free alternatives such as COBYLA, BOBYQA, or model-based methods (e.g., DFO-LS) are preferred.
+\end{remark}
 
 \begin{figure}[H]
 \centering
@@ -944,6 +981,23 @@ The starting point $x_0 = (0.2, 4.0)$ has $\|x_0 - x^{\star}\|^2 = (0.2-0.582)^2
 \label{fig:q5_penalty_sensitivity}
 \end{figure}
 
+\subsection{Augmented Lagrangian: A Superior Alternative to Linear Penalty}
+
+The \textbf{augmented Lagrangian method} (ALM, also known as the method of multipliers) overcomes the key limitation of linear penalty methods by combining a Lagrange multiplier $\mu$ with a quadratic penalty:
+\begin{equation}
+\mathcal{L}_\rho(x, \mu) = f(x) + \mu\,(0.5 - x_1) + \frac{\rho}{2}\max(0,\, 0.5 - x_1)^2.
+\end{equation}
+The alternating minimisation scheme iterates:
+\begin{align}
+x^{k+1} &= \arg\min_{x}\; \mathcal{L}_\rho(x,\, \mu^k) \quad \text{(primal update, inner optimisation)}, \\
+\mu^{k+1} &= \mu^k + \rho\,\max(0,\, 0.5 - x_1^{k+1}) \quad \text{(dual ascent step)}.
+\end{align}
+The dual update accumulates the constraint violation, driving it to zero at a \emph{fixed} (finite) penalty $\rho$. This is the critical advantage over the linear penalty method, which requires $\lambda \to \infty$ to achieve exact feasibility. The ALM at fixed $\rho$ converges to the exact constrained solution because the multiplier $\mu$ effectively shifts the unconstrained minimiser of $\mathcal{L}_\rho(\cdot, \mu^k)$ to account for the constraint, rather than steepening the penalty.
+
+\textbf{Comparison in the present problem:} Since the constraint $x_1 \geq 0.5$ is \emph{inactive} at the unconstrained minimum ($x_1^{\star} \approx 0.582 > 0.5$), the optimal Lagrange multiplier is $\mu^{\star} = 0$ (by complementary slackness). Both the linear penalty and augmented Lagrangian converge to the same solution, and the dual ascent update $\mu^{k+1} = \mu^k + \rho\max(0, 0.5 - x_1^{k+1})$ drives $\mu^k \to 0$ as $x_1^k \to 0.582 > 0.5$. For this particular inactive-constraint problem, ALM offers no material advantage over the linear penalty.
+
+\textbf{Advantage for active constraints:} If instead the unconstrained minimum were infeasible (e.g., $x_1^{\star}_{\text{unc}} = 0.3 < 0.5$), then the constrained optimum would have $x_1^{\star} = 0.5$ and $\mu^{\star} > 0$. The linear penalty would require $\lambda \to \infty$ (ill-conditioning the problem), while the ALM would converge to $\mu^{\star}$ at a moderate fixed $\rho$, maintaining well-conditioned primal subproblems throughout. The ALM is therefore strongly preferred for general constrained optimisation and is the basis of practical solvers such as ADMM (Alternating Direction Method of Multipliers), widely used in distributed optimisation and signal processing.
+
 \textbf{Key trade-off:} Projected GD requires a projection oracle (cheap for simple constraint sets like halfspaces or boxes, but potentially expensive for general convex sets). Penalty methods only require gradient evaluations of a modified objective but cannot guarantee strict feasibility at intermediate iterates.
 
 % ============================================================
@@ -1067,10 +1121,23 @@ Boundary & 0.93 & $(0.500, -0.337)$ & 0.3637 & 0.25 \\
 Unlike gradient descent, the Frank--Wolfe algorithm is \emph{affine invariant}: its trajectory is unchanged under any invertible affine transformation of the domain. This is because the LMO $z_k = \arg\min_{x \in \mathcal{X}} \nabla f(x_k)^T x$ and the gradient $\nabla f(x_k)$ transform consistently. In contrast, gradient descent's convergence rate depends on the condition number $\kappa = L/\mu$ of the Hessian, which changes under affine transformations. This affine invariance makes Frank--Wolfe naturally suited to problems where the geometry of $\mathcal{X}$ (rather than the function's Hessian) determines the convergence behaviour.
 \end{remark}
 
+\begin{remark}[Away-Step Frank--Wolfe Variant]
+The standard Frank--Wolfe algorithm converges at rate $O(1/k)$ even for strongly convex objectives, whereas projected gradient descent achieves linear convergence $O(\rho^k)$ with $\rho = 1 - \mu/L < 1$. This gap arises from the characteristic zig-zag: the LMO vertex $z_k$ alternates between different extreme points of $\mathcal{X}$, causing the iterates to oscillate rather than converge monotonically.
+
+The \textbf{away-step Frank--Wolfe} (AFW) algorithm eliminates this zig-zagging by also allowing steps \emph{away from} the currently worst active vertex. At each iteration, AFW computes both:
+\begin{enumerate}[nosep]
+\item \textbf{FW direction}: $d_k^{\mathrm{FW}} = z_k - x_k$ (step towards the linearisation-minimising vertex $z_k$),
+\item \textbf{Away direction}: $d_k^{A} = x_k - s_k^{\phantom{A}}$, where $s_k = \arg\max_{v \in \mathcal{S}_k}\, \nabla f(x_k)^T v$ is the most harmful active vertex ($\mathcal{S}_k$ = support of the current active-set representation of $x_k$).
+\end{enumerate}
+The direction giving greater linearised descent $(-\nabla f(x_k)^T d)$ is chosen. Away steps effectively remove weight from bad vertices without requiring a projection. For polytope-constrained strongly convex objectives, AFW provably achieves \emph{linear} convergence $O\bigl((1 - \delta_{\mathcal{X}} \mu/L)^k\bigr)$ where $\delta_{\mathcal{X}} \in (0,1]$ is the \emph{pyramidal width} of $\mathcal{X}$ (a geometric constant). This matches projected GD's linear rate up to problem-geometry constants.
+
+The trade-off: AFW requires maintaining an explicit active-set representation of $x_k$ as a convex combination of vertices, adding $O(k)$ storage overhead and bookkeeping. The standard Frank--Wolfe algorithm used in this assignment is sufficient for the given problems (neither case requires very tight convergence), but AFW would converge substantially faster for the boundary optimum $f = x_1^2 + x_2^2$ where the final iterate lies at the vertex $(0.5, 0)$ and zig-zagging is most pronounced.
+\end{remark}
+
 \textbf{Comparison with projected GD:} The Frank--Wolfe algorithm offers:
 \begin{itemize}[nosep]
 \item \textbf{Advantage}: No projection oracle needed; iterates are always in $\mathcal{X}$; sparse iterates (convex combinations of vertices) with potential memory efficiency.
-\item \textbf{Disadvantage}: Slower $O(1/k)$ convergence (no acceleration possible without losing projection-free property); zig-zag behaviour near the optimum.
+\item \textbf{Disadvantage}: Slower $O(1/k)$ convergence (no acceleration possible without losing projection-free property); zig-zag behaviour near the optimum. The away-step variant achieves linear convergence at the cost of active-set bookkeeping.
 \end{itemize}
 
 % ============================================================
@@ -1080,6 +1147,15 @@ Unlike gradient descent, the Frank--Wolfe algorithm is \emph{affine invariant}: 
 % ============================================================
 
 This report has systematically evaluated six categories of optimisation algorithms across three benchmark problems of increasing difficulty. The key findings are synthesised below.
+
+\subsection{All-Methods Comparison on Benchmark B}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/all_methods_benchmark_B.pdf}
+\caption{Comprehensive comparison of all Q1 and Q2 methods on Benchmark B (toy neural network loss, $\kappa \approx 6.9$), starting from $x_0 = (-1, 4)$. Left: all seven methods including the diverging Polyak ($f^{\star}=0$ misspecified); Polyak's objective grows to $\sim$$10^4$ before saturation. Right: well-behaved methods with $O(1/k)$ and $O(1/k^2)$ reference lines. Nesterov and Adam converge most rapidly and track the $O(1/k^2)$ reference closely in early iterations; both reach machine-precision suboptimality by iteration $\sim$60. Heavy Ball converges only slightly slower than Nesterov. The moderate condition number $\kappa \approx 6.9$ means all correctly-specified first-order methods perform adequately, in contrast to Rosenbrock ($\kappa \approx 2504$) where method differences are stark.}
+\label{fig:all_methods_B}
+\end{figure}
 
 \subsection{All-Methods Comparison on Rosenbrock}
 
@@ -1366,6 +1442,12 @@ def nelder_mead(loss_fn, x0, step, n_iters, alpha_r=1.0, gamma=2.0, rho=0.5, sig
 \item Jaggi, M.\ (2013). Revisiting Frank-Wolfe: Projection-free sparse convex optimization. \textit{ICML 2013}. [Frank--Wolfe gap; $O(1/k)$ convergence; affine invariance.]
 
 \item Bubeck, S.\ (2015). Convex optimization: Algorithms and complexity. \textit{Foundations and Trends in Machine Learning}, 8(3-4), 231--357. [Convergence rate proofs; lower bounds for first-order methods.]
+
+\item McKinnon, K.I.M.\ (1998). Convergence of the Nelder--Mead simplex method to a non-stationary point. \textit{SIAM Journal on Optimization}, 9(1), 148--158. [Counterexample for Nelder--Mead convergence in $\mathbb{R}^2$; simplex degeneracy.]
+
+\item Lacoste-Julien, S.\ \& Jaggi, M.\ (2015). On the global linear convergence of Frank-Wolfe optimization variants. \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 28. [Away-step Frank--Wolfe; linear convergence for polytope-constrained strongly convex objectives.]
+
+\item Boyd, S.\ \& Vandenberghe, L.\ (2004). \textit{Convex Optimization}. Cambridge University Press. [Augmented Lagrangian methods; KKT conditions; Newton decrement and backtracking line search (Chapter 10).]
 \end{enumerate}
 
 \newpage
