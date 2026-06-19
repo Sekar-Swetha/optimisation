@@ -626,6 +626,27 @@ rate for general $L$-smooth convex functions \cite{nesterov1983method}.  The cap
 = 0.92$ prevents runaway momentum in early iterations when $t_k$ grows quickly.
 \end{remark}
 
+\begin{remark}[Nesterov Restarts for Linear Convergence]
+\label{rem:nesterov_restart}
+The rate \eqref{eq:nesterov_rate} gives $O(1/k^2)$ for general convex $f$.  For
+$\mu$-strongly convex $f$, the $O(1/k^2)$ rate can be converted to \emph{linear} convergence
+via a periodic restart strategy \cite{o2015adaptive}.  After $T = \lceil\sqrt{L/\mu}\rceil =
+O(\sqrt{\kappa})$ steps of Nesterov's method, the function gap satisfies $f(x_T) - f^\star
+\leq \frac{2L\|x_0 - x^\star\|^2}{(T+1)^2} \leq \frac{2L}{(\sqrt{\kappa}+1)^2}
+\cdot \frac{2(f(x_0)-f^\star)}{\mu} \leq \frac{1}{2}(f(x_0) - f^\star)$,
+using $\|x_0 - x^\star\|^2 \leq 2(f(x_0)-f^\star)/\mu$ (strong convexity).  Restarting at
+$x_T$ and repeating every $T$ steps yields geometric decay:
+\[
+f(x_{mT}) - f^\star \leq \left(\tfrac{1}{2}\right)^m (f(x_0) - f^\star),
+\]
+so $O(\sqrt{\kappa}\log(1/\varepsilon))$ total gradient evaluations suffice.  This matches the
+information-theoretic lower bound $(1-1/\sqrt{\kappa})^k$ from Remark~\ref{rem:lower_bounds}.
+The $\beta_{\max} = 0.92$ cap in our implementation approximates adaptive restart:
+when the loss temporarily increases (overshooting), momentum is implicitly limited before
+runaway oscillation develops.  Full adaptive restart triggers a reset whenever $f(x_{k+1}) > f(x_k)$,
+achieving nearly the same $O(\sqrt{\kappa})$ restart period automatically.
+\end{remark}
+
 \begin{remark}[Heavy Ball vs Nesterov]
 Both methods use momentum, but they differ in where the gradient is evaluated.  Heavy Ball
 evaluates $\nabla f(x_k)$ (current position), leading to momentum along the \emph{past}
@@ -670,6 +691,32 @@ magnitudes in $x_1$ vs $x_2$ on Rosenbrock).  The $\beta_2 = 0.999$ choice ensur
 second-moment estimate adapts slowly, providing a stable normaliser; the smaller $\beta_1
 \approx 0.80$--$0.82$ (compared to typical $0.9$) was found empirically to give faster
 initial convergence on these small, deterministic problems where the gradient is not stochastic.
+
+\begin{remark}[Adam as Diagonal Natural Gradient]
+\label{rem:adam_natural_grad}
+The natural gradient method (Amari, 1998) replaces the Euclidean gradient with the Riemannian
+gradient under the Fisher information metric: $x_{t+1} = x_t - \alpha F(x_t)^{-1} \nabla f(x_t)$,
+where $F(x) = \mathbb{E}_{i}[\nabla f_i(x) \nabla f_i(x)^T]$ is the Fisher information matrix.
+This preconditioner removes correlations between coordinates and rescales each parameter by the
+inverse square root of its expected squared gradient.
+
+Adam approximates this with a \emph{diagonal} Fisher: $F \approx \text{diag}(v_t)$ where $v_{t,i}
+= (1 - \beta_2^t)^{-1}\sum_{j=1}^t (1-\beta_2)\beta_2^{t-j} g_{j,i}^2$ is an exponentially
+weighted estimate of $\mathbb{E}[g_i^2]$.  The Adam update becomes
+\[
+x_{t+1} = x_t - \alpha \,\widehat{F}_t^{-1/2}\, \hat{m}_t, \quad
+  \widehat{F}_t = \text{diag}(\hat{v}_t),
+\]
+which is the natural gradient step with diagonal Fisher approximation and momentum.  This
+interpretation explains several empirical observations: (i) Adam is rotation-\emph{variant}
+(since diagonal approximations break under rotations), meaning it works best when coordinates
+align with the axes of curvature; (ii) on Benchmark~B with $\kappa \approx 6.9$, the
+effective condition number seen by Adam is $\max_i \hat{v}_i / \min_i \hat{v}_i \ll \kappa$,
+because coordinate $x_2$ (steeper curvature) accumulates larger $\hat{v}_{t,2}$ and hence
+receives a smaller effective step; (iii) the diagonal restriction is why Adam can diverge on
+general convex problems \cite{reddi2018convergence} --- the full Fisher preconditioner would
+guarantee convergence, but its diagonal approximation can miss cross-coordinate structure.
+\end{remark}
 
 \subsection{Hyperparameter Settings}
 
@@ -1616,6 +1663,22 @@ as unconstrained GD} whenever the projection is $O(d)$.
 \end{algorithmic}
 \end{algorithm}
 
+\begin{remark}[Subgradient Method for Non-Smooth Penalty]
+\label{rem:subgradient}
+The penalty term $\lambda\max(0, 0.5 - x_1)$ is \emph{non-smooth}: its derivative with
+respect to $x_1$ is $-\lambda$ when $x_1 < 0.5$ and $0$ when $x_1 > 0.5$, but is
+undefined at the kink $x_1 = 0.5$.  The subdifferential at the boundary is
+$\partial_{x_1}[\lambda\max(0,0.5-x_1)] = [-\lambda, 0]$ (a set, not a single value).
+The algorithm uses the \emph{subgradient} $s_k = -\lambda e_1$ in the infeasible region and
+$0$ in the feasible region, which is the standard subgradient method for convex non-smooth
+objectives.  For convex objectives with $G$-bounded subgradients, the subgradient method
+with step $\alpha_k = R/(G\sqrt{k})$ achieves $O(1/\sqrt{k})$ convergence (slower than the
+$O(1/k)$ of smooth GD), but our penalty is \emph{almost everywhere smooth} and the kink at
+$x_1 = 0.5$ has measure zero.  In practice the iterate rarely lands exactly on the boundary
+and the smooth GD analysis applies off the kink, explaining why the penalty method converges
+at the GD rate rather than the subgradient rate.
+\end{remark}
+
 Settings: Projected GD ($\alpha = 0.08$); Penalty with $\lambda \in \{0.15, 1.8, 4.5\}$
 ($\alpha = 0.05$ for $\lambda \leq 1.8$; $\alpha = 0.03$ for $\lambda = 4.5$ due to the
 steeper landscape); unconstrained GD ($\alpha = 0.07$).  All run for 100 iterations.
@@ -1997,6 +2060,32 @@ vs FISTA's $O(1/k^2)$ makes FISTA the better choice if speed is paramount and on
 constraints are involved.  FW's advantage appears for nuclear-norm balls ($\mathcal{X} = \{M :
 \|M\|_* \leq R\}$), where the LMO is a rank-1 SVD ($O(mn)$) but projection requires a full SVD
 and soft-thresholding ($O(mn\min(m,n))$).
+\end{remark}
+
+\begin{remark}[Frank--Wolfe Gap as KKT Certificate]
+\label{rem:fw_kkt}
+The Frank--Wolfe gap $g_k = \nabla f(x_k)^T(x_k - z_k) \geq 0$ serves as an online stopping
+criterion without knowledge of $f^\star$, because $g_k \leq f(x_k) - f^\star$ for convex $f$.
+More deeply, $g_k = 0$ is \emph{equivalent} to the first-order KKT stationarity condition for
+the constrained problem $\min_{x \in \mathcal{X}} f(x)$.
+
+To see this, note $g_k = \max_{z \in \mathcal{X}} \nabla f(x_k)^T(x_k - z)$.  Setting $g_k = 0$
+means $\nabla f(x_k)^T(x_k - z) \leq 0$ for all $z \in \mathcal{X}$, i.e.\
+$\nabla f(x_k)^T z \geq \nabla f(x_k)^T x_k$ for all $z \in \mathcal{X}$.  This is equivalent
+to the variational inequality:
+\begin{equation}
+\nabla f(x_k)^T(y - x_k) \geq 0, \quad \forall\, y \in \mathcal{X},
+\label{eq:fw_kkt}
+\end{equation}
+which is precisely the first-order necessary (and, for convex $f$, sufficient) optimality
+condition for $x_k$ to be the constrained minimiser.  For smooth $f$ and polyhedral $\mathcal{X}$,
+\eqref{eq:fw_kkt} is equivalent to the KKT conditions.
+
+In our experiments, $g_k$ decays at $O(1/k)$ (visible in the log-log plot of
+Figure~\ref{fig:supp_fw_gap}), so a tolerance of $g_k \leq 10^{-3}$ is reached after
+approximately $k = 2LD^2/10^{-3} \approx 2 \times 2 \times 15.7^2 / 10^{-3} \approx 980$
+iterations.  In the experiments, we stop at 140 iterations where $g_k \approx 0.11$ for the
+boundary case, a certified distance from optimality.
 \end{remark}
 
 % ============================================================
@@ -2473,6 +2562,11 @@ In \textit{Machine Learning and Knowledge Discovery in Databases (ECML PKDD)}, 2
 J.~C.~Lagarias, J.~A.~Reeds, M.~H.~Wright, and P.~E.~Wright.
 Convergence properties of the Nelder--Mead simplex method in low dimensions.
 \textit{SIAM Journal on Optimization}, 9(1):112--147, 1998.
+
+\bibitem{o2015adaptive}
+B.~O'Donoghue and E.~Cand\`es.
+Adaptive restart for accelerated gradient schemes.
+\textit{Foundations of Computational Mathematics}, 15(3):715--732, 2015.
 
 \end{thebibliography}
 
