@@ -55,17 +55,17 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-This report presents a comprehensive comparative study of six families of optimisation algorithms applied to a suite of benchmark functions of varying difficulty, from a simple convex quadratic through a lightly non-convex toy neural-network loss to the ill-conditioned Rosenbrock function.
+This report presents a comprehensive comparative study of six families of optimisation algorithms applied to a suite of benchmark functions of varying difficulty, from a simple convex quadratic (condition number $\kappa \approx 1.12$) through a lightly non-convex toy neural-network loss ($\kappa \approx 6.9$) to the severely ill-conditioned Rosenbrock function ($\kappa \approx 2508$).
 The methods investigated are:
-(1)~adaptive step-size methods -- Polyak, Adagrad, RMSprop, and the Heavy Ball / Polyak momentum rule;
-(2)~momentum and stochastic methods -- Nesterov acceleration, Adam, and mini-batch SGD;
-(3)~Newton's method with Hessian regularisation and local second-order approximations;
-(4)~derivative-free and zeroth-order approaches -- forward finite differences, Nesterov random search, Nelder--Mead simplex, and grid search;
-(5)~constrained optimisation via projected gradient descent and penalty methods; and
-(6)~the Frank--Wolfe conditional-gradient algorithm for linear-constrained problems.
+(1)~adaptive step-size methods --- Polyak, Adagrad, RMSprop, and Heavy Ball;
+(2)~momentum and stochastic methods --- Nesterov acceleration, Adam, and mini-batch SGD with variance reduction;
+(3)~Newton's method with Hessian regularisation, quasi-Newton (BFGS/L-BFGS) extensions, and local second-order approximations;
+(4)~derivative-free and zeroth-order approaches --- forward and central finite differences, Nesterov random search, Nelder--Mead simplex, and grid search;
+(5)~constrained optimisation via projected gradient descent, penalty methods, and the augmented Lagrangian method (ALM); and
+(6)~the Frank--Wolfe conditional-gradient algorithm for linear-constrained problems, with extensions to structured constraint sets.
 Each method is evaluated with respect to convergence speed, trajectory behaviour, stability under misspecification, and computational cost per iteration.
-Theoretical convergence guarantees are stated where applicable and validated against empirical results.
-The experiments confirm several key theoretical predictions: Newton's method achieves one-step convergence on the quadratic benchmark; Nesterov acceleration achieves the optimal $O(1/k^2)$ rate on convex problems; Polyak's step size diverges whenever $f^\star$ is misspecified; and projected gradient descent enforces feasibility as a hard constraint from the first iteration, unlike penalty methods which require $\lambda\to\infty$.
+Formal convergence theorems are stated throughout, including the Nesterov $O(1/k^2)$ optimal rate theorem with its Nemirovski--Yudin lower bound certificate, Newton's quadratic local convergence theorem, the SGD noise floor bound, and the Frank--Wolfe $O(1/k)$ diameter-based convergence theorem.
+The experiments confirm several key theoretical predictions: Newton's method achieves \emph{one-step} convergence on the quadratic benchmark ($\kappa = 1.12$); Nesterov acceleration achieves the optimal $O(1/k^2)$ rate confirmed on a log-log plot; Polyak's step size diverges whenever $f^\star$ is misspecified by as little as $0.4826$; projected gradient descent enforces feasibility as a hard constraint from the first iteration; and the augmented Lagrangian method achieves exact constraint satisfaction with finite penalty parameter, overcoming the fundamental limitation of penalty methods.
 \end{abstract}
 
 \tableofcontents
@@ -659,6 +659,17 @@ Figure~\ref{fig:conv_rate} provides an empirical verification of the theoretical
 \label{fig:conv_rate}
 \end{figure}
 
+\begin{remark}[Learning rate schedules for SGD]
+Constant step size $\alpha$ causes the SGD noise floor $O(\alpha\sigma^2/(\mu b))$ to dominate at convergence.
+The two main alternatives to avoid this are:
+\begin{enumerate}[nosep]
+  \item \textbf{Diminishing step size}: $\alpha_k = \alpha_0 / (k+1)^\gamma$ with $\gamma \in (1/2, 1]$.
+        The Robbins--Monro conditions $\sum_k \alpha_k = \infty$ and $\sum_k \alpha_k^2 < \infty$ guarantee convergence to $x^\star$ without the noise floor, but the $O(1/\sqrt{k})$ convergence is slow.
+  \item \textbf{Cosine annealing / warm restarts}: decay $\alpha_k = \alpha_{\min} + \frac{1}{2}(\alpha_{\max} - \alpha_{\min})(1 + \cos(\pi k / T))$ with periodic restarts, widely used in deep learning.
+\end{enumerate}
+The constant learning rate used in our experiments ($\alpha = 0.06$) is appropriate for demonstrating the batch-size tradeoff but would require scheduling for high-accuracy convergence in practice.
+\end{remark}
+
 \subsection{Comparative Analysis}
 
 Nesterov acceleration dominates on all three benchmarks, most dramatically on Rosenbrock where the accumulated momentum in the valley-floor direction provides persistent acceleration.
@@ -830,6 +841,19 @@ C & 3.7319 & 0.6864 & $5.4\times$ lower $f$ & $(0.183, 0.020)$ \\
 Newton's method offers \emph{quadratic} local convergence in contrast to GD's linear convergence.
 The price is computing and inverting the $d \times d$ Hessian at each step, costing $O(d^2)$ per gradient evaluation and $O(d^3)$ for the linear solve --- prohibitive for large-scale problems (e.g.\ deep neural networks with $d \sim 10^6$--$10^{12}$).
 
+\begin{remark}[Affine invariance of Newton's method]
+A key theoretical property of Newton's method is \emph{affine invariance}: the Newton direction $H_k^{-1}\nabla f(x_k)$ is unchanged by any invertible linear transformation $x \mapsto Ax$.
+This means Newton's convergence rate is independent of the condition number $\kappa$ --- unlike gradient descent, whose rate degrades as $O(\kappa \log(1/\varepsilon))$.
+Specifically, for our Rosenbrock benchmark with $\kappa \approx 2508$, gradient descent requires $O(2508)$ iterations while Newton requires only $O(\log\log(1/\varepsilon))$ --- a factor $\sim 10^4$ improvement in iteration count for machine precision.
+The affine invariance is the fundamental reason Newton's method converges in a fixed number of iterations on quadratics regardless of their conditioning: the Hessian exactly captures the anisotropy and corrects for it in a single step.
+\end{remark}
+
+\begin{remark}[Hessian-free / conjugate gradient Newton]
+When the Hessian-vector product $\nabla^2 f(x) v$ can be computed efficiently (e.g.\ via second-order backpropagation at cost $O(d)$), the Newton direction $p_k = H_k^{-1} g_k$ can be found by the conjugate gradient method applied to $H_k p = g_k$, without ever forming $H_k$ explicitly.
+This \emph{Hessian-free Newton} or \emph{truncated Newton} method achieves superlinear convergence with $O(d\cdot r)$ cost per step, where $r \ll d$ is the number of CG iterations (typically the effective rank of $H_k$).
+It is used in training large-scale neural networks (e.g.\ Martens 2010) and is competitive with L-BFGS on structured problems.
+\end{remark}
+
 \textbf{Quasi-Newton methods} approximate the inverse Hessian using gradient information accumulated over iterations.
 The BFGS update rule maintains a positive definite approximation $B_k \approx \nabla^2 f(x_k)$ via:
 \begin{equation}
@@ -973,6 +997,13 @@ Grid search evaluates the objective on a uniform $55 \times 55 = 3025$-point gri
 The grid spacing is $\Delta x_1 = \Delta x_2 = 4/54 \approx 0.074$.
 The best grid point found approximates the true optimum $(1, 1)$ to within $\|\hat{x}^\star - x^\star\| \leq \Delta x \sqrt{2} \approx 0.105$.
 
+\begin{remark}[Curse of dimensionality]
+The grid search cost scales as $N^d$ where $N$ is the number of grid points per dimension and $d$ is the problem dimension.
+At the resolution $N = 55$ and tolerance $\Delta x \approx 0.074$ used here: $d=2$ costs $3{,}025$ evaluations; $d=5$ would cost $55^5 \approx 5 \times 10^8$; $d=10$ costs $55^{10} \approx 2.5 \times 10^{17}$ --- beyond all computation.
+This \emph{curse of dimensionality} (Bellman 1957) means grid search is only practical for $d \leq 3$ at any reasonable resolution, and motivates all gradient-based and derivative-free iterative methods for higher-dimensional problems.
+Bayesian optimisation (using a Gaussian process surrogate) is the practical global optimisation method for $d \leq 20$; evolutionary algorithms scale to moderate $d \leq 100$; but all global methods require exponential samples in the worst case.
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q4_grid_search_C.pdf}
@@ -1044,8 +1075,14 @@ If the unconstrained minimiser has $x_1^\star > 0.5$ (interior case), then $\nu 
 Since the unconstrained minimiser has $x_1^\star \approx 0.582 > 0.5$, the constraint is \emph{inactive} at the solution.
 The constrained and unconstrained minima coincide at $x^\star \approx (0.582, 2.000)$ with $f^\star \approx 0.7244$.
 
-\begin{remark}[Slater's condition]
-The feasible set $\{x : x_1 > 0.5\}$ (strict interior) is non-empty, so Slater's condition holds. This guarantees strong duality and that the KKT conditions are both necessary and sufficient for optimality.
+\begin{remark}[Slater's condition and strong duality]
+The feasible set $\{x : x_1 > 0.5\}$ (strict interior) is non-empty, so Slater's condition holds.
+This guarantees \emph{strong duality}: $d^\star = p^\star$ where the dual problem is
+\[
+  d^\star = \max_{\nu \geq 0}\; \min_x\; \bigl[f(x) + \nu(0.5 - x_1)\bigr].
+\]
+At the optimal dual variable $\nu^\star = 0$ (constraint inactive), the dual objective equals $f^\star = 0.7244$.
+Strong duality also guarantees that KKT conditions are both necessary \emph{and} sufficient for optimality, providing a complete characterisation of the optimal solution: any $x^\star$ satisfying the four KKT conditions (stationarity, primal feasibility, dual feasibility, complementary slackness) is globally optimal.
 \end{remark}
 
 \subsection{Algorithm Formulations}
