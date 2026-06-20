@@ -1190,6 +1190,40 @@ $H^{-1}$ accounts for the full off-diagonal coupling --- explaining the performa
 gap: Newton $f = 0.686$ vs Adam $f = 1.578$ in comparable iteration counts.
 \end{remark}
 
+\begin{remark}[Adam non-convergence counterexample and AMSGrad]
+Despite Adam's widespread empirical success, \textbf{Reddi, Kale \& Kumar (2018)}
+showed that Adam can fail to converge even on \emph{simple convex problems}.
+The counterexample is a one-dimensional online problem where:
+\[
+f_t(x) = \begin{cases} Cx & \text{with prob. } 1/T^{1/2} \\ -x & \text{otherwise} \end{cases}
+\]
+for large $C > 0$.
+Adam's second-moment estimate $\hat{v}_t$ exponentially forgets the rare large gradient $C$,
+causing the step size on the common small gradient $-1$ to be too large and the iterates
+to diverge from the optimum.
+The fundamental issue is that Adam's exponential moving average of $g_t^2$ assigns
+non-monotone weights to past gradients, which can cause the effective step size in
+beneficial directions to \emph{increase} at the wrong times.
+
+\textbf{AMSGrad fix (Reddi et al.\ 2018):}
+Replace the exponential average $\hat{v}_t$ with its running maximum:
+\[
+\hat{V}_t = \max(\hat{V}_{t-1},\, \hat{v}_t), \qquad x_{t+1} = x_t - \frac{\alpha}{\sqrt{\hat{V}_t} + \varepsilon}\hat{m}_t.
+\]
+The non-decreasing $\hat{V}_t$ guarantees that the effective step size $\alpha/\sqrt{\hat{V}_t}$
+is monotonically non-increasing, restoring the Adagrad-like convergence proof.
+AMSGrad achieves $O(1/\sqrt{T})$ regret, matching Adam's claimed rate but with a provable guarantee.
+
+\textbf{Practical implications for Q2:}
+The Q2 experiments use \emph{deterministic} batch gradients on smooth strongly convex
+objectives (Benchmarks~A and B), where Adam's convergence is well-established and the
+counterexample does not apply (it requires stochastic, online objectives with rare large gradients).
+However, for the mini-batch SGD setting ($b = 5$, $\sigma = 6$ experiment), Adam would
+face the same issue: rare large mini-batch gradients from high-noise batches could cause
+the exponential moving average to underweight those directions, leading to sub-optimal
+convergence. AMSGrad would be more reliable in the high-noise setting.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1349,6 +1383,38 @@ consistent with the observed $f = 3.39$.
 The Nesterov bound is a factor $0.347/3.71 \approx 0.093 \times$ tighter than the GD bound,
 matching the theoretical prediction that Nesterov needs $\sim \sqrt{\kappa}$ fewer iterations
 rather than $\kappa$.
+
+\begin{remark}[Gradient descent on non-convex smooth functions: $O(1/\sqrt{T})$ to stationarity]
+For \emph{non-convex} smooth objectives (Benchmark~C off the Rosenbrock valley), the convergence
+guarantee of gradient descent changes character: instead of converging to the global minimum,
+GD finds an \emph{approximate stationary point}.
+
+\textbf{Non-convex GD convergence theorem:} For any $L$-smooth function $f$ (not necessarily convex)
+with step $\alpha = 1/L$, after $T$ iterations:
+\[
+\frac{1}{T}\sum_{k=0}^{T-1}\|\nabla f(x_k)\|^2 \;\leq\; \frac{2L(f(x_0) - f^\star)}{T} = O\left(\frac{1}{T}\right),
+\]
+implying the best iterate satisfies $\min_{k \leq T} \|\nabla f(x_k)\| \leq O(1/\sqrt{T})$.
+
+This $O(1/\sqrt{T})$ rate to stationarity is the non-convex analogue of the $O(1/T)$
+rate to optimality for convex functions. Stationarity $\|\nabla f(x_k)\| \leq \varepsilon$ requires
+$T = O(1/\varepsilon^2)$ gradient evaluations.
+
+\textbf{Gradient norm along the Rosenbrock trajectory:}
+The Rosenbrock gradient $\nabla f = [-400x_1(x_2-x_1^2) + 2(x_1-1),\; 200(x_2-x_1^2)]^T$
+has large magnitude away from the valley ($\|\nabla f(x_0)\| = \|[-2, -200]\| \approx 200$)
+and decreases to $\lesssim 10^{-3}$ near the optimum.
+By the non-convex bound with $f(x_0) = 4$, $L \approx 1002$:
+$\|\nabla f(x_T)\| \leq \sqrt{2 \times 1002 \times 4 / T} = \sqrt{8016/T}$.
+For $T = 14{,}384$: $\|\nabla f\| \leq 0.75$ --- very slow gradient decay due to the
+extreme ill-conditioning of Rosenbrock near the start.
+
+\textbf{Nesterov vs GD on non-convex:}
+For non-convex objectives, Nesterov acceleration \emph{does not improve} the $O(1/\sqrt{T})$
+rate to stationarity in the worst case (unlike the convex setting where it achieves $O(1/k^2)$).
+The empirical improvement seen on Rosenbrock ($7\times$ better $f$ value) is therefore a
+consequence of the \emph{near-convex valley structure} rather than a general non-convex acceleration.
+\end{remark}
 
 \begin{table}[H]
 \centering
@@ -2058,6 +2124,36 @@ linear regression where computing $X^TX$ is expensive.
 For Benchmark~C (Rosenbrock), the rapidly changing Hessian means BB's two-point secant
 gives a poor curvature estimate far from the optimum, and the method would require
 adaptive restarts; empirically, it converges faster than GD but slower than Newton.
+\end{remark}
+
+\begin{remark}[Cubic regularization of Newton: optimal complexity for non-convex optimization]
+The \emph{Cubic Regularization of Newton's Method} (Nesterov \& Polyak 2006; also the
+\emph{Adaptive Regularisation with Cubics}, ARC) adds a cubic penalty to the quadratic model:
+\[
+x_{k+1} = \arg\min_p \Bigl\{f(x_k) + \nabla f(x_k)^T p + \tfrac{1}{2} p^T H_k p + \tfrac{M}{6}\|p\|^3\Bigr\},
+\]
+where $M \geq \|H_k - H(x_k + p)\|/(2\|p\|)$ is a Lipschitz constant for the Hessian.
+The cubic subproblem has a global minimiser even when $H_k$ is indefinite (unlike Newton
+on non-convex problems), making the method globally convergent.
+
+\textbf{Convergence complexity:}
+\begin{itemize}[nosep]
+\item \emph{Finding $\varepsilon$-approximate 1st-order stationary point} ($\|\nabla f\| \leq \varepsilon$):
+  Cubic Newton requires $O(\varepsilon^{-3/2})$ iterations, versus $O(\varepsilon^{-2})$ for GD.
+\item \emph{Finding $\varepsilon$-approximate 2nd-order stationary point} ($\|\nabla f\| \leq \varepsilon$, $H \succeq -\sqrt{\varepsilon} I$):
+  Cubic Newton requires $O(\varepsilon^{-3/2})$ iterations --- optimal complexity.
+\item For \emph{strongly convex} $f$: reduces to quadratic convergence (same as Newton).
+\end{itemize}
+
+\textbf{Application to Rosenbrock (Benchmark~C):}
+Rosenbrock is non-convex near the start ($x_0 = (-1,1)$, where $H$ has a small negative
+eigenvalue). Standard Newton with $\alpha = 0.22$ uses a fixed damping to avoid the
+non-convex region; cubic Newton would adaptively handle this via the $\|p\|^3$ term,
+achieving faster escape from the non-convex initial region.
+The cubic subproblem is more expensive per iteration ($O(d^3)$ with a generalised eigenvalue
+solve), but the improved complexity may pay off for high-accuracy solutions.
+For $d = 2$ (Q3 benchmark), the cubic subproblem is trivial; for large $d$, inexact
+Lanczos-based solvers reduce the cost to $O(d^2)$ per iteration.
 \end{remark}
 
 \subsection{Contour Trajectories}
@@ -2871,6 +2967,43 @@ $1 \times 0.5 + 2 \times (-5) = -9.5 = f^\star$.
 \textbf{Strong duality} holds for LP, so the dual optimal $= $ primal optimal $= -9.5$.
 This confirms $(0.5, -5)$ is the unique primal optimal: the LP is non-degenerate (primal
 and dual optimal have a unique solution at the corner where both lower bounds are active).
+\end{remark}
+
+\begin{remark}[Primal-dual gradient methods for saddle-point problems]
+The LP $\min_{x \in \mathcal{X}} a^T x$ can be cast as a \emph{saddle-point problem}
+via the Lagrangian dual:
+\[
+\min_{x \in \mathcal{X}} \max_{\mu \geq 0,\, \nu \geq 0} L(x, \mu, \nu)
+= a^T x + \sum_i [\mu_i(l_i - x_i) + \nu_i(x_i - u_i)],
+\]
+finding a Nash equilibrium $(x^\star, \mu^\star, \nu^\star)$ where neither player can unilaterally improve.
+
+\textbf{Primal-dual gradient descent-ascent:}
+\[
+x_{k+1} = \Pi_\mathcal{X}(x_k - \alpha \nabla_x L) = \Pi_\mathcal{X}(x_k - \alpha(a - \mu_k + \nu_k)),
+\]
+\[
+(\mu_{k+1}, \nu_{k+1}) = \Pi_{\geq 0}\bigl((\mu_k, \nu_k) + \beta \nabla_{\mu,\nu} L\bigr)
+= \max\bigl(0,\, (\mu_k + \beta(l - x_k),\; \nu_k + \beta(x_k - u))\bigr).
+\]
+This simultaneous gradient step is generally \emph{not} convergent for general convex-concave problems
+due to the cyclic nature of the primal-dual gap.
+
+\textbf{Extragradient method (Korpelevich 1977):}
+The extragradient method achieves $O(1/k)$ convergence for monotone saddle-point problems
+via a two-step (predictor-corrector) update:
+\begin{enumerate}[nosep]
+\item Predictor: $y_{k+1} = \Pi(z_k - \alpha F(z_k))$ where $F = [\nabla_x L, -\nabla_\mu L, -\nabla_\nu L]$;
+\item Corrector: $z_{k+1} = \Pi(z_k - \alpha F(y_{k+1}))$.
+\end{enumerate}
+The predictor uses a forward Euler step to estimate the next iterate,
+and the corrector uses the gradient at the predicted point to make the actual step.
+
+\textbf{Connection to Frank--Wolfe:}
+Frank--Wolfe is related to primal-dual methods: the LP oracle step $z_k = \arg\min_{z \in \mathcal{X}} g^T z$
+(where $g = \nabla f(x_k)$) corresponds to a dual ``ascent'' step that evaluates the dual
+function at the current primal iterate. The duality gap $g(x_k) = \nabla f(x_k)^T(x_k - z_k)$
+is precisely the Lagrangian gap between the primal and dual objectives at $(x_k, z_k)$.
 \end{remark}
 
 \begin{figure}[H]
