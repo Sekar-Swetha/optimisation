@@ -212,6 +212,17 @@ guaranteeing monotone decrease of the distance to the optimum.
 \noindent This guarantee relies critically on the accuracy of $f^{\star}$; if $f^{\star}$ is
 underestimated (e.g., $f^{\star} = 0$ when the true minimum is $\approx 0.48$), the numerator
 remains artificially large as $\|\nabla f\| \to 0$, causing $\alpha_k \to \infty$.
+Conversely, when $f^{\star}$ is known exactly (Benchmark~C: $f^{\star} = 0$), the Polyak
+proposition implies:
+\begin{equation}
+\|x_{k+1} - x^{\star}\|^2 \leq \|x_k - x^{\star}\|^2 \left(1 - \frac{(f(x_k)/\|x_k-x^{\star}\|)^2}{\|g_k\|^2/\|x_k-x^{\star}\|^2}\right),
+\end{equation}
+and by the gradient inequality for convex $f$:
+$f(x_k) - f^{\star} \geq \langle g_k, x_k - x^{\star} \rangle \cdot (-1) \Rightarrow f(x_k) \leq \|g_k\|\|x_k - x^{\star}\|$,
+so the factor in parentheses is at least $\frac{f(x_k)^2}{\|g_k\|^2\|x_k-x^{\star}\|^2} > 0$,
+ensuring strict decrease. On the Rosenbrock function, the large gradient norms near the curved
+valley mean $f(x_k)/\|g_k\| \gg 0$, giving large Polyak steps that advance quickly along the
+valley --- explaining why Polyak achieves $f = 0.0094$ vs GD's $f = 3.51$ in 120 iterations.
 
 \subsubsection{Adagrad}
 
@@ -645,16 +656,19 @@ Adam & 0.4826 & 0.7244 & 1.5785 \\
 \end{tabular}
 \end{table}
 
-\begin{remark}[Quantitative validation of $O(1/k^2)$ vs $O(1/k)$]
-The Nesterov theorem implies that after $k = 150$ iterations with step $\alpha = 1/L$ and
-starting distance $R = \|x_0 - x^{\star}\| \approx \sqrt{4 + 0} = 2$, the bound gives
-$f(x_k) - f^{\star} \leq 2L R^2/(k+1)^2 \approx 8L/22801$. For Benchmark~C,
-$L = \lambda_{\max}(\nabla^2 f) \approx 1002$, yielding an upper bound of $\approx 0.35$,
-consistent with the observed $f = 0.479$. For GD with rate $O(1/k)$, after 150 steps the bound
-from Eq.~\eqref{eq:gd_rate} is $(\kappa-1)^{300}/(\kappa+1)^{300}(f(x_0) - 0)$. With
-$\kappa \approx 2504$, this factor is $\approx (0.9992)^{300} \approx 0.78$, predicting only
-$22\%$ reduction from the initial value --- again consistent with the observed slow convergence.
-This quantitative agreement validates the theoretical rates even on a non-convex function.
+\begin{remark}[Qualitative validation of $O(1/k^2)$ vs $O(1/k)$ on Rosenbrock]
+The theoretical convergence bounds assume $f$ is convex; the Rosenbrock function is
+\emph{not} globally convex (it has a non-zero saddle point near the starting region), so
+the bounds are not formally applicable. However, the qualitative difference remains visible:
+Nesterov ($f = 0.479$) improves $\sim 7\times$ over GD ($f = 3.39$) starting from
+$f(x_0) = 4.0$ at $x_0 = (-1,1)$. If we extrapolate: GD achieves $\approx 15\%$ reduction
+($3.39/4.0$) in 150 steps, while the formal GD bound Eq.~\eqref{eq:gd_rate} with
+$\kappa = 2504$ predicts $\leq 21\%$ reduction --- slower than the bound would predict,
+since the non-convex Rosenbrock can trap iterates. Nesterov achieves $\approx 88\%$ reduction
+($0.479/4.0$), which is the $O(1/k^2)$ advantage materialising qualitatively on this
+landscape. The ratio of improvements $(88\%/15\% \approx 6\times)$ is consistent with the
+$O(1/k^2)$ vs $O(1/k)$ theoretical advantage and validates the practical benefit of
+Nesterov acceleration even on non-convex benchmarks.
 \end{remark}
 
 \subsection{Contour Trajectories}
@@ -1417,6 +1431,19 @@ variant that can converge faster initially but does not provide the $O(1/k)$ gua
 introduces residual oscillation near the optimum. For the box $\mathcal{X}$ here,
 $D = \|(5 - 0.5, 10 - (-5))\| = \|(4.5, 15)\| \approx 15.66$.
 
+\begin{remark}[Frank--Wolfe and sparsity]
+A key structural property of Frank--Wolfe, not immediately visible in these experiments, is
+its \emph{sparsity-inducing} nature. Since each iterate $x_{k+1} = \beta x_k + (1-\beta) z_k$
+is a convex combination of the previous iterate and a \emph{vertex} of $\mathcal{X}$, and
+since the iterates are initialised at a vertex ($x_0 \in \text{ext}(\mathcal{X})$), all
+iterates $x_k$ can be represented as convex combinations of at most $k+1$ vertices. Over
+$\ell_1$-ball constraints (nuclear norm ball, simplex), this directly induces sparse solutions
+in at most $k$ ``atoms'' --- making Frank--Wolfe the algorithm of choice for sparse recovery and
+low-rank matrix completion where sparsity of the solution is desirable. This is in sharp
+contrast to projected GD or interior-point methods, which do not naturally produce sparse
+iterates.
+\end{remark}
+
 \subsection{Interior Optimum: $f(x) = (x_1 - 1)^2 + (x_2 - 5)^2$}
 \label{ssec:q6_interior}
 
@@ -1678,11 +1705,36 @@ schedule $\gamma_k = 2/(k+2)$ (Figure~\ref{fig:q6_fw_step_comparison}). This dir
 the importance of a decaying step size for fine convergence near the optimum.
 
 \textbf{Overall recommendation:} For practitioners, the choice of algorithm depends critically
-on the problem structure. For smooth, well-conditioned objectives with available gradients, Adam
-or Nesterov momentum offer the best practical convergence. For strongly convex problems where
-the Hessian is tractable, Newton's method is unmatched. For constrained problems with cheap
-projection, projected GD is simple and effective. For high-dimensional derivative-free settings,
-Nesterov random search is the most scalable option despite its slower per-step convergence.
+on the problem structure. Table~\ref{tab:recommendations} summarises the algorithm selection
+logic based on problem characteristics encountered in this study.
+
+\begin{table}[H]
+\centering
+\caption{Algorithm selection guide based on problem structure and resource constraints.}
+\label{tab:recommendations}
+\begin{tabular}{p{4.5cm}p{3.5cm}p{5cm}}
+\toprule
+\textbf{Problem Structure} & \textbf{Recommended Method} & \textbf{Rationale} \\
+\midrule
+Smooth, well-conditioned, gradient available & Adam or Nesterov & Adaptive scaling or $O(1/k^2)$ acceleration \\
+Strongly convex quadratic, small $d$ & Newton's method & Exact in 1 step; $O(d^3)$ per iter \\
+$f^{\star}$ known exactly & Polyak step & Theoretically optimal descent per step \\
+Ill-conditioned, gradient available & Heavy Ball or Nesterov & Momentum overcomes slow $\rho \approx 1$ \\
+Gradient unavailable, low $d$ & Nelder--Mead & No gradient needed; adapts to curvature \\
+Gradient unavailable, high $d$ & Nesterov random search & 2 evaluations/iter; dimension-free \\
+Box/polytope constraints, cheap projection & Projected GD & Hard feasibility; $O(1/k)$ rate \\
+Expensive projection, cheap LMO & Frank--Wolfe & Avoids projection; uses LMO \\
+Global search required & Grid search & Exhaustive; $O(N^d)$ evaluations \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The course has demonstrated that no single algorithm dominates across all problem types.
+Understanding the mathematical structure of the objective --- its smoothness, convexity,
+condition number, and constraint geometry --- is prerequisite to choosing the appropriate method.
+The theoretical convergence rates ($O(1/k)$, $O(1/k^2)$, quadratic) provide principled guidance
+that, as validated here, predicts empirical behaviour at least qualitatively even on non-convex
+benchmarks.
 
 % ============================================================
 \newpage
