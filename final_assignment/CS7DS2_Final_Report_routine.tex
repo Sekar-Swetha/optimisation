@@ -343,6 +343,29 @@ This contrasts with a global $O(1/\sqrt{k})$ schedule that would uniformly slow 
 coordinates regardless of their gradient scale.
 \end{remark}
 
+\begin{remark}[Adagrad as online mirror descent]
+Adagrad admits a clean interpretation as \emph{online mirror descent} with a time-varying
+Mahalanobis norm.  At step $k$, the Adagrad update
+$x_{k+1} = x_k - \alpha_0 G_k^{-1/2} g_k$ (where $G_k = \operatorname{diag}(\sum_{j \leq k}g_j^2)$)
+is equivalent to:
+\[
+  x_{k+1} = \arg\min_{x} \Bigl\{ g_k^\top x + \frac{1}{2\alpha_0}\|x - x_k\|_{G_k}^2 \Bigr\},
+  \qquad \|v\|_{G_k}^2 = v^\top G_k v.
+\]
+This is mirror descent with the Bregman divergence induced by the convex potential
+$\phi_k(x) = \frac{1}{2\alpha_0}\|x\|_{G_k}^2$, i.e.\ measuring progress in the
+\emph{cumulative-gradient-weighted norm}.  The key theoretical consequence is that Adagrad
+achieves the \emph{optimal online regret bound} $\sum_{k=1}^{T} (f(x_k) - f(x^{\star})) \leq
+\frac{1}{2\alpha_0}\|x_0 - x^{\star}\|_{\text{diag}}^2 + \alpha_0 \sum_{i=1}^{d}\sqrt{\sum_{k=1}^{T}(g_k^{(i)})^2}$,
+where the second term is $O(\sqrt{T})$ for each coordinate independently.  For coordinates
+with small gradient variance, the second term grows slowly --- explaining the per-coordinate
+benefit.  This mirror descent view also clarifies why the cumulative-average matrix $G_k/k$
+approximates the Hessian diagonal: for quadratic $f$ with gradient $Hx$, $g_k^{(i)} \approx
+H_{ii} x_k^{(i)}$ (if $H$ is diagonal), so $G_k^{(i)}/k \to H_{ii}^2 \|x\|^2/k$, and the
+Adagrad step $\alpha_0/(G_k^{(i)})^{1/2}$ becomes approximately $\alpha_0/(H_{ii}\|x\|)$
+--- a natural scaling by inverse gradient magnitude.
+\end{remark}
+
 \begin{remark}[Limitation: diagonal vs.\ full preconditioning]
 Adagrad's coordinate-wise update implicitly approximates the Hessian by a diagonal matrix
 $\hat{H}_k \approx \operatorname{diag}(G_k^{(1)}/k,\ldots,G_k^{(d)}/k)$, which equals the
@@ -768,7 +791,7 @@ the consistently downhill direction, explaining its $3\times$ lower final object
 ($0.479$ vs $1.578$) despite Adam's richer per-coordinate information.
 \end{remark}
 
-\begin{remark}
+\begin{remark}[Adam: convergence gap and AMSGrad fix]
 Unlike Nesterov's accelerated gradient (which enjoys an $O(1/k^2)$ convergence guarantee on
 smooth convex objectives), Adam does not have a general convergence guarantee in the
 full-batch deterministic setting. Its regret bounds apply to the online/stochastic setting.
@@ -781,6 +804,16 @@ $\alpha(1-\beta_1)^{1/2}/(1-\beta_2)^{1/2} \cdot g_1/|g_1|$ that may overshoot d
 The bias correction effectively implements a learning-rate warm-up: the true step in iteration~$t$
 scales as $\alpha\sqrt{1-\beta_2^t}/(1-\beta_1^t)$, which starts near zero and grows to $\alpha$
 as $t$ increases --- the same warm-up schedule commonly used in Transformer training.
+
+Reddi et al.\ (2018) showed a specific counter-example where Adam with $\beta_2$ close to 1
+fails to converge due to the EMA second moment being too smooth (a single large gradient is
+``forgotten'' too quickly, causing the step to grow non-monotonically).  Their fix, AMSGrad,
+replaces the EMA $v_t$ with a running maximum: $\hat{v}_t \gets \max(\hat{v}_{t-1}, v_t)$,
+which ensures the effective denominator $\sqrt{\hat{v}_t}$ is non-decreasing in each
+coordinate.  Under this modification, the effective learning rate $\alpha/\sqrt{\hat{v}_t}$
+is non-increasing, giving AMSGrad a convergence guarantee of $O(1/\sqrt{T})$ regret --- the
+same as Adagrad.  AMSGrad is more conservative than Adam in practice and does not always
+improve empirical performance, but closes the theoretical gap.
 \end{remark}
 
 \subsection{Hyperparameter Settings}
@@ -2274,6 +2307,43 @@ oscillation near the optimum: with $\beta = 0.90$ (10\% step towards LP vertex),
 achieves $f = 0.0985$ after 200 iterations compared to $f = 0.0011$ for the standard diminishing
 schedule $\gamma_k = 2/(k+2)$ (Figure~\ref{fig:q6_fw_step_comparison}). This directly validates
 the importance of a decaying step size for fine convergence near the optimum.
+
+\textbf{Theoretical convergence rate summary:} Table~\ref{tab:rates_summary} consolidates the
+theoretical convergence guarantees of all methods studied, providing a unified reference for
+the rates derived and referenced throughout this report.
+
+\begin{table}[H]
+\centering
+\caption{Convergence rate summary for all methods under their stated theoretical conditions.
+$\kappa = L/\mu$ is the condition number; $D$ is the domain diameter; $\sigma_g^2$ is the
+gradient variance; $m$ is the dataset size.  ``Quadratic'' means error squares each
+iteration once inside the convergence basin.}
+\label{tab:rates_summary}
+\begin{tabular}{p{2.6cm}p{3.6cm}p{4.8cm}}
+\toprule
+\textbf{Method} & \textbf{Condition} & \textbf{Rate (iterations for $\varepsilon$-accuracy)} \\
+\midrule
+GD (const.\ step) & $\mu$-str.\ cvx, $L$-smooth & $O(\kappa \log(1/\varepsilon))$ \\
+Polyak step & $\mu$-str.\ cvx (PL), $f^{\star}$ known & $O(\kappa \log(1/\varepsilon))$, self-tuning \\
+Adagrad & Convex, non-smooth & $O(1/\sqrt{T})$ regret; optimal for class \\
+Heavy Ball & Str.\ cvx \textbf{quadratic} only & $O(\sqrt{\kappa}\log(1/\varepsilon))$ (quadratic) \\
+Nesterov & Convex, $L$-smooth & $O(\sqrt{\kappa}\log(1/\varepsilon))$ (str.\ cvx); $O(\sqrt{L/\varepsilon})$ (convex) \\
+Adam/AMSGrad & Online convex & $O(1/\sqrt{T})$ regret; no str.\ cvx guarantee \\
+Newton & Str.\ cvx, $C^3$ & Quadratic local: $\|e_{k+1}\| \leq (M/2\mu)\|e_k\|^2$ \\
+FD GD & $\mu$-str.\ cvx, $L$-smooth & As GD + bias ball $O(\delta/\mu)$ \\
+Nesterov r.s. & Smooth & $O(1/\sqrt{T})$ (scaled by $1/d$) \\
+Projected GD & Cvx, $L$-smooth, $\mathcal{F}$ convex & $O(1/k)$ (convex); $O(\rho^k)$ (str.\ cvx) \\
+Frank--Wolfe & Cvx, $L$-smooth, $\mathcal{X}$ bounded & $O(LD^2/k)$; linear with away-step \\
+Penalty method & Cvx, fixed $\lambda$ & $O(1/k)$ for fixed $\lambda$; approx.\ soln \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The table confirms a clear hierarchy: gradient methods achieve $O(\kappa)$ or $O(\sqrt{\kappa})$
+rates depending on whether momentum is used; Newton's method achieves quadratic convergence
+locally but is only applicable at small scale ($d \leq 100$); derivative-free methods trade
+accuracy for gradient-free operation; and constrained methods preserve problem structure at
+the cost of an additional oracle (projection or LMO) per step.
 
 \textbf{Overall recommendation:} For practitioners, the choice of algorithm depends critically
 on the problem structure. Table~\ref{tab:recommendations} summarises the algorithm selection
