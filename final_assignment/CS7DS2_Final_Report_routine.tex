@@ -63,23 +63,32 @@ benchmark problems: a linear regression quadratic loss (Benchmark A, condition n
 and the highly ill-conditioned Rosenbrock function (Benchmark C, $\kappa \approx 2000$).
 Six categories of methods are systematically investigated: (Q1) adaptive step-size methods
 (Polyak, Adagrad, RMSprop, Heavy Ball); (Q2) momentum-based and stochastic methods (Nesterov
-acceleration, Adam, mini-batch SGD); (Q3) Newton's method exploiting local second-order approximations;
-(Q4) derivative-free approaches (finite differences, Nesterov random search, Nelder--Mead, grid search);
-(Q5) constrained optimisation via projected gradient descent and penalty methods; and (Q6) the
-Frank--Wolfe conditional gradient algorithm for linear-constrained problems.
+acceleration, Adam, mini-batch SGD, learning-rate schedules); (Q3) Newton's method exploiting local
+second-order approximations; (Q4) derivative-free approaches (finite differences, Nesterov random
+search, Nelder--Mead, grid search); (Q5) constrained optimisation via projected gradient descent
+and penalty/augmented-Lagrangian methods; and (Q6) the Frank--Wolfe conditional gradient
+algorithm for linear-constrained problems.
 
-Key findings: Polyak's step size diverges whenever $f^{\star}$ is misspecified (Benchmarks A, B) but
-achieves the best convergence on Rosenbrock where $f^{\star}=0$ is exact.
+Key findings: Polyak's step size diverges whenever $f^{\star}$ is misspecified (Benchmarks A, B)
+but achieves the best convergence on Rosenbrock where $f^{\star}=0$ is exact.
 Nesterov momentum achieves an empirical $O(1/k^2)$ convergence rate that substantially outperforms
-gradient descent's $O(1/k)$ on ill-conditioned problems.
-Newton's method converges in a single iteration on the quadratic Benchmark A and in
-$\sim$5 iterations on Benchmark B, exploiting local curvature for superlinear (quadratic) convergence.
-Finite-difference gradient approximation with $\delta = 0.05$ matches exact GD, while $\delta = 0.8$
-incurs $O(\delta)$ truncation bias.
+gradient descent's $O(1/k)$ on ill-conditioned problems; this rate is provably optimal (Nesterov's
+lower bound).
+Newton's method, which is \emph{affine invariant} and therefore unaffected by condition number in
+the local convergence regime, converges in a single iteration on the quadratic Benchmark A and in
+$\sim$5 iterations on Benchmark B.
+Finite-difference gradient approximation with $\delta = 0.05$ matches exact GD
+(${\approx}1\%$ gradient error), while $\delta = 0.8$ incurs ${\approx}59\%$ truncation bias.
 Projected gradient descent enforces hard feasibility at every iteration, whereas penalty methods
-require careful weight tuning but no projection oracle.
-Frank--Wolfe naturally stays feasible via convex combinations, converging at the
-theoretical $O(1/k)$ rate.
+require $\lambda \to \infty$ for exact feasibility (causing $O(\lambda)$ condition number growth),
+a limitation resolved by the augmented Lagrangian method.
+Frank--Wolfe naturally stays feasible via convex combinations and promotes sparse iterates,
+converging at the theoretical $O(1/k)$ rate; the Frank--Wolfe duality gap provides a computable
+sub-optimality certificate.
+Cross-benchmark analysis confirms that the condition number $\kappa$ is the primary driver of
+relative method performance: for small $\kappa$, all gradient methods converge rapidly; for
+$\kappa \approx 2000$, only momentum-based (Nesterov) or curvature-aware (Newton, Polyak)
+methods remain competitive.
 \end{abstract}
 
 \tableofcontents
@@ -2435,6 +2444,91 @@ def frank_wolfe(grad_fn, loss_fn, x0, bounds, beta, n_iters):
         x_hist.append(x.copy())
         f_hist.append(loss_fn(x))
     return np.array(x_hist), np.array(f_hist), np.array(z_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Finite Difference Gradient Descent}]
+def fd_gradient(f, x, delta):
+    """Forward finite-difference gradient approximation."""
+    n = len(x)
+    f0 = f(x)
+    grad = np.zeros(n)
+    for i in range(n):
+        ei = np.zeros(n); ei[i] = delta
+        grad[i] = (f(x + ei) - f0) / delta
+    return grad
+
+def fd_gradient_descent(loss_fn, x0, alpha, delta, n_iters):
+    x = x0.copy().astype(float)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for _ in range(n_iters):
+        g = fd_gradient(loss_fn, x, delta)
+        x = x - alpha * g
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Nesterov Random Search (Zeroth-Order)}]
+def nesterov_random_search(loss_fn, x0, alpha, delta, n_iters):
+    x = x0.copy().astype(float)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for _ in range(n_iters):
+        u = np.random.randn(len(x))
+        u /= np.linalg.norm(u)  # uniform random direction
+        g_hat = (loss_fn(x + delta * u) - loss_fn(x)) / delta * u
+        x = x - alpha * g_hat
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Mini-Batch SGD with Epoch Shuffling}]
+def mini_batch_sgd(X, y, theta0, alpha, batch_size, n_epochs):
+    m = len(y)
+    theta = theta0.copy().astype(float)
+    theta_hist, loss_hist = [theta.copy()], []
+    loss_hist.append(0.5 * np.mean((X @ theta - y)**2))
+    for epoch in range(n_epochs):
+        idx = np.random.permutation(m)
+        for start in range(0, m, batch_size):
+            b_idx = idx[start:start+batch_size]
+            g = X[b_idx].T @ (X[b_idx] @ theta - y[b_idx]) / batch_size
+            theta = theta - alpha * g
+        theta_hist.append(theta.copy())
+        loss_hist.append(0.5 * np.mean((X @ theta - y)**2))
+    return np.array(theta_hist), np.array(loss_hist)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Projected Gradient Descent (Q5)}]
+def projected_gd(grad_fn, loss_fn, x0, alpha, project_fn, n_iters):
+    x = x0.copy().astype(float)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for _ in range(n_iters):
+        x = project_fn(x - alpha * grad_fn(x))
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
+
+def project_halfspace(z, lb=0.5):
+    """Project onto {x : x[0] >= lb}."""
+    z = z.copy()
+    z[0] = max(lb, z[0])
+    return z
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Penalty Method (Q5)}]
+def penalty_method(grad_fn, loss_fn, x0, alpha, lam, n_iters, lb=0.5):
+    """Gradient descent on f(x) + lambda * max(0, lb - x[0])."""
+    x = x0.copy().astype(float)
+    x_hist, f_hist = [x.copy()], [loss_fn(x)]
+    for _ in range(n_iters):
+        g = grad_fn(x).copy()
+        if x[0] < lb:
+            g[0] -= lam  # gradient of linear penalty term
+        x = x - alpha * g
+        x_hist.append(x.copy())
+        f_hist.append(loss_fn(x))
+    return np.array(x_hist), np.array(f_hist)
 \end{lstlisting}
 
 \end{document}
