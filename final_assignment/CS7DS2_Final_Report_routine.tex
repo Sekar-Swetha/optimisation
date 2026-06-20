@@ -818,6 +818,28 @@ strong off-diagonal Hessian coupling), all three adaptive methods are outperform
 Nesterov, whose global momentum direction aligns better with the valley.
 \end{remark}
 
+\begin{remark}[Adam's implicit curvature model and its limitations]
+Adam's update $x_{t+1} = x_t - \alpha \hat{m}_t / (\sqrt{\hat{v}_t} + \varepsilon)$
+implicitly performs a Newton-like step with a \emph{diagonal Hessian approximation}:
+\[
+x_{t+1} \approx x_t - \underbrace{\operatorname{diag}(\sqrt{\hat{v}_t})^{-1}}_{\approx |H|^{-1/2}\text{ diagonal}}\;\hat{m}_t.
+\]
+Specifically, for a quadratic $f(x) = \frac{1}{2}x^T H x$ with \emph{diagonal} $H$,
+the true Newton step is $-H^{-1}g$, while Adam's step is $-\hat{v}_t^{-1/2} \odot g$
+with $\hat{v}_t \approx g_t^2 \approx (Hx)^2$.
+For diagonal $H$, $(Hx)_i^2 = H_{ii}^2 x_i^2$, so $\hat{v}_t^{-1/2} \propto 1/|H_{ii} x_i|$
+--- this is an approximation to $|H_{ii}^{-1}|$ only when $|x_i|$ is constant, which
+fails as the iterate moves.
+For non-diagonal $H$ (like Rosenbrock's $H_{12} = -400x_1$), the off-diagonal
+$-400 x_1$ term contributes equally to the gradient as $H_{11} = 802 - 400x_2$,
+but Adam sees only the squared gradient magnitude per coordinate without separating
+the diagonal and off-diagonal contributions.
+The result is that Adam's effective preconditioner $\operatorname{diag}(\hat{v}_t)^{-1/2}$
+is a poor approximation of $H^{-1}$ for the Rosenbrock Hessian, whereas Newton's exact
+$H^{-1}$ accounts for the full off-diagonal coupling --- explaining the performance
+gap: Newton $f = 0.686$ vs Adam $f = 1.578$ in comparable iteration counts.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1111,6 +1133,31 @@ sampling, eliminated by using full batches) and irreducible noise (from the data
 generation process, which cannot be eliminated by any first-order method).}
 \label{fig:q2_sgd_noisy}
 \end{figure}
+
+\begin{remark}[Learning rate schedules: fixed vs.\ decaying]
+All SGD experiments in Q2 use a fixed learning rate $\alpha$.
+In practice, a decreasing learning rate schedule is often used to achieve both fast
+initial convergence (large $\alpha$ early) and low final oscillation (small $\alpha$ late).
+The three canonical schedules are:
+\begin{enumerate}[nosep]
+\item \textbf{Step decay}: $\alpha_k = \alpha_0 \cdot \gamma^{\lfloor k/T \rfloor}$
+  (reduce by factor $\gamma$ every $T$ iterations). Simple but requires tuning $T$.
+\item \textbf{Inverse-root decay}: $\alpha_k = \alpha_0 / \sqrt{k}$.
+  Guarantees $O(1/\sqrt{T})$ convergence for non-smooth convex SGD; diminishing returns
+  after the ``knee'' where $\alpha_k$ becomes too small.
+\item \textbf{Cosine annealing}: $\alpha_k = \alpha_{\min} + \frac{1}{2}(\alpha_{\max} - \alpha_{\min})(1 + \cos(\pi k / T))$.
+  Popular in deep learning; smoothly decays from $\alpha_{\max}$ to $\alpha_{\min}$ over $T$ iterations,
+  avoiding the abrupt step of step-decay schedules.
+\end{enumerate}
+For the experiments in Q2, a fixed rate works because the objective is smooth and the
+noise floor is determined by observation noise $\sigma^2$, not the learning rate.
+For noisy non-convex objectives (deep neural networks), a decaying schedule is essential:
+the large initial $\alpha$ allows exploration; the small final $\alpha$ enables convergence
+to a low-loss basin without persistent oscillation.
+The $O(1/\sqrt{T})$ rate of decaying-$\alpha$ SGD is slower than the $O(1/T)$ of GD
+on smooth convex problems, but it is information-theoretically optimal for stochastic
+first-order methods on non-smooth objectives.
+\end{remark}
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -1732,6 +1779,29 @@ $100 \cdot (0.074\sqrt{2})^4 \approx 0.006$, consistent with the $\sim 10^{-3}$ 
 value observed.
 This exponential growth in cost with dimension is the ``curse of dimensionality''
 that makes grid search impractical beyond $d \leq 3$.
+\end{remark}
+
+\begin{remark}[Information-theoretic lower bounds for zeroth-order optimisation]
+Grid search illustrates a fundamental lower bound: for any deterministic zeroth-order
+method (accessing only function values) minimising a Lipschitz function
+$f : [0,1]^d \to \mathbb{R}$ with constant $K$, the worst-case suboptimality after
+$T$ function evaluations satisfies:
+\[
+\min_{\text{algorithm}} \max_{f \in \mathcal{F}} \bigl[f(x_T) - f^\star\bigr] \geq K \cdot \left(\frac{1}{T}\right)^{1/d},
+\]
+where $\mathcal{F}$ is the class of $K$-Lipschitz functions.
+This $O(T^{-1/d})$ rate is achieved by uniform grid search, and is the optimal rate
+for zeroth-order algorithms on $K$-Lipschitz problems --- no adaptive algorithm can
+do better in the worst case.
+Nesterov random search, by exploiting (approximate) gradient information from two
+function evaluations, achieves $O(1/T)$ convergence on smooth objectives --- a much
+faster rate that breaks the $d$-dependent lower bound because it implicitly uses
+smoothness structure beyond mere Lipschitz continuity.
+For smooth objectives (Benchmarks~A, B, C), the gap between zeroth-order ($O(T^{-1/d})$)
+and first-order ($O(1/T)$) is enormous for large $d$: to achieve $\varepsilon$-accuracy,
+zeroth-order requires $T = O(\varepsilon^{-d})$ vs first-order $T = O(1/\varepsilon)$.
+This information-theoretic gap is the fundamental reason why gradient-based methods
+dominate in high-dimensional machine learning despite the cost of gradient computation.
 \end{remark}
 
 % ============================================================
