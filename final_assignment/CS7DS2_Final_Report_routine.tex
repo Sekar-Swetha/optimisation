@@ -287,10 +287,17 @@ to a method with monotonically decaying effective step size --- explaining its e
 \end{algorithmic}
 \end{algorithm}
 
-\begin{remark}[RMSprop vs Adagrad]
+\begin{remark}[RMSprop vs Adagrad: the forgetting half-life]
 RMSprop replaces the \emph{cumulative} sum in Adagrad with an exponential moving average
-controlled by $\beta$. This gives RMSprop a ``forgetting'' property: old gradient magnitudes
-decay exponentially with half-life $\approx 1/(1-\beta)$ iterations.
+controlled by $\beta$. This gives RMSprop a ``forgetting'' property: a gradient from
+$t$ steps ago has weight $\beta^t(1-\beta)$, so its contribution decays to half after
+$t_{1/2} = \log(0.5)/\log(\beta) = -\log 2 / \log \beta$ steps.
+For $\beta = 0.9$: $t_{1/2} = \log 2 / \log(1/0.9) = 6.58$ steps (the most recent
+$\sim 7$ gradients dominate).
+For $\beta = 0.99$: $t_{1/2} \approx 69$ steps; for $\beta = 0.999$: $t_{1/2} \approx 693$ steps.
+This explains the choice $\beta = 0.9$ throughout Q1: with convergence in $\sim 40$--$80$
+iterations, a half-life of $7$ steps is appropriate --- old gradient information from a
+different part of the landscape is quickly discarded.
 As a result, RMSprop's effective step size stabilises rather than decaying to zero, making it
 better suited to non-stationary objectives or long training runs.
 \end{remark}
@@ -661,6 +668,20 @@ The key mechanism is evaluating the gradient at the lookahead point $\tilde{x}_k
 which corrects for momentum overshoot before it occurs.
 \end{theorem}
 
+\begin{remark}[Derivation of the Nesterov momentum schedule]
+The schedule $\beta_k = (k-1)/(k+2)$ arises from the \emph{estimate sequence} construction
+in Nesterov's proof. Define $\lambda_0 = 1$ and $\lambda_k = (1 + \sqrt{1 + 4\lambda_{k-1}^2})/2$.
+The recursion is chosen so that $1/\lambda_k^2 \leq 4/(k+2)^2$, ensuring the $O(1/k^2)$ bound.
+The momentum coefficient $\beta_k = (\lambda_{k-1} - 1)/\lambda_k$ approaches $(k-1)/(k+2)$
+for large $k$, exactly the schedule used in Algorithm~\ref{alg:nesterov}.
+The cap at $\beta_{\max}$ prevents the momentum from exceeding a stability threshold:
+for $\beta_k \to 1$, the lookahead point $\tilde{x}_k = x_k + \beta_k z_k$ moves far from $x_k$,
+risking gradient evaluations in regions where the quadratic approximation breaks down.
+The truncation $\beta_k \gets \min((k-1)/(k+2), \beta_{\max})$ therefore trades
+theoretical optimality for practical stability, with empirical $\beta_{\max} \approx 0.90$--$0.92$
+working well across all three benchmarks.
+\end{remark}
+
 \begin{remark}[Lookahead vs Heavy Ball]
 The distinction between Nesterov (Algorithm~\ref{alg:nesterov}) and Heavy Ball
 (Algorithm~\ref{alg:heavyball}) is where the gradient is evaluated.
@@ -861,6 +882,27 @@ consistent with the observed $f = 3.39$.
 The Nesterov bound is a factor $0.347/3.71 \approx 0.093 \times$ tighter than the GD bound,
 matching the theoretical prediction that Nesterov needs $\sim \sqrt{\kappa}$ fewer iterations
 rather than $\kappa$.
+
+\begin{table}[H]
+\centering
+\caption{Estimated iterations to reach $f < 1.0$ on Benchmark~C from theoretical bounds.
+  GD: $k^* = \log(1/f_0)/|\log(1-\alpha\mu)|$.
+  Nesterov: $k^* = \sqrt{2Lf_0^{-1}\|x_0-x^\star\|^2} - 2$ from the $O(1/k^2)$ bound.
+  Newton: $\sim \log_2 \log_2(1/0.001) \approx 3$ once in convergence basin (rough estimate).}
+\label{tab:iter_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Theoretical iter.\ to $f < 1.0$} & \textbf{Observed $f$ at 150 it.} & \textbf{Rate} \\
+\midrule
+GD ($\alpha = 0.0012$)            & $\approx 4{,}820$ & 3.388 & $O(1/k)$ \\
+Nesterov ($\alpha = 0.0007$)      & $\approx 178$ & \textbf{0.479} & $O(1/k^2)$ \\
+Adam ($\alpha = 0.006$)           & $\approx 200$--$300$ (empirical) & 1.579 & adaptive \\
+Heavy Ball ($\alpha=0.0008$, $\beta=0.86$) & $\approx 260$ (empirical) & 1.400 & $O(1/k)$* \\
+Polyak ($f^\star=0$)              & $\lesssim 120$ (empirical) & 0.009 & self-tuning \\
+\bottomrule
+\multicolumn{4}{l}{\small *Heavy Ball: guaranteed only for quadratics; empirical estimate for Rosenbrock.}
+\end{tabular}
+\end{table}
 
 \subsection{Contour Trajectories}
 
