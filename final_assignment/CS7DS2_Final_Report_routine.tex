@@ -607,14 +607,20 @@ The bias corrections $1/(1-\beta_j^t)$ prevent the first few iterates from being
 zero due to zero initialisation of $m_0$ and $v_0$.  Standard parameters are $\beta_1 = 0.9$,
 $\beta_2 = 0.999$, $\varepsilon = 10^{-8}$.
 
-\begin{remark}[Adam in non-convex settings]
+\begin{remark}[Adam convergence: theory vs practice]
 While Adam is extensively used in deep learning, its convergence properties are nuanced.
 Reddi et al.\ (2018) showed that Adam can fail to converge on simple convex problems when
-$\beta_2$ is close to 1.  The fix (AMSGrad) uses a running maximum of past $v_t$ values.
-For the convex benchmarks in this assignment, Adam converges well because the gradient
-scale is relatively stable.  However, on Benchmark C (Rosenbrock), Adam's per-coordinate
-scaling based on recent squared gradient magnitudes is less effective than Nesterov's
-global momentum accumulation along the consistent valley-floor direction.
+$\beta_2$ is close to 1---the issue is that $v_t$ can shrink (when recent gradients are small)
+even if historical large gradients would have required a small step, allowing the step size
+to increase at the wrong moment.  The fix (AMSGrad) replaces $v_t$ with $\hat{v}_t =
+\max(\hat{v}_{t-1}, v_t)$, ensuring the effective step size is non-increasing, which
+restores the $O(1/\sqrt{T})$ convergence guarantee.  For the convex benchmarks in this
+assignment, Adam converges well because the gradient scale is relatively stable and
+$\beta_2 = 0.999$ provides sufficient averaging.  However, on Benchmark C (Rosenbrock),
+Adam's per-coordinate scaling based on recent squared gradient magnitudes is less effective
+than Nesterov's global momentum accumulation: the Rosenbrock valley is a curved parabola,
+and the optimal descent direction couples both coordinates ($\partial^2 f/\partial x_1
+\partial x_2 = -400x_1$), making coordinate-independent scaling suboptimal.
 \end{remark}
 
 \subsection{Hyperparameter Settings}
@@ -973,6 +979,15 @@ requiring only gradient evaluations---no Hessian storage or factorisation.  This
 the default method in \texttt{scipy.optimize} and modern machine learning frameworks for
 smooth, moderately-sized problems ($d \lesssim 10^6$).
 
+Another important alternative is the \emph{conjugate gradient method} (CG), which solves
+the Newton system $H_k p_k = g_k$ iteratively using only matrix-vector products $H_k v$---
+enabling $O(d)$ cost per CG iteration when the Hessian has structure.  Truncated-Newton
+methods use CG to approximately solve the Newton system, combining Newton's curvature
+exploitation with first-order computational cost.  For Benchmark A (quadratic), exact CG
+terminates in at most $d = 2$ steps (i.e., 2 matrix-vector products) and achieves the
+same one-step convergence as full Newton---a direct consequence of the Krylov space
+exactly spanning the solution in $d$ conjugate directions.
+
 \subsection{Hyperparameter Settings}
 
 Settings: GD uses 80 iterations; Newton uses 20 iterations with Hessian regularisation
@@ -1259,7 +1274,15 @@ $= 0.35$, 160 iterations.
 Nelder--Mead has no general convergence guarantee for $d \geq 2$ (McKinnon, 1998).  However,
 it works well in practice on smooth, low-dimensional functions and is widely used for
 hyperparameter tuning.  The simplex adaptively contracts towards the optimum, effectively
-learning local geometry without derivatives.
+learning local geometry without derivatives.  The intuition for its empirical success is
+that on smooth functions, the simplex ``senses'' the local curvature through function
+evaluations at its $d+1$ vertices, providing implicit first- and second-order information
+at the cost of $O(d+1)$ function evaluations per simplex transformation.  For $d = 2$,
+this gives 3 function evaluations per step---the same as FD gradient estimation---but with
+an adaptive geometry that contracts and expands based on local progress rather than using
+a fixed perturbation size.  For ill-conditioned problems like Rosenbrock ($\kappa \approx 2086$),
+the simplex naturally elongates along the low-curvature valley direction, providing implicit
+preconditioning that a fixed $\delta$ perturbation cannot achieve.
 \end{remark}
 
 \begin{figure}[H]
@@ -1378,6 +1401,17 @@ condition~\eqref{eq:kkt_complementarity} implies $\mu^{\star} = 0$ (constraint i
 and Eq.~\eqref{eq:kkt_stationarity} reduces to $\nabla f(x^{\star}) = 0$ as in the
 unconstrained case.  This confirms that the projected GD and penalty methods converge to
 the same point as unconstrained GD.
+
+\paragraph{Constraint qualification.}
+The KKT conditions are \emph{necessary} for optimality when a \emph{constraint qualification}
+(CQ) holds.  For the half-space constraint $g(x) = 0.5 - x_1 \leq 0$, the
+\emph{Linear Independence Constraint Qualification} (LICQ) requires that the active constraint
+gradients are linearly independent at $x^{\star}$.  Since the only constraint is $g(x) \leq 0$
+with $\nabla g = -e_1 = [-1, 0]^{\top}$, LICQ trivially holds whenever the constraint is active
+(one constraint, one gradient, trivially independent).  When the constraint is \emph{inactive}
+($\mu^{\star} = 0$), the KKT conditions are equivalent to the unconstrained stationarity
+$\nabla f(x^{\star}) = 0$, and are both necessary and sufficient for a local minimum of the
+convex objective.  For convex $f$ and convex $\mathcal{F}$, KKT conditions are globally sufficient.
 
 \begin{algorithm}[H]
 \caption{Projected Gradient Descent (PGD)}
@@ -1601,7 +1635,11 @@ positive, the minimum is at the lower-left vertex $(0.5, -5)$.
   f(x_k) - f^{\star} \leq \frac{2LC^2}{k+2} = O\!\left(\frac{1}{k}\right),
   \end{equation}
   where $C = \mathrm{diam}(\mathcal{X})$---slower than the $O(1/k^2)$ rate of projected
-  Nesterov acceleration.  This $O(1/k)$ rate is optimal for Frank--Wolfe in the worst case.
+  Nesterov acceleration.  This $O(1/k)$ rate is \emph{tight}: Lan (2013) showed a
+  matching lower bound, proving that no variant of Frank--Wolfe using only LMO calls can
+  achieve a better dependence on $k$ in the worst case.  This fundamental gap between
+  Frank--Wolfe ($O(1/k)$) and projected gradient ($O(1/k^2)$ with Nesterov) cannot be
+  closed without additional oracle access---it is the price of using LMO instead of projection.
 
 \item \textbf{Convergence certificate (FW gap):}
   At each iteration, the quantity $g_k = \nabla f(x_k)^{\top}(x_k - z_k) \geq 0$ serves as
