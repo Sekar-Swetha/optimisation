@@ -223,7 +223,13 @@ i.e.\ a linear rate $O((1-\mu/L)^k)$ governed by the condition number $\kappa = 
 The Polyak step is the unique step size that minimises a linear local model of $f$ subject to
 the constraint that the iterates descend to $f^{\star}$.  When $f^{\star}$ is known exactly and
 $f$ is convex with Lipschitz gradient, the Polyak rule achieves $O(1/k)$ convergence without
-any knowledge of $L$ or $\mu$.
+any knowledge of $L$ or $\mu$:
+\begin{equation}
+\label{eq:polyak_rate}
+f(x_k) - f^{\star} \leq \frac{\|x_0 - x^{\star}\|^2}{2k}, \qquad \text{(Polyak, 1969)}.
+\end{equation}
+This rate matches GD's $O(1/k)$ for convex functions, but requires zero hyperparameter
+tuning---a remarkable property that is unmatched by any other first-order rule.
 
 \begin{algorithm}[H]
 \caption{Adagrad}
@@ -292,6 +298,8 @@ Heavy Ball's optimal rate is only guaranteed for quadratics, and (ii) Heavy Ball
 can \emph{diverge} on non-convex objectives such as Rosenbrock when the momentum
 term carries the iterate across the curved valley floor, whereas Nesterov's
 lookahead mechanism provides a corrective force that stabilises the trajectory.
+Figure~\ref{fig:q2_hb_diverge} demonstrates this sensitivity: identical step sizes
+that cause Heavy Ball to diverge are safely handled by Nesterov acceleration.
 
 \subsection{Hyperparameter Settings}
 
@@ -490,12 +498,16 @@ This explains why Adagrad's step size decreases without bound while RMSprop's st
   known (e.g.\ classification with zero training error).  RMSprop and Adagrad are more robust
   choices; they are the backbone of modern deep learning optimisers.
 
-\item \textbf{Condition number effect:} On Benchmark C ($\kappa \approx 2000$), all gradient
-  methods struggle---the step size upper bound $\alpha < 2/L$ forces tiny steps that barely
-  advance along the low-curvature valley direction.  This motivates the use of preconditioning
-  (coordinate-wise in Adagrad/RMSprop) or second-order information (Section~\ref{sec:q3}).
-  See also Section~\ref{sec:condition_number} and Figure~\ref{fig:condition_number} for a
-  systematic analysis of how $\kappa$ affects convergence speed.
+\item \textbf{Condition number effect:} On Benchmark C ($\kappa \approx 2086$), all gradient
+  methods struggle---the step size upper bound $\alpha < 2/L \approx 0.00125$ forces tiny
+  steps that barely advance along the low-curvature valley direction (eigenvalue $\approx 0.48$).
+  Adagrad's coordinate-wise scaling $\alpha_k^{(i)} = \alpha_0/\sqrt{G_k^{(i)}}$ acts as a
+  diagonal preconditioner: in the $x_2$ direction (large curvature, large gradients), the
+  effective step decreases; in the $x_1$ direction (smaller gradients along the valley), the
+  effective step remains larger, providing implicit preconditioning.  This explains Adagrad's
+  advantage ($f = 2.20$) over plain GD ($f = 3.51$) on Benchmark C.  See
+  Section~\ref{sec:condition_number} and Figure~\ref{fig:condition_number} for a systematic
+  analysis.
 \end{itemize}
 
 \subsection{Backtracking Line Search (Alternative Step-Size Strategy)}
@@ -513,6 +525,21 @@ inner loop iteration but guarantees the \emph{sufficient decrease} property at e
 which is critical for global convergence guarantees.  The adaptive methods in this question
 (Adagrad, RMSprop, Polyak) avoid the inner loop but sacrifice this guarantee---they may not
 decrease the objective at every step.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_heavy_ball_divergence.pdf}
+\caption{Comparison of Heavy Ball and Nesterov stability on Benchmark C (Rosenbrock) for
+  varying hyperparameters.  \textbf{Left:} Heavy Ball with $\beta = 0.86$ (used in experiments)
+  converges, but increasing $\beta$ to 0.92 causes near-divergence, and $\beta = 0.95$ leads
+  to divergence within 50 iterations.  \textbf{Right:} Nesterov acceleration with the same
+  step sizes remains stable across all tested configurations because the lookahead step
+  $\tilde{x}_k = x_k + \beta_k z_k$ evaluates the gradient at an extrapolated point,
+  correcting overshoot before it compounds.  This confirms the theoretical prediction that
+  Nesterov's global convergence guarantee does not require the quadratic structure assumed
+  by Heavy Ball's analysis.}
+\label{fig:q2_hb_diverge}
+\end{figure}
 
 % ============================================================
 \section{Question 2: Momentum and Stochastic Methods \hfill [30 marks]}
@@ -764,6 +791,19 @@ changing the geometric decay rate.
   oscillation because each mini-batch gradient deviates more from the full gradient.}
 \label{fig:q2_sgd_batch}
 \end{figure}
+
+\begin{remark}[Variance reduction: beyond mini-batch]
+The irreducible noise floor~\eqref{eq:sgd_ball} of $O(\alpha\sigma^2/\mu)$ prevents constant
+step-size SGD from reaching the exact optimum.  \emph{Variance reduction} methods such as
+SVRG (Johnson \& Zhang, 2013) and SARAH (Nguyen et al., 2017) periodically compute a full
+gradient and use it to correct the stochastic estimate, reducing the noise floor to zero.
+On finite-sum objectives $f(\theta) = \frac{1}{m}\sum_{i=1}^m f_i(\theta)$ (as in Benchmark A),
+SVRG achieves \emph{linear convergence} $O((1-\mu/L)^k)$ with $O(m/\mu\varepsilon)$ total
+function evaluations---the best of both worlds: cheap per-step cost and exact convergence.
+For Benchmark A with $m = 1000$, this would achieve the GD convergence rate while requiring
+only one full gradient pass per $O(1/\mu\varepsilon)$ iterations, making it approximately
+$\kappa$ times more efficient than full GD for ill-conditioned problems.
+\end{remark}
 
 \subsection{SGD Under Increased Observation Noise}
 
@@ -1119,6 +1159,25 @@ the gradient estimate to reflect a smoothed version of $f$).
 Cost: $d+1$ function evaluations per gradient estimate ($d = 2$ here); for $d$-dimensional
 problems, cost scales linearly with $d$, making FD impractical for $d \gg 10^3$.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q4_fd_error_analysis.pdf}
+\caption{Q4A Finite-difference error analysis on Benchmark B evaluated at $x = (-0.5, 3)$.
+  \textbf{Left:} Total gradient approximation error $\|\hat{g} - g\|$ as a function of
+  perturbation $\delta$.  For small $\delta$, rounding error $O(\varepsilon_{\mathrm{mach}}/\delta)$
+  dominates; for large $\delta$, truncation error $O(\delta)$ dominates.  The minimum
+  occurs at $\delta^{\star} = \sqrt{2\varepsilon_{\mathrm{mach}}} \approx 2 \times 10^{-8}$
+  (orange dotted line).  The tested values $\delta = 0.05$ (purple dash-dot) and $\delta = 0.8$
+  (brown dash-dot) are in the truncation-dominated regime.  \textbf{Right:} Per-dimension
+  errors show that the $x_2$ component (curvature 10) suffers more truncation error than
+  $x_1$ (curvature $2 - \sin(x_1) \approx 2.5$ at this point) for large $\delta$---higher
+  curvature amplifies the truncation term $\frac{\delta}{2}\frac{\partial^2 f}{\partial x_i^2}$.
+  Both the $\delta = 0.05$ errors ($\approx 10^{-3}$--$10^{-2}$) are acceptable for
+  optimisation; the $\delta = 0.8$ errors ($\approx 1$) are too large and explain the
+  observed degraded convergence in Figure~\ref{fig:q4_fval_B}.}
+\label{fig:q4_fd_error}
+\end{figure}
+
 \subsubsection{Nesterov Random Search (Zeroth-Order Method)}
 
 \begin{algorithm}[H]
@@ -1373,6 +1432,21 @@ ill-conditioning) while $\hat{\mu}$ converges to the true dual variable $\mu^{\s
 foundation of \emph{ADMM} (Alternating Direction Method of Multipliers), widely used in
 distributed optimisation and statistical learning.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_landscape.pdf}
+\caption{Q5 Penalty landscape $F_{\lambda}(x) = f(x) + \lambda \max(0, 0.5 - x_1)$ for
+  $\lambda \in \{0, 0.15, 1.8, 4.5\}$.  The infeasible region ($x_1 < 0.5$) is shaded red;
+  the constraint boundary is the dashed red line.  As $\lambda$ increases, the penalty term
+  creates a steep ``wall'' at $x_1 = 0.5$ that pushes iterates towards the feasible set.
+  However, this wall also increases the effective Lipschitz constant $L_\lambda \approx L + \lambda$
+  in the infeasible region, requiring smaller step sizes $\alpha < 2/L_\lambda$ for convergence.
+  At $\lambda = 4.5$, the wall is sufficiently strong to enforce feasibility, but the penalised
+  objective is well-conditioned in the feasible region ($x_1 > 0.5$) where the penalty is
+  inactive---a key advantage over naive penalty methods with $\lambda \to \infty$.}
+\label{fig:q5_penalty_landscape}
+\end{figure}
+
 \subsection{Method Settings}
 
 Projected GD: $\alpha = 0.08$. Penalty methods: $\lambda \in \{0.15, 1.8, 4.5\}$ with
@@ -1573,6 +1647,24 @@ The constrained minimum is at $(0.5, 0)$ on the boundary, with $f^{\star} = 0.25
 
 \subsection{Frank--Wolfe Gap as Convergence Certificate}
 
+\begin{proposition}[FW gap as certificate]
+\label{prop:fw_gap}
+For any convex $f$ and any $x_k \in \mathcal{X}$, let $z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^{\top}z$.
+Then the \emph{Frank--Wolfe gap}
+\begin{equation}
+\label{eq:fw_gap}
+g_k = \nabla f(x_k)^{\top}(x_k - z_k) \geq 0
+\end{equation}
+satisfies $f(x_k) - f^{\star} \leq g_k$.
+\end{proposition}
+\begin{proof}
+By convexity, $f(x^{\star}) \geq f(x_k) + \nabla f(x_k)^{\top}(x^{\star} - x_k)$, so
+$f(x_k) - f^{\star} \leq \nabla f(x_k)^{\top}(x_k - x^{\star}) \leq \max_{z \in \mathcal{X}} \nabla f(x_k)^{\top}(x_k - z) = g_k$,
+where the last inequality uses $x^{\star} \in \mathcal{X}$.
+\end{proof}
+The gap $g_k$ can be computed without knowing $f^{\star}$---only the current gradient and LMO are needed.
+When $g_k \leq \varepsilon$, we have a certified $\varepsilon$-optimal solution.
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q6_fw_gap.pdf}
@@ -1731,11 +1823,16 @@ using only gradient history.
 
 \paragraph{2. Condition number as a fundamental obstacle.}
 All first-order methods are adversely affected by high condition number $\kappa = L/\mu$.
-On Benchmark C ($\kappa \approx 2000$), plain GD barely advances along the valley direction.
-Adaptive methods (Adagrad, RMSprop, Adam) provide coordinate-wise preconditioning that
-partially addresses this, while Nesterov acceleration reduces the iteration count from
-$O(\kappa)$ to $O(\sqrt{\kappa})$.  Newton's method is immune to $\kappa$ via affine
-invariance.
+On Benchmark C ($\kappa \approx 2086$), the GD convergence rate per iteration is
+$\rho = ((\kappa-1)/(\kappa+1))^2 \approx (1 - 2/\kappa)^2 \approx 1 - 4/\kappa \approx 0.9981$.
+To reduce the objective gap from $f(x_0) - f^{\star} \approx 4$ to $\varepsilon = 0.1$,
+GD requires $k \geq \log(0.1/4)/\log(0.9981) \approx 1923$ iterations.  In just 120
+iterations, GD achieves only a factor $0.9981^{120} \approx 0.797$ reduction---barely
+20\% progress.  Nesterov's $O(\sqrt{\kappa})$ requirement reduces this to approximately
+$\sqrt{2086} \approx 46$ iterations for the same reduction, consistent with the
+factor-7 advantage observed on Benchmark C.  Adaptive methods (Adagrad, RMSprop, Adam)
+provide coordinate-wise preconditioning that partially addresses this.
+Newton's method is immune to $\kappa$ via affine invariance (Proposition~\ref{prop:newton_quadratic}).
 
 \paragraph{3. Polyak's step: elegance at a cost.}
 The Polyak rule is provably optimal when $f^{\star}$ is known, requiring no step-size tuning
