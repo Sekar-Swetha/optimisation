@@ -148,10 +148,11 @@ At the \emph{starting point} $(-1, 1)$: $H(-1,1) = \begin{bmatrix} 2 + 1200 - 40
 Rosenbrock's condition number is essentially constant along the ridge, always near 2508.
 This extreme ill-conditioning creates two challenges:
 \begin{enumerate}[nosep]
-\item \textbf{Gradient descent step size:} $\alpha < 2/L \approx 0.00199$ is required for
-  stability near the optimum, but this step size is too small to make progress along the
-  low-curvature direction ($\lambda_{\min} \approx 0.48$), where
-  $\|x_k - x^{\star}\|$ decays as $(1 - \alpha\lambda_{\min})^k \approx (1 - 0.001)^k$.
+\item \textbf{Gradient descent step size:} $\alpha \leq 1/L \approx 0.00100$ is required for
+  stability (with $L \approx 1001.6 = \lambda_{\max}$ at the optimum), but this step size
+  is too small to make progress along the low-curvature direction ($\lambda_{\min} \approx 0.40$),
+  where $\|x_k - x^{\star}\|$ decays as $(1 - \alpha\lambda_{\min})^k \approx (1 - 0.0004)^k$---
+  requiring about $1/0.0004 = 2500$ iterations to halve the error in the valley direction.
 \item \textbf{Curved valley:} The valley $x_2 = x_1^2$ is a quadratic curve, not a straight
   line.  Methods that assume a locally flat landscape (GD, Heavy Ball) must follow the curve
   with small steps; second-order methods (Newton) can compute the curvature of the valley
@@ -248,8 +249,26 @@ tuning---a remarkable property that is unmatched by any other first-order rule.
 Adagrad scales the step size inversely with the \emph{cumulative} squared gradient magnitude in
 each coordinate.  Coordinates that have received large historical gradients are given smaller
 effective step sizes, which is beneficial for sparse features.  The resulting convergence bound
-in the online setting is $O(\sqrt{T}\,\log T)$ for regret, but in the offline setting the
-monotonically shrinking step may cause premature stagnation.
+in the online (regret) setting is $O(\sqrt{T})$ (Duchi et al., 2011)---matching the optimal
+rate for adaptive methods on non-smooth objectives---but in the offline batch setting the
+monotonically shrinking step may cause premature stagnation on smooth strongly convex problems.
+
+\begin{remark}[Adaptive methods as diagonal preconditioning]
+\label{rem:adagrad_precond}
+Writing $P_k = \operatorname{diag}(\sqrt{G_k} + \varepsilon I)^{-1}$ for Adagrad, the update
+becomes $x_{k+1} = x_k - \alpha_0 P_k \nabla f(x_k)$---a scaled gradient step with
+coordinate-wise learning rates.  The ideal preconditioner for strongly convex $f$ is
+$P = (\nabla^2 f(x^{\star}))^{-1}$ (which reduces the Newton step to a unit step), but computing
+$P$ requires $O(d^3)$ work.  Adagrad approximates $P$ by its diagonal, reducing cost to $O(d)$
+while capturing the most important curvature variation (heterogeneous per-coordinate scales).
+For objectives with homogeneous curvature (isotropic $\nabla^2 f$), the diagonal approximation
+is exact and Adagrad matches Newton.  For objectives with large off-diagonal curvature (such as
+Rosenbrock, where $\partial^2 f / \partial x_1 \partial x_2 = -400 x_1$), diagonal preconditioning
+is insufficient, which explains why Adagrad and RMSprop underperform Nesterov on Benchmark C
+despite their adaptive scaling.  The full quasi-Newton approach (BFGS/L-BFGS) approximates the
+\emph{full} inverse Hessian from gradient history, bridging the gap between first-order and
+second-order methods.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -331,8 +350,12 @@ Heavy Ball & $\alpha$ & 0.045 & 0.035 & 0.0008 \\
 \end{table}
 
 The small step sizes on Benchmark C ($\alpha_{\text{GD}} = 0.0012$) are dictated by the
-Rosenbrock's large Lipschitz constant $L \approx 1600$ near the starting point, requiring
-$\alpha < 2/L \approx 0.00125$.
+Rosenbrock's large Lipschitz constant near the starting point.  At $x_0 = (-1, 1)$,
+the maximum eigenvalue of $H(-1,1) = \begin{bmatrix}802 & 400\\ 400 & 200\end{bmatrix}$
+is $\lambda_{\max} \approx 1001.6$, but along the descent path to $x_0 = (-1,1)$ the Hessian
+is evaluated at points like $x = (-1.5, 3)$ where
+$\lambda_{\max}(H) \approx \lambda_{\max}(\begin{bmatrix}1502&600\\600&200\end{bmatrix}) \approx 1604$,
+giving $L \approx 1600$ and $\alpha < 2/L \approx 0.00125$.
 
 \subsection{Convergence Analysis}
 
@@ -578,6 +601,20 @@ algorithm can achieve a better dependence on $k$ without additional assumptions 
 strong convexity).  To achieve accuracy $\varepsilon$, Nesterov requires $O(1/\sqrt{\varepsilon})$
 iterations while GD requires $O(1/\varepsilon)$---a quadratic improvement in the number of
 gradient evaluations.
+
+\begin{remark}[Optimality of the $O(1/k^2)$ rate and the OGM]
+\label{rem:nesterov_optimal}
+The $O(1/k^2)$ rate is \emph{information-theoretically optimal}: Nesterov (1983) constructed
+a ``worst-case'' function (the Chebyshev-polynomial lower bound function) on which no first-order
+method querying $\nabla f$ at each iterate can achieve better than $\Omega(1/k^2)$ convergence.
+Nesterov's specific momentum schedule $\beta_k = (k-1)/(k+2)$ matches this lower bound, making
+it minimax optimal for the class of smooth convex functions.  More recently, Kim \& Fessler
+(2016) derived the \emph{Optimized Gradient Method} (OGM), which achieves the same $O(1/k^2)$
+rate with a coefficient exactly half that of Nesterov---the tightest known bound for this class.
+For strongly convex problems (where the Chebyshev rate is $O((\sqrt{\kappa}-1)^k/(\sqrt{\kappa}+1)^k)$),
+Nesterov's schedule is sub-optimal and a restarted variant (restarting every $O(\sqrt{\kappa})$
+steps) recovers the optimal linear rate.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
@@ -1432,9 +1469,35 @@ convex objective.  For convex $f$ and convex $\mathcal{F}$, KKT conditions are g
 
 For the half-space $\{x : x_1 \geq 0.5\}$, the projection is simply a clipping operation:
 $\Pi_{\mathcal{F}}(z)_1 = \max(0.5, z_1)$, $\Pi_{\mathcal{F}}(z)_2 = z_2$.  This costs
-$O(1)$ per iteration.  For a $\mu$-strongly convex $f$, PGD converges as
-$\|x_k - x^{\star}\|^2 \leq (1 - \alpha\mu)^k \|x_0 - x^{\star}\|^2$, the same linear rate as
-unconstrained GD.
+$O(1)$ per iteration.
+
+\begin{theorem}[Projected GD convergence rate]
+\label{thm:pgd_convergence}
+Let $f : \mathbb{R}^d \to \mathbb{R}$ be $\mu$-strongly convex and $L$-smooth, and let
+$\mathcal{F}$ be a non-empty closed convex set with constrained minimiser
+$x^{\star} = \arg\min_{x \in \mathcal{F}} f(x)$.  For PGD with step size $\alpha \in (0, 1/L]$:
+\begin{equation}
+\label{eq:pgd_convergence}
+\|x_k - x^{\star}\|^2 \leq (1 - \alpha\mu)^k \|x_0 - x^{\star}\|^2.
+\end{equation}
+With optimal $\alpha = 1/L$, this gives the rate $(1 - \mu/L)^k = (1 - 1/\kappa)^k$---identical
+to unconstrained GD on strongly convex functions.
+\end{theorem}
+\begin{proof}[Proof sketch]
+Since $x^{\star} \in \mathcal{F}$ and $\Pi_{\mathcal{F}}$ is a non-expansive projection
+($\|\Pi_{\mathcal{F}}(u) - \Pi_{\mathcal{F}}(v)\| \leq \|u - v\|$):
+\begin{align*}
+\|x_{k+1} - x^{\star}\|^2
+&= \bigl\|\Pi_{\mathcal{F}}(x_k - \alpha\nabla f(x_k)) - \Pi_{\mathcal{F}}(x^{\star})\bigr\|^2 \\
+&\leq \|(x_k - \alpha\nabla f(x_k)) - x^{\star}\|^2 \\
+&= \|x_k - x^{\star}\|^2 - 2\alpha\langle\nabla f(x_k),\, x_k - x^{\star}\rangle
+   + \alpha^2\|\nabla f(x_k)\|^2.
+\end{align*}
+Strong convexity gives $\langle\nabla f(x_k), x_k - x^{\star}\rangle \geq \mu\|x_k - x^{\star}\|^2$,
+and $L$-smoothness gives $\|\nabla f(x_k)\|^2 \leq 2L[f(x_k) - f(x^{\star})] \leq L^2\|x_k - x^{\star}\|^2$
+(via descent lemma).  Substituting and using $\alpha \leq 1/L$ yields $(1-\alpha\mu)$.
+Recursing from $k = 0$ gives~\eqref{eq:pgd_convergence}.
+\end{proof}
 
 \begin{algorithm}[H]
 \caption{Exterior Penalty Method}
@@ -1568,6 +1631,33 @@ optimum but the modified objective becomes increasingly ill-conditioned (conditi
 $\sim \lambda$), requiring correspondingly smaller step sizes.  The \emph{augmented Lagrangian}
 method overcomes this limitation by combining a penalty term with a Lagrange multiplier
 estimate, achieving exact feasibility without $\lambda \to \infty$.
+
+\begin{table}[H]
+\centering
+\caption{Comparison of constrained optimisation approaches on convex problems.
+  $\kappa = L/\mu$ denotes the condition number; $\lambda$ the penalty weight.
+  Rate column gives iterations to $\varepsilon$-feasibility and $\varepsilon$-optimality
+  simultaneously.  ``Hard'' feasibility means iterates are feasible at every step.}
+\label{tab:constrained_comparison}
+\begin{tabular}{lccccl}
+\toprule
+\textbf{Method} & \textbf{Feasibility} & \textbf{Iterations}
+  & \textbf{Eff.\ $\kappa$} & \textbf{Oracle} & \textbf{Best for} \\
+\midrule
+Projected GD  & Hard (every step)      & $O(\kappa\log 1/\varepsilon)$          & $\kappa$            & $\Pi_{\mathcal{F}}$  & Simple sets (box, simplex) \\
+Penalty GD    & Soft ($O(1/\lambda)$ residual) & $O((\kappa{+}\lambda)\log 1/\varepsilon)$ & $\kappa{+}\lambda$ & None   & General inequalities \\
+Aug.\ Lagrangian & Exact (at convergence)  & $O(\kappa\log 1/\varepsilon)$         & $\kappa$            & None   & General equalities/ineq. \\
+Frank--Wolfe  & Hard (every step)      & $O(LC^2/\varepsilon)$                  & $\kappa$            & LMO    & Polytopes, nuclear norm \\
+Proj.\ Nesterov & Hard (every step)    & $O(\sqrt{\kappa}\log 1/\varepsilon)$   & $\kappa$            & $\Pi_{\mathcal{F}}$  & Accelerated simple sets \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The table reveals a key insight: the augmented Lagrangian achieves the same $O(\kappa)$ rate
+as projected GD \emph{without} requiring a projection oracle, at the cost of an outer loop
+for multiplier updates.  For this assignment's problem ($\kappa \approx 8$ for Benchmark B,
+one constraint), all methods are competitive; differences emerge in high-dimensional,
+many-constraint settings where projection cost dominates.
 
 % ============================================================
 \section{Question 6: Linear Programmes and the Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1798,6 +1888,28 @@ This explains the residual gap observed in Table~\ref{tab:q6_final}.
   the LP subproblem admits efficient closed-form solutions unavailable for projection.
 \end{itemize}
 
+\begin{remark}[Away-steps Frank--Wolfe and linear convergence on polytopes]
+\label{rem:away_steps_fw}
+Standard Frank--Wolfe cannot achieve better than $O(1/k)$ convergence even for strongly
+convex objectives on polytopes.  The \emph{away-steps} variant (Wolfe, 1970; restated
+rigorously by Lacoste-Julien \& Jaggi, 2015) overcomes this by considering, at each
+iteration, both the standard FW step (towards a new atom $z_k$) and a step \emph{away}
+from the current worst active vertex $v_k$:
+\begin{equation}
+\label{eq:away_step}
+v_k = \arg\max_{s \in \mathcal{A}_k} \nabla f(x_k)^{\top} s,
+\qquad x_{k+1} = x_k - \gamma_k \underbrace{(x_k - v_k)}_{\text{away direction}},
+\end{equation}
+where $\mathcal{A}_k$ is the current active set (the vertices with positive weight in the
+current iterate's representation as a convex combination).  By moving \emph{away} from
+atoms that increase the objective, the active set contracts, and the algorithm can achieve
+\emph{linear convergence} $O(\rho^k)$ with $\rho < 1$ for $\mu$-strongly convex objectives
+on polytopes.  For the box constraint in this question, the active set has at most $2d$
+vertices (one per coordinate bound), making the bookkeeping $O(d)$ per iteration---the
+same cost as the standard LMO.  The price is a more complex step-selection rule and the
+need to track the active set.
+\end{remark}
+
 % ============================================================
 \section{Summary and Conclusions}
 \label{sec:conclusions}
@@ -1963,6 +2075,29 @@ The hierarchy Hessian $\succ$ gradient $\succ$ stochastic gradient $\succ$ funct
 directly determines the convergence speed ordering observed across all benchmarks.  Each step
 down the hierarchy reduces per-iteration information, requiring more iterations and/or more
 favourable problem structure to compensate.
+
+\begin{remark}[Matching upper and lower bounds: the complete oracle complexity picture]
+\label{rem:lower_bounds}
+Each row in Table~\ref{tab:oracle_complexity} represents both an upper bound (achieved by
+a specific algorithm) and, where indicated, a \emph{matching lower bound} showing no
+algorithm in that oracle class can do better in the worst case:
+\begin{enumerate}[nosep]
+\item \textbf{First-order smooth convex}: Nesterov (1983) showed $\Omega(1/k^2)$ is tight
+  for gradient oracles, matching the upper bound of his own accelerated method.
+\item \textbf{First-order strongly convex}: The rate $O(\exp(-k/\sqrt{\kappa}))$ for
+  Nesterov is matched by an $\Omega(\exp(-k/\sqrt{\kappa}))$ lower bound (Nesterov, 2004).
+\item \textbf{Zeroth-order (function-value oracle)}: Nemirovski \& Yudin (1983) proved
+  $\Omega((L/\varepsilon)^{d/2})$ is tight, matching the grid search upper bound.
+\item \textbf{Stochastic first-order}: Agarwal et al.\ (2012) established $\Omega(1/\sqrt{T})$
+  for non-strongly-convex objectives, matched by SGD with decaying learning rate.
+\end{enumerate}
+These matching bounds mean the algorithms in this report are not merely good heuristics---they
+are provably optimal (up to constants) within their oracle class.  The only way to improve
+beyond these limits is to change the oracle: adding a projection oracle enables Frank--Wolfe's
+feasibility guarantees; adding a Hessian oracle enables Newton's quadratic convergence.  This
+motivates the practical question: ``what is the cheapest oracle that achieves the required
+accuracy within the computation budget?''
+\end{remark}
 
 \subsection{Limitations and Future Work}
 
