@@ -977,6 +977,43 @@ the dominant algorithm for LASSO, compressed sensing, and image denoising.
 The Nesterov coefficient $k/(k+3)$ is precisely the scheduled $\beta_k$ used in this report.
 \end{remark}
 
+\begin{remark}[Proximal gradient descent: handling composite objectives]
+The \emph{proximal gradient descent} method (also called ISTA --- Iterative Shrinkage-Thresholding
+Algorithm) extends gradient descent to \emph{composite} objectives $F(x) = f(x) + h(x)$,
+where $f$ is smooth and $h$ is convex but possibly non-smooth.
+
+The update is:
+\[
+x_{k+1} = \operatorname{prox}_{\alpha h}\!\bigl(x_k - \alpha \nabla f(x_k)\bigr),
+\qquad
+\operatorname{prox}_{\alpha h}(v) = \arg\min_x \left\{h(x) + \frac{1}{2\alpha}\|x - v\|^2\right\}.
+\]
+This is equivalent to a gradient step on $f$ followed by a proximity step on $h$.
+
+\textbf{Common proximal operators:}
+\begin{itemize}[nosep]
+\item $h(x) = \lambda\|x\|_1$ (LASSO): $\operatorname{prox}_{\alpha h}(v)_i = \operatorname{sign}(v_i)\max(|v_i| - \alpha\lambda, 0)$
+  (soft thresholding, elementwise);
+\item $h(x) = \iota_\mathcal{C}(x)$ (indicator of convex set $\mathcal{C}$):
+  $\operatorname{prox}_{\alpha h}(v) = \Pi_\mathcal{C}(v)$ (projection onto $\mathcal{C}$)
+  --- recovering projected gradient descent;
+\item $h(x) = \lambda\|x\|_2$ (group sparsity): $\operatorname{prox}_{\alpha h}(v) = v \max(1 - \alpha\lambda/\|v\|, 0)$ (block thresholding).
+\end{itemize}
+
+\textbf{Convergence:} Proximal GD achieves $O(1/k)$ convergence under $L$-smoothness of $f$
+(same as plain GD), and FISTA's acceleration gives $O(1/k^2)$.
+
+\textbf{Relevance to Q5 penalty method:}
+The Q5 penalty objective $F_\lambda(x) = f(x) + \lambda \max(0, -x_1 + 0.5)$ has the form
+$f(x) + h(x)$ with $h(x) = \lambda \max(0, -x_1 + 0.5)$ (non-smooth at the boundary).
+The proximal operator of $h$ is:
+$\operatorname{prox}_{\alpha h}(v)_1 = \max(v_1 + \alpha\lambda\cdot\mathbf{1}[v_1<0.5],\; 0.5)$
+--- a soft projection onto the feasible half-space.
+Using proximal GD on $F_\lambda$ (rather than subgradient descent) would achieve the
+$O(1/k)$ smooth rate on the $f$-component while handling the non-smooth $h$ exactly,
+eliminating the oscillation near the constraint boundary observed in the penalty experiments.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
 \label{alg:adam}
@@ -1788,6 +1825,40 @@ Nonlinear CG on Benchmark~C (Rosenbrock) would outperform SGD-style methods but 
 line search per iteration, similar cost to L-BFGS but without Hessian approximation.
 \end{remark}
 
+\begin{remark}[Trust region methods: a globally convergent alternative to line search]
+Newton's method with a line search (Algorithm~\ref{alg:newton}) selects a step direction
+(the full Newton direction $p_k = -H_k^{-1} g_k$) and then chooses a step length.
+\emph{Trust region} methods invert this logic: fix a radius $\Delta_k$ within which the
+quadratic model $m_k(p) = f(x_k) + g_k^T p + \frac{1}{2} p^T B_k p$ is trusted, then
+choose the best step within that ball:
+\[
+p_k = \arg\min_{\|p\| \leq \Delta_k} m_k(p).
+\]
+The trust region radius $\Delta_k$ is adapted based on the ratio
+$\rho_k = (f(x_k) - f(x_k + p_k)) / (m_k(0) - m_k(p_k))$,
+comparing actual to predicted decrease:
+\begin{itemize}[nosep]
+\item $\rho_k \approx 1$: good agreement, increase $\Delta_{k+1}$;
+\item $\rho_k \in (0, \tfrac{1}{4})$: poor agreement, decrease $\Delta_{k+1}$;
+\item $\rho_k < 0$: objective increased, reject step and decrease $\Delta_k$.
+\end{itemize}
+
+\textbf{Connection to the Q3 damped Newton:}
+The damped Newton step $x_{k+1} = x_k + \alpha p_k$ (with $\alpha = 0.22$ for Benchmark~C)
+is equivalent to a trust region with $\Delta_k = 0.22 \|p_k\|$ fixed.
+A true trust region would adapt $\Delta_k$ to the local landscape: on the Rosenbrock
+flat valley floor, $\rho_k \approx 1$ would increase $\Delta_k$; on the steep transverse
+direction, the negative-curvature region would trigger radius reduction.
+
+\textbf{The Dog-leg method (Powell 1970):}
+A computationally efficient trust region step follows the \emph{dog-leg} path:
+$p(\tau) = \tau p^{SD}$ for $\tau \in [0,1]$ (steepest descent to Cauchy point),
+then $p(\tau) = p^{SD} + (\tau-1)(p^N - p^{SD})$ for $\tau \in [1,2]$ (Cauchy to Newton),
+where $p^{SD} = -\frac{\|g\|^2}{g^T B g} g$ and $p^N = -B^{-1}g$.
+This avoids the expensive constrained QP solve and provides a good approximation to the
+exact trust region step in $O(d^2)$ time.
+\end{remark}
+
 \begin{remark}[Quantitative Newton convergence on Benchmark B]
 For Benchmark~B, the Newton quadratic convergence theorem predicts that once we enter
 the convergence region $\|x_k - x^\star\| \leq 2m/M$ (where $m$ is strong convexity
@@ -1806,6 +1877,38 @@ After 4--5 iterations, the error is $\sim 10^{-5}$, consistent with the observed
 convergence to machine precision in $\leq 5$ Newton steps.
 This ``doubling of correct digits'' at each step is the defining characteristic of
 quadratic convergence, and explains the $>16\times$ iteration savings vs GD.
+\end{remark}
+
+\begin{remark}[Barzilai--Borwein step size: quasi-Newton via the secant equation]
+The \emph{Barzilai--Borwein} (BB) method (1988) extracts a scalar step size from the
+secant equation without constructing a full Hessian approximation.
+Given $s_k = x_k - x_{k-1}$ and $y_k = \nabla f(x_k) - \nabla f(x_{k-1})$, the secant
+equation $\alpha^{-1} s_k \approx y_k$ has two natural least-squares solutions:
+\[
+\alpha_k^{BB1} = \frac{s_k^T s_k}{s_k^T y_k} \qquad \text{(long step --- matches } \alpha H \approx I\text{)},
+\]
+\[
+\alpha_k^{BB2} = \frac{s_k^T y_k}{y_k^T y_k} \qquad \text{(short step --- matches } \alpha^{-1} I \approx H\text{)}.
+\]
+Both BB steps are equivalent to using a scalar Hessian approximation
+$H_k \approx (s_k^T y_k)/(s_k^T s_k) \cdot I$ or $(y_k^T y_k)/(s_k^T y_k) \cdot I$.
+
+\textbf{Convergence properties:}
+For \emph{quadratic} objectives, BB achieves \emph{superlinear} convergence empirically
+despite using only $O(d)$ computation per step (no matrix inversion).
+For \emph{non-quadratic} objectives, BB is typically used with non-monotone line searches
+(Grippo--Lampariello--Lucidi 1986) to ensure global convergence.
+
+\textbf{Comparison with the Q3 experiments:}
+For Benchmark~A ($H = X^TX/m$, constant), the BB step would estimate
+$\alpha_k^{BB1} = s_k^T s_k / (s_k^T H s_k)$, which converges to $1/\lambda_{\min}(H) \approx 1/L$
+as $x_k \to x^\star$ along the smallest-eigenvalue direction.
+This is the optimal constant step for GD, so BB adapts to the local curvature without
+requiring explicit Hessian computation --- a significant advantage for large-scale
+linear regression where computing $X^TX$ is expensive.
+For Benchmark~C (Rosenbrock), the rapidly changing Hessian means BB's two-point secant
+gives a poor curvature estimate far from the optimum, and the method would require
+adaptive restarts; empirically, it converges faster than GD but slower than Newton.
 \end{remark}
 
 \subsection{Contour Trajectories}
@@ -2515,6 +2618,40 @@ outer iterations to converge to a feasible solution.
 For the simple half-space constraint $x_1 \geq 0.5$, projected GD remains the most
 efficient approach, but for complex constraint sets (e.g.\ semidefinite constraints,
 norm balls), augmented Lagrangian is the standard tool.
+\end{remark}
+
+\begin{remark}[Subgradient method for non-smooth objectives: convergence and limitations]
+The \emph{subgradient method} extends gradient descent to non-smooth objectives by replacing
+$\nabla f(x_k)$ with an arbitrary \emph{subgradient} $g_k \in \partial f(x_k)$:
+\[
+x_{k+1} = x_k - \alpha_k g_k, \qquad g_k \in \partial f(x_k).
+\]
+For a convex function $f$, the subdifferential $\partial f(x) = \{g : f(y) \geq f(x) + g^T(y-x) \;\forall y\}$
+is the set of all ``supporting hyperplane slopes''; at differentiable points, $\partial f = \{\nabla f\}$.
+
+\textbf{For the Q5 penalty function} $h(x) = \lambda\max(0, -x_1 + 0.5)$:
+\begin{itemize}[nosep]
+\item At $x_1 > 0.5$ (feasible): $\partial h(x) = \{0\}$ (smooth, zero penalty gradient);
+\item At $x_1 < 0.5$ (infeasible): $\partial h(x) = \{-\lambda e_1\}$ (smooth, constant gradient);
+\item At $x_1 = 0.5$ (boundary): $\partial h(x) = \{-\lambda \gamma e_1 : \gamma \in [0,1]\}$ (non-unique).
+\end{itemize}
+The code uses $-\lambda e_1$ in the infeasible region and $0$ elsewhere, which corresponds
+to choosing a subgradient rather than the gradient (since $h$ is not differentiable at $x_1 = 0.5$).
+
+\textbf{Convergence of subgradient method:}
+Unlike gradient descent, the subgradient method is \emph{non-monotone}: $f(x_{k+1})$ may
+be larger than $f(x_k)$. One tracks instead the best iterate $f_k^{\min} = \min_{j \leq k} f(x_j)$.
+With step sizes $\alpha_k = \alpha_0/\sqrt{k}$:
+\[
+f_k^{\min} - f^\star \;\leq\; \frac{\|x_0 - x^\star\|^2 + \sigma^2 \sum_{j=1}^k \alpha_j^2}{2\sum_{j=1}^k \alpha_j}
+\;=\; O(1/\sqrt{k}),
+\]
+where $\sigma^2 = \sup_k \|g_k\|^2$ is the maximum subgradient norm.
+This $O(1/\sqrt{k})$ rate is slower than the $O(1/k)$ of smooth gradient descent
+and is information-theoretically optimal for non-smooth convex objectives.
+The Q5 penalty GD uses a fixed step $\alpha$, which corresponds to $\alpha_k = \alpha$
+(constant), and explains the oscillation near the non-smooth constraint boundary:
+the fixed step cannot adapt to the discontinuous gradient jump at $x_1 = 0.5$.
 \end{remark}
 
 % ============================================================
