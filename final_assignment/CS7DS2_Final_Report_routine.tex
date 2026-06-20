@@ -275,6 +275,24 @@ correcting for large curvature. This adaptive preconditioning is particularly be
 the Hessian is ill-conditioned and its large-curvature directions align with the coordinate
 axes.
 
+\begin{remark}[Adagrad effective step-size decay rate]
+To see why Adagrad's effective step decays monotonically, consider coordinate $i$ with
+approximately constant gradient magnitude $|g_k^{(i)}| \approx c > 0$ over $k$ steps.
+Then $G_k^{(i)} = \sum_{j=1}^{k}(g_j^{(i)})^2 \approx kc^2$, so
+\[
+  \alpha_k^{(i)} = \frac{\alpha_0}{\sqrt{G_k^{(i)}} + \varepsilon} \approx \frac{\alpha_0}{c\sqrt{k}},
+  \quad k \gg 1.
+\]
+This $O(1/\sqrt{k})$ decay per coordinate is exactly the optimal schedule for non-smooth
+convex problems (subgradient method): the cumulative regret over $k$ rounds is
+$O(\alpha_0 c \sqrt{k})$, tight for this class. The \emph{per-coordinate} nature is the
+key advantage: a coordinate $j$ with small gradient magnitude $c_j \ll c_i$ retains a
+large effective step $\alpha_0/(c_j\sqrt{k})$ even while coordinate $i$ decays fast, automatically
+balancing progress across heterogeneous curvature directions without any manual tuning.
+This contrasts with a global $O(1/\sqrt{k})$ schedule that would uniformly slow all
+coordinates regardless of their gradient scale.
+\end{remark}
+
 \subsubsection{RMSprop}
 
 RMSprop replaces Adagrad's cumulative sum with an exponential moving average (EMA) of squared
@@ -376,8 +394,12 @@ $\alpha^{\star} \approx (2/(31.7 + 0.63))^2 \approx 0.0038$. The implementation 
 $\beta = 0.86$ and $\alpha = 0.0008$ --- more conservative than the theoretical optima, reflecting
 the non-constant Hessian of the Rosenbrock function (the theory applies to fixed-Hessian quadratics).
 The empirical Heavy Ball rate $\rho \approx (\sqrt{2504}-1)/(\sqrt{2504}+1) \approx 49/51 \approx 0.961$
-predicts $|x_k - x^{\star}| \sim 0.961^k$, still a $\sim 4\times$ speedup in the number of
-iterations required to halve the error, compared to GD's rate $\rho \approx 0.9992$.
+predicts $|x_k - x^{\star}| \sim 0.961^k$.  The number of iterations to halve the error is
+$\lceil \log(0.5)/\log(\rho) \rceil$: for GD, $\log(0.5)/\log(0.9992) \approx 866$ iterations;
+for Heavy Ball, $\log(0.5)/\log(0.961) \approx 17$ iterations --- a $\mathbf{\sim 50\times}$
+speedup, consistent with the theoretical ratio $\sqrt{\kappa}/2 = \sqrt{2504}/2 \approx 25$
+(the factor-of-2 discrepancy arises because GD's convergence bound is on $f - f^{\star}$
+which involves $\rho^{2k}$ while HB's is on $\|x_k - x^{\star}\|$ involving $\rho^k$).
 
 \subsection{Convergence Analysis}
 \label{ssec:q1_convergence}
@@ -598,6 +620,20 @@ per-coordinate adaptive scaling (via $v_t$, analogous to RMSprop). The bias-corr
 $(1 - \beta_j^t)$ are critical in early iterations where $m_t$ and $v_t$ are initialised at
 zero and would otherwise underestimate the true first and second moments.
 
+\begin{remark}[Adam second-moment staleness on non-stationary landscapes]
+With $\beta_2 = 0.999$, the effective memory window of $v_t$ is $1/(1-\beta_2) = 1000$
+iterations. In the $T = 150$-iteration experiment, $v_T$ therefore averages squared gradients
+over essentially \emph{all} 150 iterations: $v_{150} \approx (1-\beta_2)\sum_{t=1}^{150}g_t^2$.
+For the Rosenbrock function, the gradient magnitude decreases substantially as the iterate
+descends from $x_0=(-1,1)$ to the valley floor --- early gradients can be $10\times$ larger
+than late ones. The sum $\sum g_t^2$ is dominated by the large early-iteration values, making
+$v_{150}$ overestimate the current curvature, which forces a small effective step size in the
+final iterations. Nesterov, by contrast, uses a fixed step $\alpha = 0.0007$ throughout and
+accumulates momentum along the valley floor: a simpler structure that is better adapted to
+the consistently downhill direction, explaining its $3\times$ lower final objective
+($0.479$ vs $1.578$) despite Adam's richer per-coordinate information.
+\end{remark}
+
 \begin{remark}
 Unlike Nesterov's accelerated gradient (which enjoys an $O(1/k^2)$ convergence guarantee on
 smooth convex objectives), Adam does not have a general convergence guarantee in the
@@ -756,7 +792,11 @@ Mini-batch SGD on Benchmark~A uses learning rate $\alpha = 0.06$, batch sizes $b
 \end{algorithm}
 
 With $m = 1000$ samples, batch size $b = 5$ yields $\lceil 1000/5 \rceil = 200$ updates per
-epoch, whereas $b = 40$ yields $\lceil 1000/40 \rceil = 25$ updates per epoch. The gradient
+epoch, whereas $b = 40$ yields $\lceil 1000/40 \rceil = 25$ updates per epoch. After 50
+epochs, $b = 5$ has therefore completed $50 \times 200 = 10{,}000$ gradient steps while
+$b = 40$ has completed only $50 \times 25 = 1{,}250$ --- an $8$-fold difference in update
+count. This explains the faster per-epoch convergence of the small batch: it performs more
+parameter updates in the same number of passes over the data. The gradient
 variance for a mini-batch of size $b$ is $\mathrm{Var}[\hat{g}] = \sigma_g^2/b$ where
 $\sigma_g^2 = \frac{1}{m}\sum_{i=1}^{m}\|\nabla \ell_i(\theta) - \nabla J(\theta)\|^2$ is the
 per-sample gradient variance. Smaller $b$ increases variance by factor $40/5 = 8$, which
@@ -769,6 +809,16 @@ the floor but slows convergence. This motivates \emph{variance-reduction methods
 SAGA) which combine per-sample updates with periodic full-gradient corrections, achieving
 the exact linear rate of full GD at the cost of 2--3$\times$ more computation per epoch ---
 the ideal combination of stochastic efficiency and deterministic convergence.
+
+A practically important consequence is the \emph{linear scaling rule}: to maintain the same
+noise floor when increasing batch size by factor $k$ (replacing $b$ with $kb$), the learning
+rate should scale proportionally $\alpha \to k\alpha$. Since the noise floor $\propto \alpha
+\sigma_g^2/b$, multiplying both $\alpha$ and $b$ by $k$ keeps the floor constant. This rule
+--- widely used in large-scale distributed training (a system with $K$ GPUs uses
+$\alpha_{\text{base}} \times K$ as the initial learning rate) --- has a validity limit: when
+$k\alpha > 2/L$, the GD update itself becomes unstable. In practice a learning-rate
+\emph{warm-up} schedule (linearly ramping $\alpha$ from 0 to $k\alpha$ over the first few
+epochs) regularises this instability and is standard in Transformer and ResNet training.
 
 \begin{figure}[H]
 \centering
@@ -892,6 +942,24 @@ whereas gradient descent only uses the gradient direction and must compensate th
 tuning. This contrasts with the linear convergence rate
 $\|x_{k+1} - x^{\star}\| \leq \rho\,\|x_k - x^{\star}\|$ ($\rho < 1$) of gradient descent,
 where $\rho = (1 - 2\alpha\mu L/(\mu+L)^2)$ depends on the condition number.
+
+\begin{remark}[Kantorovich convergence basin]
+The quadratic rate \eqref{eq:newton_quad_conv} applies only inside the \emph{Newton
+convergence basin} $\{x : \|x - x^{\star}\| < r\}$ where the Kantorovich radius is
+$r := 2\mu/M$.  Inside this ball the contraction factor $(M/2\mu)\|x_k-x^{\star}\| < 1$
+so errors square per step; outside, convergence (if it occurs) is at most linear and requires
+globalisation via line search or trust region.  For the Rosenbrock function,
+$\mu = \lambda_{\min}(\nabla^2 f(x^{\star})) \approx 0.40$.  The Lipschitz constant $M$ of
+$\nabla^2 f$ is dominated by the $1200 x_1^2$ term: $\|\partial H_{11}/\partial x_1\| = 2400$
+near $x^{\star}=(1,1)$, giving $r \approx 2 \times 0.40/2400 \approx 3.3 \times 10^{-4}$.
+The starting point satisfies $\|x_0 - x^{\star}\| = \|(-2,0)\| = 2$, roughly $6000\times r$
+outside the basin.  After 20 damped Newton steps the iterate reaches $\approx(0.183, 0.020)$
+at distance $\approx 1.27$ from $(1,1)$ --- still thousands of times outside the
+quadratic-convergence basin.  Therefore \emph{all 20 iterations} in this experiment operated
+in the global convergence phase with the damped step, consistent with $f = 0.686$ remaining far
+from $f^{\star} = 0$.  Full quadratic convergence on the Rosenbrock function would require a
+backtracking line search or many more iterations to enter the basin near $(1,1)$.
+\end{remark}
 
 Hyperparameter settings (Table~\ref{tab:q3_params}): GD runs for 80 iterations; Newton runs
 for 20 iterations. The damped step $\alpha < 1$ is used on Benchmarks~B and~C because the
@@ -1102,6 +1170,20 @@ for exact GD, explaining why more iterations are needed in higher dimensions. Fo
 penalty is modest, but for $d = 100$ the method requires $\sim 50\times$ more iterations than
 FD GD. The cost is substantially higher variance than finite differences, requiring
 more iterations to converge even for $d = 2$ (Algorithm~\ref{alg:nrs}).
+
+\begin{remark}[Gaussian smoothing interpretation]
+The expectation formula $\mathbb{E}[\hat{g}_k] = \frac{1}{d}\nabla f(x_k) + O(\delta^2)$
+follows from interpreting $\hat{g}_k$ as a gradient of the \emph{Gaussian-smoothed} objective
+$f_\delta(x) = \mathbb{E}_{u \sim \mathcal{U}(\mathbb{S}^{d-1})}[f(x + \delta u)]$, which
+smooths $f$ over a sphere of radius $\delta$. One can show $\nabla f_\delta(x) = \frac{d}{\delta}\,\mathbb{E}_u[(f(x+\delta u)-f(x))\,u]$,
+so $\hat{g}_k$ is an unbiased estimator of $\frac{1}{d}\nabla f_\delta(x_k)$, and
+$\nabla f_\delta(x) = \nabla f(x) + O(\delta^2 / d)$ by Taylor expansion (the $O(\delta^2)$
+smoothing bias). The variance of $\hat{g}_k$ is $\mathrm{Var}[\hat{g}_k] = O(\|\nabla f\|^2 / d)$
+--- one factor of $1/d$ from the random projection and another from the sphere geometry ---
+so the signal-to-noise ratio of the random search estimate is $O(1/\sqrt{d})$ relative to exact
+GD, explaining the $O(d)$ iteration overhead. This smoothing viewpoint also explains why a
+smaller $\delta$ reduces approximation error but increases variance in finite arithmetic.
+\end{remark}
 
 \subsubsection{Hyperparameter Settings and Results}
 
@@ -1379,8 +1461,12 @@ full 100 iterations. Right: first 30 iterations (zoomed). Projected GD achieves 
 violation from iteration 1} --- the projection $\Pi_{\mathcal{F}}$ enforces $x_1 \geq 0.5$ as
 a hard constraint at every update. Penalty with $\lambda = 4.5$ achieves near-zero violation
 within $\sim$10 iterations. With $\lambda = 0.15$, the penalty gradient ($-0.15\, e_1$ when
-infeasible) is too weak relative to the objective gradient ($\approx 2(x_1 - 1) + \cos(x_1)$),
-so constraint enforcement is slow.}
+infeasible) is too weak relative to the objective gradient ($\approx 2(x_1 - 1) + \cos(x_1)$):
+at the constraint boundary $x_1 = 0.5$, the objective pushes $x_1$ inward with force
+$2(0.5-1)+\cos(0.5) \approx -0.122$, so the penalty must satisfy $\lambda > 0.122$ to
+enforce $x_1 \geq 0.5$. With $\lambda = 0.15 \approx 0.122$, the penalty barely overcomes the
+objective gradient, leading to slow convergence; with $\lambda = 1.8 \gg 0.122$, constraint
+enforcement is rapid.}
 \label{fig:q5_violation}
 \end{figure}
 
@@ -1646,6 +1732,21 @@ $g_k = O(1/k)$, providing a stopping criterion that is computable at each iterat
 knowing $f^{\star}$ --- a significant practical advantage over methods that require the
 optimal value.
 
+For the interior objective $f(x) = (x_1-1)^2 + (x_2-5)^2$, the mechanism behind the LMO
+oscillation near $x^{\star} = (1,5)$ can be traced precisely: the gradient
+$\nabla f(x_k) = 2(x_k - x^{\star})$ is small and its components can change sign when $x_k$
+crosses $x^{\star}$ coordinate-wise.  The LMO then jumps discontinuously between boundary
+vertices: $(z_k)_i = l_i$ if $(\nabla f)_i > 0$ else $u_i$, so $(z_k)_1$ alternates between
+$0.5$ and $5$ whenever $(x_k)_1$ oscillates around $1$.  With fixed $\beta = 0.90$, each
+such jump displaces $x_k$ by $(1-\beta)|z_k - x_k| \approx 0.10 \times 4.5 \approx 0.45$
+in $x_1$ alone --- a substantial step relative to the sub-unit distance from $x^{\star}$.
+The FW gap at such an iterate satisfies
+$g_k = \nabla f(x_k)^\top(x_k - z_k) \approx 2(x_k-x^{\star})^\top(x_k-z_k) \approx 2\|x_k-x^{\star}\|
+\cdot D$, which remains $O(1)$ despite $\|x_k - x^{\star}\|$ being small, because $\|x_k - z_k\| \approx D$
+is large.  The standard schedule $\gamma_k = 2/(k+2)$ decays the step to zero, so each
+LMO vertex switch contributes only $\gamma_k \cdot \|z_k - x_k\| \to 0$, resolving the
+oscillation and achieving the $O(1/k)$ convergence guarantee.
+
 \textbf{Boundary optimum:} Frank--Wolfe is particularly well-suited here. The LMO consistently
 selects the vertex closest to the unconstrained minimum (across the constraint boundary), pulling
 the iterate towards $x^{\star}_{\mathrm{bnd}} = (0.5, 0)$. With 140 iterations and $\beta = 0.93$,
@@ -1829,6 +1930,22 @@ condition number, and constraint geometry --- is prerequisite to choosing the ap
 The theoretical convergence rates ($O(1/k)$, $O(1/k^2)$, quadratic) provide principled guidance
 that, as validated here, predicts empirical behaviour at least qualitatively even on non-convex
 benchmarks.
+
+\textbf{Outlook: quasi-Newton methods and beyond.} The experiments here are limited to $d = 2$;
+practical machine learning operates in millions of parameters.  \emph{Quasi-Newton methods}
+(most notably L-BFGS) bridge the gap between first-order ($O(d)$ per step) and Newton's
+($O(d^3)$ per step) methods: they maintain a low-rank approximation of the inverse Hessian
+built from the last $m$ gradient-difference pairs (typically $m \leq 20$), requiring $O(md)$
+memory and $O(md)$ per-step arithmetic.  Locally, L-BFGS achieves \emph{superlinear}
+convergence --- faster than linear GD but without the quadratic guarantee of full Newton ---
+making it the standard for smooth unconstrained problems up to $d \sim 10^6$
+(\texttt{scipy.optimize.minimize(method=`L-BFGS-B')}).  For structured constraints, the
+\emph{augmented Lagrangian method of multipliers} (ADMM) extends the penalty framework from
+Question~5 to separable objectives by alternating between primal updates and dual variable
+ascent, converging at $O(1/k)$ for general convex problems while preserving the problem's
+separable structure.  These methods, together with the first- and second-order algorithms
+studied here, form the complete toolkit needed to tackle the optimisation problems that arise
+throughout modern data science.
 
 % ============================================================
 \newpage
