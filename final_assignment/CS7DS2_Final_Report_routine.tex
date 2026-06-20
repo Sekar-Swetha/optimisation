@@ -913,6 +913,33 @@ content of the dataset uniformly.  Theoretical analysis shows that without-repla
 converges as $O(1/(n^{2/3}T))$ (where $T$ is the number of epochs) compared to
 $O(\sigma/\sqrt{T})$ for with-replacement, a subtle but practical advantage on finite datasets.
 
+\begin{remark}[Variance reduction: SVRG and SAGA]
+The $O(\sigma_g^2/b)$ variance floor of mini-batch SGD prevents convergence to the exact
+minimiser at a fixed learning rate.  \emph{Variance-reduction methods} eliminate this floor by
+augmenting each stochastic gradient with a periodic full-gradient correction.  SVRG (Johnson
+\& Zhang, 2013) computes a full gradient $\nabla J(\tilde{\theta})$ once per epoch and uses the
+estimator
+\[
+  \tilde{g}_t = \nabla \ell_{i_t}(\theta_t) - \nabla \ell_{i_t}(\tilde{\theta}) + \nabla J(\tilde{\theta}),
+\]
+which is unbiased ($\mathbb{E}[\tilde{g}_t] = \nabla J(\theta_t)$) and has variance
+$\mathrm{Var}[\tilde{g}_t] = O(\|\theta_t - \tilde{\theta}\|^2)$ --- vanishing as $\theta_t \to x^{\star}$.
+This control-variate structure is sufficient to prove linear convergence for $\mu$-strongly
+convex, $L$-smooth objectives:
+\[
+  \mathbb{E}[J(\theta_T) - J^{\star}] \leq \rho^T\,(J(\theta_0) - J^{\star}),
+  \qquad \rho = 1 - \frac{\mu}{10L},
+\]
+using $O\!\bigl((m + \kappa)\log(1/\varepsilon)\bigr)$ total gradient evaluations (where
+$\kappa = L/\mu$), compared to $O(m\kappa\log(1/\varepsilon))$ for full-batch GD --- a factor
+$m/\kappa$ saving when the dataset is large.  SAGA (Defazio et al., 2014) achieves the same
+rate without epoch-level synchronisation by maintaining a table of $m$ per-sample gradients
+and sampling a random variance-reduction update at each step, but requires $O(md)$ memory.
+Both methods represent the natural theoretical completion of the SGD narrative: they achieve
+the exact linear convergence rate of full-batch GD while retaining the per-sample iteration
+cost of SGD, at the price of 2--3$\times$ more function evaluations per effective update.
+\end{remark}
+
 A practically important consequence of the noise-floor analysis is the \emph{linear scaling
 rule}: to maintain the same noise floor when increasing batch size by factor $k$ (replacing
 $b$ with $kb$), the learning rate should scale proportionally $\alpha \to k\alpha$. Since the
@@ -1561,6 +1588,30 @@ For the constraint $x_1 \geq 0.5$, the penalty gradient adds $-\lambda e_1$ when
 converges to the constrained solution, but larger $\lambda$ requires smaller step sizes to
 maintain stability.
 
+\begin{remark}[Ill-conditioning from large penalty weights]
+In the infeasible region $x_1 < 0.5$, the penalised Hessian picks up an extra $\lambda$ in
+the $(1,1)$ entry (the penalty gradient $-\lambda e_1$ contributes a constant force, so its
+derivative in $x_1$ is $+\lambda$ once the subdifferential is taken across the boundary):
+\[
+  \nabla^2 F_\lambda(x)\big|_{x_1 < 0.5}
+  = \operatorname{diag}(2 - \sin(x_1) + \lambda,\; 10).
+\]
+The condition number in the infeasible region becomes
+$\kappa(F_\lambda) \approx (2 - \sin(x_1) + \lambda)/\min(2-\sin(x_1), 10)$.
+For $\lambda = 0.15$: $\kappa \approx 1.65/1.0 = 1.65$; for $\lambda = 4.5$:
+$\kappa \approx 5.5/2.0 = 2.75$ (eigenvalues $\approx 5.5$ and $2$); for $\lambda \to \infty$:
+$\kappa \to \lambda/10 \to \infty$.  This $O(\lambda)$ ill-conditioning forces the step size to
+satisfy $\alpha < 2/\lambda_{\max}(F_\lambda) \approx 2/(\lambda + 3)$, explaining the reduced
+$\alpha = 0.03$ for $\lambda = 4.5$ compared to $\alpha = 0.08$ for unconstrained GD
+(Table~\ref{tab:q5_params}).  The augmented Lagrangian method avoids this by performing dual
+variable updates $\mu \leftarrow \mu + \rho h(x_k)$ at a \emph{fixed} moderate $\rho$, so the
+penalised Hessian condition number remains $O(1)$ while the dual variable converges to the
+true KKT multiplier.  In the present problem, $\mu^{\star} = 0$ (inactive constraint), so
+the augmented Lagrangian reduces to the plain penalty after a few updates --- but for active
+constraints with $\mu^{\star} > 0$ the multiplier update provides substantial computational
+benefit by eliminating the $\lambda \to \infty$ requirement.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 \label{ssec:q5_params}
 
@@ -1920,6 +1971,34 @@ $g_k = \nabla f(x_k)^\top(x_k - z_k) \approx 2(x_k-x^{\star})^\top(x_k-z_k) \app
 is large.  The standard schedule $\gamma_k = 2/(k+2)$ decays the step to zero, so each
 LMO vertex switch contributes only $\gamma_k \cdot \|z_k - x_k\| \to 0$, resolving the
 oscillation and achieving the $O(1/k)$ convergence guarantee.
+
+\begin{remark}[Sparsity-inducing property and the away-step variant]
+A key structural property of Frank--Wolfe is that iterates are \emph{sparse in the vertex
+representation}.  The update $x_{k+1} = (1-\gamma_k)x_k + \gamma_k z_k$ shows $x_{k+1}$ is a
+convex combination of $x_k$ and the LMO vertex $z_k$.  Unrolling the recursion from $x_0$:
+$x_k \in \mathrm{conv}(\{x_0\} \cup \{z_j\}_{j < k})$, so after $k$ iterations the iterate
+lies in the convex hull of at most $k+1$ points (the \emph{active set}).  For structured
+constraint sets such as the $\ell_1$-ball $\|x\|_1 \leq r$ --- where LMO vertices are the
+$2d$ scaled unit vectors $\pm r\,e_i$ --- this means $x_k$ has at most $k+1$ nonzero
+coordinates: Frank--Wolfe \emph{automatically produces sparse solutions}, a highly desirable
+property for feature selection, matrix completion, and compressed sensing problems where the
+solution is known to be sparse.
+
+However, the standard FW rate $O(1/k)$ is the same whether $f$ is convex \emph{or} strongly
+convex, unlike projected GD which accelerates to $O(\rho^k)$ linear convergence for
+$\mu$-strongly convex $f$.  The \emph{away-step Frank--Wolfe} closes this gap: at each step,
+the algorithm selects either a \emph{towards step} (moving towards the LMO vertex $z_k$, as
+in standard FW) or an \emph{away step} (moving away from the \emph{worst} active-set atom
+$s_k = \arg\max_{s \in \mathcal{S}_k} \nabla f(x_k)^\top s$), choosing whichever gives more
+descent.  For $\mu$-strongly convex $f$, away-step FW achieves:
+\[
+  f(x_k) - f^{\star} \leq \left(1 - \frac{\mu\,\delta(\mathcal{X})^2}{4L\,D^2}\right)^k (f(x_0) - f^{\star}),
+\]
+where $\delta(\mathcal{X})$ is the \emph{pyramidal width} of $\mathcal{X}$ (a geometric constant
+measuring how ``spread out'' the vertices are).  The cost is maintaining and updating the
+active-set $\mathcal{S}_k$, adding $O(|\mathcal{S}_k|)$ overhead per iteration, but the
+method remains projection-free while recovering the linear convergence rate of projected GD.
+\end{remark}
 
 \textbf{Boundary optimum:} Frank--Wolfe is particularly well-suited here. The LMO consistently
 selects the vertex closest to the unconstrained minimum (across the constraint boundary), pulling
