@@ -174,6 +174,16 @@ minimisation oracle --- both critical properties exploited in Questions~5 and~6.
 Four adaptive step-size methods are compared against a constant step-size gradient descent
 baseline across all three benchmark functions for 120 iterations.
 
+For reference, constant step-size gradient descent on a $\mu$-strongly convex, $L$-smooth
+function (i.e., $\mu I \preceq \nabla^2 f \preceq LI$) with optimal step size
+$\alpha^{\star} = 2/(\mu + L)$ converges at rate:
+\begin{equation}
+\label{eq:gd_rate}
+f(x_k) - f^{\star} \leq \left(\frac{\kappa - 1}{\kappa + 1}\right)^{2k} \bigl(f(x_0) - f^{\star}\bigr),
+\end{equation}
+where $\kappa = L/\mu$ is the condition number. All adaptive methods below aim to improve
+upon this rate by better exploiting the local geometry.
+
 \subsubsection{Polyak Step Size}
 
 The Polyak step size adapts the learning rate at each iteration to theoretically achieve the
@@ -224,7 +234,12 @@ effective step size for frequently-updated parameters:
 
 The effective learning rate $\alpha_k^{(i)} = \alpha_0 / (\sqrt{G_k^{(i)}} + \varepsilon)$ is
 monotonically \emph{decreasing} in each coordinate, which can cause premature convergence on
-non-stationary problems but guarantees stability in the stationary setting.
+non-stationary problems but guarantees stability in the stationary setting. Notably, Adagrad
+implicitly performs coordinate-wise preconditioning: if coordinate $i$ consistently receives
+large gradients, $G_k^{(i)}$ grows rapidly, reducing the effective step in that direction and
+correcting for large curvature. This adaptive preconditioning is particularly beneficial when
+the Hessian is ill-conditioned and its large-curvature directions align with the coordinate
+axes.
 
 \subsubsection{RMSprop}
 
@@ -480,9 +495,11 @@ Polyak achieves the best convergence on Benchmark~C, reaching $f = 0.0094$ after
 \end{algorithm}
 
 The fundamental distinction from Heavy Ball is the \emph{lookahead}: the gradient is evaluated at
-the extrapolated point $\tilde{x}_k = x_k + \beta_k z_k$ rather than at $x_k$. This correction
-step allows Nesterov momentum to anticipate overshoot before it occurs. The adaptive schedule
-$\beta_k = (k-1)/(k+2)$ (capped at $\beta_{\max}$) has the theoretical property:
+the extrapolated point $\tilde{x}_k = x_k + \beta_k z_k$ rather than at $x_k$. This lookahead
+step can be interpreted as evaluating the gradient at the point we expect to reach \emph{after}
+applying the current momentum, allowing the method to ``look before it leaps'' and correct its
+trajectory proactively rather than reactively. The adaptive schedule $\beta_k = (k-1)/(k+2)$
+(capped at $\beta_{\max}$) has the theoretical property:
 
 \begin{theorem}[Nesterov, 1983]
 For a convex function $f$ with Lipschitz-continuous gradient (Lipschitz constant $L$), the
@@ -668,16 +685,22 @@ gradient estimates.}
 
 The experiment is repeated with output noise scaled by a factor of 6: $y_{\text{noisy}}^{(i)} =
 {\theta^{\star}}^\top x^{(i)} + 6\varepsilon^{(i)}$, $\varepsilon^{(i)} \sim \mathcal{N}(0,1)$.
+The true minimiser of the expected loss remains $\theta^{\star} = [3, 4]^\top$, but the
+\emph{empirical} minimum is now at the OLS solution $\hat{\theta}_{\sigma=6}$ with
+minimum MSE $J^{\star}_{\sigma=6} = \sigma^2/(2) \cdot \mathbb{E}[\|X(X^\top X)^{-1}
+\varepsilon_6\|^2/(m)] \approx 36 \times J^{\star}_{\sigma=1} \approx 17.4$.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/q2_sgd_noisy.pdf}
 \caption{Q2: Effect of observation noise on SGD convergence. Left: original noise ($\sigma = 1$),
-$J^{\star} \approx 0.48$. Right: high noise ($\sigma = 6$), $J^{\star} \approx 17.3$ (since the
-minimum MSE scales as $\sigma^2/2 = 18$). Increasing the noise by factor~6 raises the irreducible
-loss floor by approximately factor~36. Under high noise, both batch sizes converge to roughly the
-same elevated floor, and the relative advantage of smaller batches diminishes: the noise from the
-observation model now dominates the mini-batch sampling noise.}
+$J^{\star} \approx 0.48$. Right: high noise ($\sigma = 6$), $J^{\star} \approx 17.4$ (since
+the irreducible MSE scales as $\sigma^2/2$: multiplying noise by 6 increases $J^{\star}$ by
+factor $\approx 36$). Under high noise, both batch sizes converge to approximately the same
+elevated floor, and the relative advantage of smaller batches essentially vanishes: the
+observation-model noise ($\sigma^2 = 36$) dominates the mini-batch sampling noise, so the
+effective gradient variance is insensitive to batch size. This illustrates that increasing
+observation noise does not change the optimal algorithm --- only the achievable accuracy.}
 \label{fig:q2_sgd_noisy}
 \end{figure}
 
@@ -745,13 +768,19 @@ significantly better estimate of the function's true minimum than any single gra
 
 The regularisation $\lambda = 10^{-8}$ ensures positive definiteness and numerical stability
 when the Hessian is nearly singular. Newton's method achieves quadratic convergence near a
-non-degenerate local minimum:
+non-degenerate local minimum where the Hessian is Lipschitz-continuous:
 \begin{equation}
-\|x_{k+1} - x^{\star}\| \leq C\,\|x_k - x^{\star}\|^2
+\label{eq:newton_quad_conv}
+\|x_{k+1} - x^{\star}\| \leq \frac{M}{2\mu}\,\|x_k - x^{\star}\|^2,
 \end{equation}
-for some constant $C$ depending on the local Hessian regularity. This contrasts with the linear
-convergence rate $\|x_{k+1} - x^{\star}\| \leq \rho\,\|x_k - x^{\star}\|$ ($\rho < 1$) of
-gradient descent.
+where $\mu = \lambda_{\min}(\nabla^2 f(x^{\star}))$ is the smallest Hessian eigenvalue at the
+optimum and $M$ is the Lipschitz constant of $\nabla^2 f$. The key geometric insight is that
+the Newton direction $p_k = H_k^{-1}\nabla f(x_k)$ accounts for the curvature in all directions
+simultaneously, effectively ``normalising'' the gradient by the local shape of the objective,
+whereas gradient descent only uses the gradient direction and must compensate through step-size
+tuning. This contrasts with the linear convergence rate
+$\|x_{k+1} - x^{\star}\| \leq \rho\,\|x_k - x^{\star}\|$ ($\rho < 1$) of gradient descent,
+where $\rho = (1 - 2\alpha\mu L/(\mu+L)^2)$ depends on the condition number.
 
 Hyperparameter settings: GD runs for 80 iterations; Newton runs for 20 iterations. The damped
 step $\alpha < 1$ is used on Benchmarks~B and~C because the rapidly varying Hessian means the
@@ -1211,17 +1240,28 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.000 & Yes \\
 
 \textbf{Projected Gradient Descent} enforces feasibility as a hard constraint at every iteration.
 Its key advantage is that all iterates $x_k \in \mathcal{F}$, which is critical in settings where
-infeasible points are physically meaningless or computationally problematic. The cost is the need
-for a projection oracle; here $\Pi_{\mathcal{F}} = \max(0.5, \cdot)$ is trivial, but for general
-convex sets the projection itself can be a non-trivial optimisation problem.
+infeasible points are physically meaningless or computationally problematic. For convex
+$f$ and convex $\mathcal{F}$, projected GD converges at rate $O(1/k)$ (convex case) or
+$O(\rho^k)$ (strongly convex case), matching plain GD up to constants. The cost is the need
+for a projection oracle; here $\Pi_{\mathcal{F}}(z) = (\max(0.5, z_1), z_2)^\top$ is trivial
+($O(1)$ operations), but for general convex sets such as the Lorentz cone or nuclear norm ball
+the projection itself is a non-trivial second-order cone programme.
 
 \textbf{Penalty methods} avoid explicit projection by modifying the objective. The penalty
-weight $\lambda$ controls the trade-off: small $\lambda$ gives smoother landscapes and larger
-step sizes but poor constraint enforcement; large $\lambda$ enforces the constraint tightly but
-introduces a stiff term requiring smaller step sizes. In the limit $\lambda \to \infty$, the
-sequence of penalty-method solutions converges to the constrained optimum --- this is the
-augmented Lagrangian / penalty-method theory. In practice, $\lambda = 1.8$ or $4.5$ suffices
-to obtain constraint satisfaction within 100 iterations in this example.
+weight $\lambda$ controls the trade-off: small $\lambda$ gives smoother landscapes and allows
+larger step sizes but enforces the constraint weakly; large $\lambda$ enforces the constraint
+tightly but introduces a stiff additive term requiring smaller step sizes (hence $\alpha = 0.03$
+vs $\alpha = 0.05$ for $\lambda = 4.5$ vs $\lambda \leq 1.8$). In the limit $\lambda \to \infty$,
+the sequence of penalty-method solutions converges to the constrained optimum. This motivates
+the augmented Lagrangian and ADMM approaches, which solve a sequence of penalty problems with
+increasing $\lambda$ and an explicit Lagrange multiplier update to eliminate the need for
+$\lambda \to \infty$.
+
+\textbf{Choice between methods:} Projected GD is preferred when (a) the projection is cheap
+and (b) the iterates must remain feasible at all times. Penalty methods are preferred when
+(a) implementing a projection oracle is difficult or (b) a soft constraint (feasibility ``on
+average'') is acceptable. The Frank--Wolfe algorithm (Question~6) offers a third option that
+avoids both projection and explicit penalty terms, at the cost of slower $O(1/k)$ convergence.
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1507,18 +1547,23 @@ curvature changes rapidly. In the stochastic setting, smaller batch sizes conver
 epoch at the cost of greater gradient noise.
 
 \textbf{Newton's method (Q3):} Second-order information is transformative: Newton's method
-converges in a single iteration on quadratic objectives and in a handful of iterations on
-near-quadratic functions. On the Rosenbrock function, even the damped Newton step ($\alpha = 0.22$)
-achieves $f = 0.686$ in 20 iterations, compared to $f = 3.73$ for GD in 80 iterations. The
-limitation is the $O(d^3)$ cost of Hessian computation and inversion, making Newton's method
-impractical for high-dimensional problems.
+converges in a single iteration on quadratic objectives (Proposition~\ref{prop:newton_quadratic})
+and in a handful of iterations on near-quadratic functions. On the Rosenbrock function, even the
+damped Newton step ($\alpha = 0.22$) achieves $f = 0.686$ in 20 iterations, compared to
+$f = 3.73$ for GD in 80 iterations. The quadratic convergence rate
+(Eq.~\ref{eq:newton_quad_conv}) explains this rapid improvement: once in the convergence
+neighbourhood, the error squares with each iteration. The limitation is the $O(d^3)$ cost of
+Hessian computation and inversion (via $\texttt{np.linalg.solve}$ in the implementation),
+making Newton's method impractical for $d \gg 100$ without approximations (quasi-Newton, etc.).
 
 \textbf{Derivative-free methods (Q4):} Finite-difference gradients with $\delta = 0.05$ closely
 replicate exact GD at an additional cost of $d$ function evaluations per step. Large $\delta$
 introduces truncation error that significantly degrades convergence. Nesterov random search
 requires only 2 function evaluations per step but converges much more slowly due to the
-single-direction gradient estimate. For low-dimensional problems, Nelder--Mead provides a
-practical gradient-free option.
+single-direction gradient estimate. Notably, Nelder--Mead converges to $f < 10^{-5}$ on the
+Rosenbrock function in just 160 iterations (Figure~\ref{fig:q4_dfree_comparison}), outperforming
+all first-order methods tested; this reflects the simplex method's implicit curvature estimation
+through simplex shape adaptation, even without gradient information.
 
 \textbf{Constrained optimisation (Q5):} Projected gradient descent enforces feasibility as a
 hard constraint from the very first iteration, while penalty methods trade exact feasibility for
@@ -1528,10 +1573,12 @@ feasibility throughout.
 
 \textbf{Frank--Wolfe (Q6):} The Frank--Wolfe algorithm avoids explicit projection by replacing it
 with a cheap linear minimisation oracle, maintaining feasibility automatically through convex
-combinations. It achieves $O(1/k)$ convergence on convex smooth objectives, which is competitive
-with projected GD only when the LMO is substantially cheaper than projection. The fixed $\beta$
-schedule introduces residual oscillation near the optimum; the standard diminishing schedule
-$\gamma_k = 2/(k+2)$ is preferable for fine convergence.
+combinations. It achieves $O(1/k)$ convergence on convex smooth objectives
+(Theorem~\ref{thm:frankwolfe}). The fixed-$\beta$ implementation exhibits significant residual
+oscillation near the optimum: with $\beta = 0.90$ (10\% step towards LP vertex), the method
+achieves $f = 0.0985$ after 200 iterations compared to $f = 0.0011$ for the standard diminishing
+schedule $\gamma_k = 2/(k+2)$ (Figure~\ref{fig:q6_fw_step_comparison}). This directly validates
+the importance of a decaying step size for fine convergence near the optimum.
 
 \textbf{Overall recommendation:} For practitioners, the choice of algorithm depends critically
 on the problem structure. For smooth, well-conditioned objectives with available gradients, Adam
