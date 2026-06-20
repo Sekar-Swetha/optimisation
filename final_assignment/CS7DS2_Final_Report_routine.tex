@@ -169,6 +169,22 @@ C (Rosenbrock) & Non-convex & $\approx 2000$ & 0 & Ill-conditioning \\
 \end{tabular}
 \end{table}
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/condition_number_analysis.pdf}
+\caption{Effect of condition number on convergence.
+Left: GD convergence ratio $(1-1/\kappa)^k$ for different $\kappa$ values.
+High $\kappa$ ($= 2000$, dark) produces nearly flat convergence even after 500 iterations,
+while $\kappa = 1.5$ (light) converges in $< 10$ iterations.
+Right: number of iterations required to reduce the suboptimality gap to $1\%$,
+comparing GD ($O(\kappa\log(1/\varepsilon))$) and Nesterov for strongly convex problems
+($O(\sqrt{\kappa}\log(1/\varepsilon))$).
+Vertical dashed lines mark the three benchmarks.
+Benchmark C (red, $\kappa \approx 2000$) requires $\sim 18{,}000$ iterations for GD
+vs $\sim 270$ for Nesterov --- a $67\times$ speedup from acceleration.}
+\label{fig:kappa_analysis}
+\end{figure}
+
 % ============================================================
 \section{Question 1: Adaptive Step-Size Methods \hfill [30 marks]}
 \label{sec:q1}
@@ -192,6 +208,16 @@ For Benchmark A with $\kappa \approx 1.12$, GD with $\alpha = 0.08 \approx 1/L$ 
 $(1 - 1/1.12)^k \approx 0.107^k$ per iteration --- extremely fast convergence.
 For Benchmark C with $\kappa \approx 2000$, the rate is $(1 - 1/2000)^k$,
 requiring $\sim 2000\ln(1/\varepsilon)$ iterations to reduce the gap by $\varepsilon$.
+
+\begin{remark}[Polyak--Łojasiewicz condition]
+The linear convergence result of Equation~\eqref{eq:gd_rate} extends beyond strongly convex
+functions to any function satisfying the \emph{Polyak--Łojasiewicz (PL) condition}:
+$\frac{1}{2}\|\nabla f(x)\|^2 \geq \mu(f(x) - f^{\star})$.
+The PL condition is weaker than strong convexity (it holds on Benchmark B even though
+$f$ is not globally strongly convex due to the $\sin(x_1)$ term).
+It captures the essential property needed for linear convergence: the gradient must not
+vanish at non-optimal points.
+\end{remark}
 
 \subsection{Algorithm Formulations}
 
@@ -552,6 +578,16 @@ The bias correction terms $1/(1-\beta_1^t)$ and $1/(1-\beta_2^t)$ compensate for
 zero-initialisation of $m_0$ and $v_0$, which would otherwise underestimate true moment
 magnitudes in early iterations (particularly important when $\beta_2 = 0.999$ makes
 $v_t$ warm up very slowly in the first $\sim 1000$ steps).
+
+\noindent \textbf{Convergence caveats:}
+Unlike GD and Nesterov, Adam does not have a general convergence guarantee for smooth
+non-convex functions (convergence has been shown for convex problems under certain conditions).
+In practice, Adam is widely used for neural network training where its adaptive per-coordinate
+scaling provides significant benefits, but it may fail to converge to critical points on some
+smooth problems (Reddi et al., 2018 identified cases where Adam diverges; AMSGrad was
+proposed as a fix).
+The step sizes $(\alpha = 0.12, 0.08, 0.006)$ used here were tuned for these specific problems
+and would not transfer directly to other settings.
 
 \subsection{Hyperparameter Settings}
 
@@ -978,9 +1014,23 @@ Newton & $O(mn + n^3)$ & 20 & Gradient + Hessian + solve \\
 \noindent For this problem ($n = 2$, $m = 1000$), $n^3 = 8 \ll mn = 2000$, so Newton's
 per-iteration cost is essentially the same as GD. Newton's $4\times$ fewer iterations
 makes it clearly preferable.
-In high dimensions ($n \gg 1$), the $O(n^3)$ Hessian solve dominates, motivating
-quasi-Newton methods (e.g., L-BFGS) that approximate $H^{-1}$ with $O(n)$ storage
-and $O(n)$ per-iteration updates.
+In high dimensions ($n \gg 1$), the $O(n^3)$ Hessian solve dominates.
+
+\noindent \textbf{Quasi-Newton methods as a practical bridge:}
+The BFGS (Broyden--Fletcher--Goldfarb--Shanno) method and its limited-memory variant L-BFGS
+address the high-dimensional limitation by building a low-rank approximation of $H^{-1}$
+from gradient differences:
+\begin{equation}
+H_{k+1}^{-1} \approx H_k^{-1} + \frac{s_k s_k^T}{s_k^T y_k} - \frac{H_k^{-1}y_k y_k^T H_k^{-T}}{y_k^T H_k^{-1}y_k},
+\end{equation}
+where $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$.
+L-BFGS stores only the last $m$ vector pairs $(s_k, y_k)$, requiring $O(mn)$ memory
+and $O(mn)$ computation per iteration.
+L-BFGS achieves superlinear (but not quadratic) convergence and is the method of choice for
+smooth unconstrained problems in moderate-to-high dimensions, forming the basis of
+\texttt{scipy.optimize.minimize(method='L-BFGS-B')}.
+The difference in this experiment ($n = 2$) is academic, but the principle justifies
+the additional code complexity for larger-scale problems.
 
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
@@ -1013,6 +1063,28 @@ Cost comparison: computing the full $n$-dimensional gradient via forward finite 
 $n + 1 = 3$ function evaluations per iteration (for $n = 2$).
 For high dimensions, this cost scales as $O(n)$, compared to $O(1)$ gradient evaluations when an
 analytical gradient is available.
+\emph{Central differences} $(\partial f/\partial x_i \approx (f(x+\delta e_i)-f(x-\delta e_i))/(2\delta))$
+reduce the truncation error to $O(\delta^2)$ at the cost of $2n$ function evaluations per gradient,
+extending the viable range of $\delta$ by approximately $\varepsilon_{\text{mach}}^{1/3}/\varepsilon_{\text{mach}}^{1/2}$
+before numerical cancellation dominates.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/q4_fd_error_analysis.pdf}
+\caption{Q4: Forward finite difference error $\|\hat{\nabla}f - \nabla f\|$ as a function of step size $\delta$
+at $x_0 = (-1, 4)$ on Benchmark B.
+Three regimes are visible: for large $\delta$ (right), truncation error $O(\delta)$ dominates and
+increases with $\delta$; for small $\delta$ (left), numerical round-off $O(\varepsilon_{\text{mach}}/\delta)$
+dominates.
+The optimal $\delta^* = \sqrt{\varepsilon_{\text{mach}}} \approx 10^{-8}$ (black dashed line) minimises
+total error at $\approx 10^{-8}$.
+The assignment values $\delta = 0.05$ (orange vertical line) and $\delta = 0.8$ (red vertical line)
+are both in the truncation-dominated regime.
+At $\delta = 0.05$, error $\approx 0.07$ (small fraction of $\|\nabla f\| \approx 7.1$);
+at $\delta = 0.8$, error $\approx 1.1$ ($\approx 15\%$ of $\|\nabla f\|$), confirming the
+poor gradient approximation at large $\delta$.}
+\label{fig:q4_fd_error}
+\end{figure}
 
 \subsubsection{Nesterov Random Search}
 
@@ -1296,6 +1368,38 @@ Unconstrained GD & $(0.582,\ 2.000)$ & 0.7244 & 0.0000 & Coincidentally \\
 \end{tabular}
 \end{table}
 
+\subsection{KKT Optimality Conditions}
+
+The Karush--Kuhn--Tucker (KKT) conditions characterise optimality for the constrained problem
+$\min_{x \in \mathcal{X}} f(x)$ with $\mathcal{X} = \{x : x_1 \geq 0.5\}$:
+\begin{align}
+\nabla f(x^{\star}) - \mu^{\star} e_1 &= 0 \quad \text{(stationarity)},\\
+x_1^{\star} - 0.5 &\geq 0 \quad \text{(primal feasibility)},\\
+\mu^{\star} &\geq 0 \quad \text{(dual feasibility)},\\
+\mu^{\star}(x_1^{\star} - 0.5) &= 0 \quad \text{(complementary slackness)}.
+\end{align}
+Since the unconstrained minimum $(0.582, 2.0)$ satisfies $0.582 > 0.5$, the constraint is
+\emph{inactive} at the optimum.
+By complementary slackness, $\mu^{\star}(0.582 - 0.5) = 0$ requires $\mu^{\star} = 0$.
+With $\mu^{\star} = 0$, stationarity becomes $\nabla f(x^{\star}) = 0$, confirming that
+the constrained optimum coincides with the unconstrained optimum.
+This is visible in Figure~\ref{fig:q5_kkt}: no gradient truncation is needed at the solution.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/q5_kkt_analysis.pdf}
+\caption{Q5: KKT analysis of the constrained problem.
+The contour plot shows the objective $f(x_1, x_2) = (x_1-1)^2 + 5(x_2-2)^2 + \sin(x_1)$
+with the feasible region ($x_1 \geq 0.5$, unshaded) and infeasible region (shaded red).
+The constrained optimum at $(0.582, 2.0)$ lies in the interior of the feasible set
+(inactive constraint, $\mu^{\star} = 0$), so $\nabla f(x^{\star}) = 0$ exactly.
+The starting point $(0.2, 4.0)$ is infeasible; the navy arrow shows the gradient direction
+which initially points away from the constraint boundary.
+Had the unconstrained minimum been at $x_1^{\star} < 0.5$, the constraint would be active
+and $\mu^{\star} > 0$ would represent the ``cost of constraint enforcement.''  }
+\label{fig:q5_kkt}
+\end{figure}
+
 \textbf{Projected GD} enforces feasibility at every iteration through a hard projection.
 This is the fundamental advantage: the feasibility guarantee is unconditional and immediate.
 The cost is requiring a projection oracle $\Pi_{\mathcal{X}}$, which is trivial for halfspace
@@ -1308,9 +1412,25 @@ The weight $\lambda$ controls the feasibility--optimality trade-off.
 As $\lambda \to \infty$, the penalty method converges to the constrained optimum, but
 the condition number of the penalised problem grows as $O(\lambda)$, requiring smaller step
 sizes and more iterations.
-The \emph{augmented Lagrangian method} (ALM) overcomes this limitation by supplementing
-the penalty with a Lagrange multiplier estimate, achieving exact feasibility without
-$\lambda \to \infty$.
+Figure~\ref{fig:q5_penalty} illustrates this trade-off quantitatively.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_analysis.pdf}
+\caption{Q5: Penalty method analysis.
+Left: the effective condition number near the constraint boundary grows as
+$\kappa(\lambda) \approx (H_{11} + 2\lambda)/\mu_{\min}$, where $\mu_{\min}$ is the
+minimum curvature of the original objective.
+For $\lambda = 4.5$, $\kappa$ increases by $\sim 6\times$ relative to the unpenalised
+problem, explaining why a smaller step size ($\alpha = 0.03$) is needed.
+Right: the maximum stable step size $\alpha < 2/(L + 2\lambda)$ decreases with $\lambda$,
+matching the step sizes used in the experiments (horizontal markers).
+This illustrates the fundamental penalty method trade-off: larger $\lambda$ forces tighter
+feasibility but requires smaller steps and more iterations for the same optimality gap.
+The \emph{augmented Lagrangian method} (ALM) avoids this by supplementing the quadratic
+penalty with a dual variable estimate, achieving exact feasibility without $\lambda \to \infty$.}
+\label{fig:q5_penalty}
+\end{figure}
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
@@ -1492,6 +1612,27 @@ has fixed oracle structure.
 For problems where LMO is cheap (matrix constraints, simplex constraints), Frank--Wolfe
 is preferred; for problems where projection is cheap (box constraints, norm balls),
 PGD is typically faster.
+
+\textbf{Frank--Wolfe duality gap as a stopping criterion:}
+The Frank--Wolfe gap at iterate $x_k$ is:
+\begin{equation}
+G_k = \nabla f(x_k)^T(x_k - z_k), \quad z_k = \arg\min_{z \in \mathcal{X}} \nabla f(x_k)^T z.
+\end{equation}
+By convexity of $f$, $f(x_k) - f^{\star} \leq G_k$, so the gap provides a
+\emph{computable certificate} of sub-optimality without knowing $f^{\star}$.
+When $G_k < \varepsilon$, the iterate is within $\varepsilon$ of the optimum.
+In this experiment, for the interior case ($\beta = 0.985$, final $f = 0.0046$),
+the gap $G_{180}$ can be computed and would provide a tight bound on how close
+the iterate is to $(1, 5)$, serving as a natural termination criterion.
+
+\textbf{Step size scheduling:}
+The fixed $\beta$ parameter used here does not decay the vertex weight $(1-\beta)$ over time.
+The \emph{standard Frank--Wolfe schedule} uses decreasing step sizes $\gamma_k = 2/(k+2)$,
+giving $(1-\gamma_k) = k/(k+2) \to 1$ as $k \to \infty$.
+This is equivalent to $\beta_k = k/(k+2)$ increasing towards 1 --- exactly the schedule
+that achieves the $O(1/k)$ convergence guarantee.
+For the interior case with fixed $\beta = 0.90$ (constant), the effective step to the vertex
+remains $10\%$ per iteration indefinitely, causing persistent oscillation near the optimum.
 
 % ============================================================
 \section{Summary and Conclusions}
