@@ -317,6 +317,27 @@ This contrasts with a global $O(1/\sqrt{k})$ schedule that would uniformly slow 
 coordinates regardless of their gradient scale.
 \end{remark}
 
+\begin{remark}[Limitation: diagonal vs.\ full preconditioning]
+Adagrad's coordinate-wise update implicitly approximates the Hessian by a diagonal matrix
+$\hat{H}_k \approx \operatorname{diag}(G_k^{(1)}/k,\ldots,G_k^{(d)}/k)$, which equals the
+true Hessian diagonal only when the Hessian eigenvectors are axis-aligned.  For the Rosenbrock
+function at $x^{\star} = (1,1)$:
+\[
+  H = \begin{bmatrix} 802 & -400 \\ -400 & 200 \end{bmatrix},
+  \quad \text{eigenvectors approximately } (2,-1)/\sqrt{5}\text{ and }(1,2)/\sqrt{5},
+\]
+which are strongly off-axis (angle $\approx 27°$ from the coordinate axes).  The diagonal
+approximation $\hat{H} = \operatorname{diag}(802, 200)$ ignores the off-diagonal coupling
+$H_{12} = -400$; the effective condition number after Adagrad preconditioning is
+$\kappa(\hat{H}^{-1/2} H \hat{H}^{-1/2}) = \lambda_{\max}/\lambda_{\min}$ of the
+\emph{symmetrised preconditioned matrix}, which remains $O(\sqrt{\kappa})$ rather than $1$ (as
+it would under the optimal Newton preconditioner $H^{-1/2}$).  This is why Adagrad ($f = 2.20$)
+substantially underperforms Newton ($f = 0.686$) on Benchmark~C: diagonal preconditioning
+reduces ill-conditioning but cannot eliminate it when curvature is off-diagonal.  Methods with
+full-matrix adaptivity (natural gradient, L-BFGS) would achieve the $O(1)$ effective condition
+number, but at $O(d^2)$ memory cost.
+\end{remark}
+
 \subsubsection{RMSprop}
 
 RMSprop replaces Adagrad's cumulative sum with an exponential moving average (EMA) of squared
@@ -1236,6 +1257,31 @@ times larger than the forward-difference optimum but remains in the regime where
 poorly chosen $\delta = 0.8$ has truncation error $\approx 0.8/2 \times |f''| \approx 0.4$,
 comparable to the gradient itself, causing visible degradation in Figure~\ref{fig:q4_fval_B}.
 
+\begin{remark}[Bias propagation: how FD error affects GD convergence]
+When GD uses the biased gradient estimate $\tilde{g}_k = \nabla f(x_k) + e_k$ with
+constant bounded error $\|e_k\| \leq \varepsilon_g$, the iterate update becomes
+$x_{k+1} = x_k - \alpha(\nabla f(x_k) + e_k)$.  For $\mu$-strongly convex $f$, applying
+the triangle inequality to the contraction:
+\[
+  \|x_{k+1} - x^{\star}\| \leq (1 - \alpha\mu)\|x_k - x^{\star}\| + \alpha\varepsilon_g,
+\]
+so the iteration converges not to $x^{\star}$ but to a \emph{bias ball} of radius
+$r^{\star} = \varepsilon_g / \mu$ (the fixed point of the right-hand side).  For $\delta = 0.05$
+on Benchmark~B: the truncation error is $\varepsilon_g \approx \frac{\delta}{2}\max_i|f_{x_ix_i}|
+\approx \frac{0.05}{2} \times 10 \approx 0.25$, while $\mu \approx 1$, giving
+$r^{\star} \approx 0.25$.  The resulting terminal error in $f$ is
+$f(x_{\infty}) - f^{\star} \approx \frac{\mu}{2}(r^{\star})^2 \approx 0.03$, which falls
+within the observation noise floor of Benchmark~B ($J^{\star} \approx 0.48$) --- explaining
+why good FD ($\delta = 0.05$) matches exact GD to visual accuracy in
+Figure~\ref{fig:q4_fval_B}.  For $\delta = 0.8$, the ball radius grows to
+$r^{\star} \approx 4/\mu \approx 4$, comparable to the function range itself, causing the
+large terminal error visible for the poor FD case.  This analysis also quantifies the
+\emph{optimal $\delta$ for a fixed step budget}: as $\delta$ decreases, $\varepsilon_g$ decreases
+(smaller truncation error) but rounding error $2\varepsilon_{\rm mach}/\delta$ increases; the
+bias ball radius is minimised at $\delta^{\star} \sim \sqrt{\varepsilon_{\rm mach}} \approx 10^{-8}$,
+exactly the forward-difference optimum derived from the error balance.
+\end{remark}
+
 \subsubsection{Nesterov Random Search}
 
 \begin{algorithm}[H]
@@ -1933,6 +1979,44 @@ Lower is better; \textbf{bold} indicates the best result per benchmark column.}
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{table}[H]
+\centering
+\caption{Per-iteration computational cost and convergence rates of all methods studied
+($d$=dimension, $m$=dataset size, $b$=batch size).  ``$\nabla f$'' denotes one gradient pass
+($O(md)$); ``$\nabla^2\! f$'' denotes one Hessian computation ($O(md^2)$).}
+\label{tab:cost_comparison}
+\begin{tabular}{p{2.8cm}p{2.5cm}p{1.8cm}p{4.3cm}}
+\toprule
+\textbf{Method} & \textbf{Cost/iter} & \textbf{Memory} & \textbf{Rate (best case)} \\
+\midrule
+GD (const.\ $\alpha$) & $O(md)$ & $O(d)$ & $O(\rho^k)$,\ $\rho=(\kappa-1)/(\kappa+1)$ \\
+Polyak step & $O(md)$ & $O(d)$ & $O(\rho^k)$ (if $f^{\star}$ exact) \\
+Adagrad & $O(md)$ & $O(d)$ & $O(1/\sqrt{k})$ regret \\
+RMSprop & $O(md)$ & $O(d)$ & No general guarantee \\
+Heavy Ball & $O(md)$ & $O(d)$ & $O(\rho^k)$,\ $\rho=(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1)$ \\
+Nesterov & $O(md)$ & $O(d)$ & $O(1/k^2)$ (convex, smooth) \\
+Adam & $O(md)$ & $O(d)$ & Online regret; no convex guarantee \\
+Newton & $O(md^2\!+\!d^3)$ & $O(d^2)$ & Quadratic (local basin) \\
+FD GD ($d\!+\!1$ evals) & $O(m(d\!+\!1))$ & $O(d)$ & As GD + $O(\delta/\mu)$ bias \\
+Nesterov rand.\ search & $O(2m)$ & $O(d)$ & $O(1/\sqrt{k})$ (high var.) \\
+Nelder--Mead & $\leq O(m(n\!+\!1))$ & $O(nd)$ & No convergence guarantee \\
+Grid search (total) & $O(mN^d)$ & $O(N^d)$ & $O(\Delta x)$ grid error \\
+Projected GD & $O(md)+O(d)$ & $O(d)$ & $O(1/k)$ or $O(\rho^k)$ str.\ cvx \\
+Penalty method & $O(md)$ & $O(d)$ & $O(1/k)$ fixed $\lambda$ \\
+Frank--Wolfe & $O(md)+O(d)$ & $O(d)$ & $O(1/k)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cost table reveals a clear hierarchy: GD-family first-order methods all share the same
+$O(md)$ per-iteration cost (dominated by one gradient evaluation over the dataset), differing
+only in convergence rate and memory for auxiliary variables. Newton's method breaks this pattern,
+paying $O(d^2)$ extra for the Hessian and $O(d^3)$ for the solve --- practical only when $d$ is
+small. Nesterov random search is unique in needing only $2m$ function evaluations regardless of $d$,
+at the price of $O(1/\sqrt{k})$ noise-limited convergence. Frank--Wolfe and projected GD both add
+an $O(d)$ oracle call (LMO or projection) on top of the gradient, which is cheap for box
+constraints but may dominate for general constraint sets (e.g., nuclear-norm ball: $O(d^3)$ SVD).
 
 Key observations from Table~\ref{tab:cross_comparison}:
 
