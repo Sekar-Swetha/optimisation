@@ -94,6 +94,17 @@ All experiments use a fixed random seed (\texttt{np.random.seed(42)}) for exact 
 Starting points are $\theta_0 = [0,0]^T$ for Benchmark~A, $x_0 = [-1, 4]^T$ for Benchmark~B,
 and $x_0 = [-1, 1]^T$ for Benchmark~C.
 
+\begin{definition}[Key quantities for convergence analysis]
+Throughout this report, $L$ denotes the \emph{Lipschitz smoothness constant} of $\nabla f$
+(largest eigenvalue of $\nabla^2 f$), $\mu$ denotes the \emph{strong convexity modulus}
+(smallest eigenvalue of $\nabla^2 f$), and $\kappa = L/\mu$ is the \emph{condition number}.
+The gradient descent stability constraint requires $\alpha < 2/L$; the optimal constant
+step is $\alpha^\star = 2/(L + \mu)$.
+For Benchmark~A: $L \approx 1.03$, $\mu \approx 0.97$, $\kappa \approx 1.06$.
+For Benchmark~B: $L \approx 10$, $\mu \approx 1.0$, $\kappa \approx 10$ (at starting point).
+For Benchmark~C: $L \approx 1002$ (at $(1,1)$), $\mu \approx 0.40$, $\kappa \approx 2504$.
+\end{definition}
+
 \subsection{Benchmark A: Linear Regression Quadratic Loss}
 A synthetic dataset with $m = 1000$ samples and two parameters is generated:
 \begin{equation}
@@ -113,9 +124,12 @@ H = \nabla^2 J = \frac{1}{m}X^T X \succ 0 \;\text{(constant)}.
 \]
 Due to observation noise, the minimum loss is $J^{\star} \approx 0.4826$
 (not zero), and the OLS solution converges to $\hat\theta \approx [3.028, 4.017]^T$.
-The eigenvalues of $H$ are approximately $\lambda_1 \approx 0.97$ and $\lambda_2 \approx 1.03$,
-giving a condition number $\kappa \approx 1.06$ --- this problem is well-conditioned, making it
-easy for all gradient-based methods.
+The eigenvalues of $H = X^TX/m$ are approximately $\lambda_1 \approx 0.97$ and $\lambda_2 \approx 1.03$
+(from the empirical covariance of standard Gaussian features with $m = 1000$),
+giving condition number $\kappa \approx 1.06$ --- essentially isotropic.
+The GD stability threshold is $\alpha < 2/\lambda_{\max} \approx 1.94$,
+so the chosen baselines ($\alpha = 0.06$--$0.08$) are well within the stable regime.
+The theoretical GD convergence rate per iteration is $(1 - \alpha \mu) \approx 0.922$ for $\alpha = 0.08$.
 
 \subsection{Benchmark B: Toy Neural Network Quadratic Loss}
 \begin{equation}
@@ -130,7 +144,11 @@ The unique minimum is the solution to $2(x_1-1) + \cos(x_1) = 0$, which yields
 $x_1^\star \approx 0.582$ and $x_2^\star = 2.0$, with $f^\star \approx 0.7244$.
 The Hessian eigenvalues range from $\sim 1.0$ to $10$ across the domain (the $\sin(x_1)$ term
 modulates the first eigenvalue), giving a moderate condition number of $\kappa \leq 10$.
-The sinusoidal term breaks the purely quadratic structure and prevents closed-form minimisation.
+The sinusoidal term breaks purely quadratic structure and prevents closed-form minimisation.
+The GD stability threshold for Benchmark~B is $\alpha < 2/10 = 0.2$, so all chosen
+baselines ($\alpha \leq 0.08$) are stable.
+Gradient descent with $\alpha = 0.06$ converges at rate $(1 - 0.06 \times 1.0) \approx 0.94$
+per iteration (dominated by the slow $x_1$ direction with $\mu \approx 1$).
 
 \subsection{Benchmark C: Rosenbrock Function}
 \begin{equation}
@@ -140,12 +158,17 @@ The global minimum is at $(1, 1)$ with $f^\star = 0$. The Hessian is:
 \[
 H(x) = \begin{bmatrix} 2 + 1200 x_1^2 - 400 x_2 & -400 x_1 \\ -400 x_1 & 200 \end{bmatrix}.
 \]
-At the optimum $(1,1)$: eigenvalues $\lambda_1 \approx 0.40$ and $\lambda_2 \approx 1001.6$,
-giving a condition number $\kappa \approx 2504$.
+At the optimum $(1,1)$: $H_{11} = 802$, $H_{12} = H_{21} = -400$, $H_{22} = 200$,
+with eigenvalues $\lambda_1 \approx 0.40$ and $\lambda_2 \approx 1001.6$,
+giving condition number $\kappa \approx 2504$.
+The GD stability threshold is $\alpha < 2/1001.6 \approx 0.002$, explaining the conservative
+choice $\alpha = 0.001$--$0.0012$ throughout the experiments.
 This extreme ill-conditioning, combined with a narrow curved valley along $x_2 = x_1^2$,
 makes Rosenbrock one of the most challenging standard test functions.
-Along the valley floor, the gradient is nearly orthogonal to the valley direction, causing
-gradient descent to zig-zag and make extremely slow progress towards $(1,1)$.
+The GD convergence rate in the slow direction is $(1 - \alpha \times 0.40) \approx 1 - 0.0004$,
+meaning roughly $\log(1/\epsilon)/0.0004 \approx 17{,}000$ iterations are needed to reduce
+the error by $1000\times$ in the valley direction --- highlighting why all gradient-only
+methods make limited progress in 80--150 iterations.
 
 \subsection{Benchmark D: Constrained Feasible Set}
 For constrained problems:
@@ -350,11 +373,25 @@ Heavy Ball    & \textbf{0.4826} & \textbf{0.7244} & 1.4003 \\
 \end{table}
 
 \textbf{Key finding:} The Polyak step size is highly sensitive to the accuracy of $f^\star$.
-On Benchmarks~A and B, setting $f^\star = 0$ below the true minimum causes
-$\alpha_k \propto (f(x_k) - 0)/\|\nabla f\|^2 \to \infty$ as $\|\nabla f\| \to 0$
-while $f(x_k) \to f_{\text{true}}^\star > 0$, leading to divergence.
-On Benchmark~C where $f^\star = 0$ is exact, Polyak achieves the best convergence
-because the self-tuning property provides the ideal step length at each iteration.
+On Benchmarks~A and~B, setting $f^\star = 0$ below the true minimum $f^\star_{\text{true}} \approx 0.4826$
+causes the step size to grow pathologically:
+near the OLS minimum, $\|\nabla J(\theta)\| \approx \delta$ for small $\delta > 0$,
+so $\alpha_k \approx (0.4826 - 0)/({\delta^2 + 10^{-4}}) \to 0.4826/10^{-4} = 4826$
+as $\delta \to 0$ (with $\varepsilon = 10^{-4}$).
+A step of size $\approx 4826$ from near the minimum results in enormous oscillations,
+consistent with the observed $f \approx 2.72$ (well above the minimum).
+On Benchmark~C where $f^\star = 0$ is exact, the numerator $f(x_k) \to 0$ simultaneously
+with $\|\nabla f\| \to 0$, keeping $\alpha_k$ bounded, and Polyak achieves the best
+convergence ($f = 0.0094$, the best Q1 result).
+This sensitivity makes Polyak suitable primarily for problems where $f^\star = 0$ is
+known (e.g., zero-error classification or exact interpolation).
+
+\begin{remark}[Stochastic Polyak step]
+A recent variant, the Stochastic Polyak Step (SPS), addresses the $f^\star$-dependence
+by using the mini-batch loss minus a per-batch lower bound in the numerator.
+This allows Polyak-style adaptive steps in the SGD setting where $f^\star$ is not known
+globally, but is tractable per mini-batch.
+\end{remark}
 
 \subsection{Contour Plots with Optimisation Trajectories}
 
@@ -827,13 +864,19 @@ Iterations & 80   & 20   & 80   & 20   & 80    & 20   \\
 \includegraphics[width=0.85\textwidth]{figures/q3_fval_A.pdf}
 \caption{Q3: Newton's method vs GD on Benchmark~A (Linear Regression).
 Newton with $\alpha = 1.0$ converges in \textbf{exactly one iteration} to $J \approx 0.4826$.
-This is the expected result for a purely quadratic objective: the second-order approximation
-is \emph{exact}, so the Newton step $\theta_{k+1} = \theta_k - H^{-1}\nabla J(\theta_k)
-= \theta_k - (X^TX/m)^{-1} \cdot (X^T(X\theta_k - y)/m) = (X^TX)^{-1}X^Ty$
-recovers the OLS solution in one step regardless of the starting point.
+This follows directly from the algebra for a quadratic objective
+$J(\theta) = \frac{1}{2m}\|X\theta - y\|^2$:
+\begin{align*}
+\nabla J(\theta) &= \frac{1}{m}X^T(X\theta - y), \\
+\nabla^2 J       &= H = \frac{1}{m}X^T X \quad (\text{constant}), \\
+\theta_1         &= \theta_0 - H^{-1}\nabla J(\theta_0)
+                  = \theta_0 - \left(\frac{X^TX}{m}\right)^{-1}\frac{X^T(X\theta_0 - y)}{m}
+                  = (X^TX)^{-1}X^Ty,
+\end{align*}
+which is the \emph{ordinary least squares (OLS) solution}, independent of $\theta_0$.
 GD requires $\sim$40 iterations to reach comparable accuracy --- a clear demonstration
-of second-order vs first-order efficiency on well-conditioned quadratics.
-The single Newton step is visible as an immediate drop to the noise floor.}
+of second-order vs first-order efficiency.
+The single Newton step is visible as an immediate drop to the noise floor $J^\star \approx 0.4826$.}
 \label{fig:q3_fval_A}
 \end{figure}
 
@@ -982,9 +1025,16 @@ The approximation error decomposes into two competing terms:
 where $\varepsilon_{\text{mach}} \approx 10^{-16}$ for double precision.
 Balancing these two terms gives the optimal perturbation
 $\delta^\star = O(\varepsilon_{\text{mach}}^{1/2}) \approx 10^{-8}$.
-The assignment tests $\delta = 0.05$ (truncation-dominated but practically good) and
-$\delta = 0.8$ (severe truncation error), both far from the analytical optimum but
-in the ``safe'' regime where roundoff is negligible.
+The assignment tests $\delta = 0.05$ and $\delta = 0.8$.
+For Benchmark~B with $\nabla^2 f \approx \text{diag}(2, 10)$, the truncation errors are:
+\begin{itemize}[nosep]
+\item $\delta = 0.05$: truncation $\approx 0.05 \times 10 / 2 = 0.25$ (in $x_2$ direction).
+      With gradient magnitude $|10(x_2 - 2)| \sim 10$--$20$ at the start, relative error $\sim 1$--$2.5\%$.
+      This gives a good gradient approximation, as confirmed by the near-identical trajectory to exact GD.
+\item $\delta = 0.8$: truncation $\approx 0.8 \times 10 / 2 = 4$. With gradient magnitude $\sim 10$,
+      relative error $\sim 40\%$ --- the gradient direction is substantially corrupted,
+      explaining the worse convergence observed.
+\end{itemize}
 
 \begin{remark}[Cost of finite differences]
 Each gradient evaluation via forward differences requires $d + 1$ function evaluations
