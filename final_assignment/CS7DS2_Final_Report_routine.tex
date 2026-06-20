@@ -543,9 +543,19 @@ Polyak achieves the best convergence on Benchmark~C, reaching $f = 0.0094$ after
   accelerated rate $(\sqrt{\kappa}-1)/(\sqrt{\kappa}+1) \approx 0.961$ is geometrically faster.
   Adagrad's coordinate-wise adaptation helps navigate the different curvatures in $x_1$/$x_2$.
 
-\item \textbf{Stability:} GD is the most stable but slowest. Polyak is unstable when $f^{\star}$
-  is misspecified. Adagrad is uniformly stable due to monotonically decreasing steps (Algorithm~\ref{alg:adagrad}).
-  RMSprop is stable but may plateau at a non-optimal value if the base rate is too conservative.
+\item \textbf{Stability and plateauing:} GD is the most stable but slowest. Polyak is unstable
+  when $f^{\star}$ is misspecified. Adagrad is uniformly stable due to monotonically decreasing
+  steps (Algorithm~\ref{alg:adagrad}). On Benchmark~C, Adagrad ($f = 2.20$) outperforms
+  RMSprop ($f = 3.12$) despite RMSprop being generally considered more adaptive: on the
+  Rosenbrock trajectory, the gradient magnitude decreases substantially as the iterate enters
+  the valley from the initial steep descent. Adagrad's cumulative sum $G_k$ correctly reflects
+  this history, giving a step size that decreases monotonically and remains compatible with
+  descent throughout. RMSprop's exponential average (window $\approx 10$ iterations) reacts
+  too quickly --- once the gradient magnitude drops, the effective step $\alpha_0/\sqrt{v_k}$
+  grows abruptly (since $v_k$ forgets the large initial gradients), potentially overshooting
+  and causing oscillation in the narrow valley. The required base rate ($\alpha_0 = 0.0035$
+  for RMSprop vs $\alpha_0 = 0.45$ for Adagrad) reflects this: RMSprop needs a much smaller
+  base rate to prevent instability, leaving less room for progress.
 
 \item \textbf{Practical considerations:} In real machine learning applications, $f^{\star}$ is
   almost never known exactly, which severely limits the applicability of the Polyak step
@@ -595,6 +605,22 @@ Nesterov accelerated gradient method with step size $\alpha \leq 1/L$ achieves:
 which is optimal among first-order methods, in contrast to the $O(1/k)$ rate of
 gradient descent.
 \end{theorem}
+
+\begin{remark}[Optimality of the $O(1/k^2)$ rate]
+The $O(1/k^2)$ rate is \emph{information-theoretically optimal}: Nesterov also proved a
+matching lower bound showing that no first-order method (using only values and gradients) can
+achieve $f(x_k) - f^{\star} = o(L\|x_0 - x^{\star}\|^2 / k^2)$ for all smooth convex $f$.
+This means gradient descent's $O(1/k)$ rate is not an accident of its design --- it is
+provably suboptimal, and acceleration to $O(1/k^2)$ is the best achievable. The
+specific schedule $\beta_k = (k-1)/(k+2)$ (equivalently, the momentum sequence
+$\lambda_{k+1} = (1 + \sqrt{1 + 4\lambda_k^2})/2$ in Nesterov's original parameterisation)
+is derived from a Lyapunov energy argument: the sequence
+$E_k = \alpha(f(x_k) - f^{\star}) + \frac{1}{2}\|v_k - x^{\star}\|^2$ (where $v_k$ is
+an auxiliary sequence) is shown to satisfy $E_{k+1} \leq (1 - \lambda_{k+1}^{-1}) E_k$,
+yielding the $O(1/k^2)$ recursion. The intuition is that momentum ``builds up a credit'' by
+taking slightly over-eager steps that would be suboptimal for a single gradient step, but
+which yield a better sequence of iterates than myopic descent.
+\end{remark}
 
 \subsubsection{Adam Optimiser}
 
@@ -688,8 +714,14 @@ Adam & $\alpha$ & 0.12 & 0.08 & 0.006 \\
 \caption{Q2: Convergence on Benchmark A (Linear Regression). All three methods converge to
 $J^{\star} \approx 0.4826$. Nesterov and Adam reach this floor within approximately
 50--70 iterations, compared to $\approx 100$ iterations for GD, reflecting the accelerated
-convergence from momentum. The quadratic loss surface is isotropic enough that the coordinate-wise
-scaling of Adam provides minimal additional benefit over the momentum alone.}
+convergence from momentum. For this nearly isotropic surface ($H \approx I$, $\kappa \approx 1$),
+the optimal GD step is $\alpha^{\star} = 2/(L+\mu) = 1.0$, but $\alpha = 0.08$ is
+conservative; GD converges at $\rho = 0.92$ per iteration.  Nesterov's
+$O(1/k^2)$ bound gives $f_k - f^{\star} \leq 2L\|x_0 - x^{\star}\|^2/(k+1)^2
+\approx 26/(k+1)^2 \approx 0.01$ at $k = 50$ --- already near the noise floor, explaining
+the 30--50 iteration advantage over GD's $\rho^k$ decay.  The coordinate-wise scaling of Adam
+provides minimal additional benefit here because $H \approx I$ means all coordinates are
+equally conditioned.}
 \label{fig:q2_fval_A}
 \end{figure}
 
@@ -810,15 +842,24 @@ SAGA) which combine per-sample updates with periodic full-gradient corrections, 
 the exact linear rate of full GD at the cost of 2--3$\times$ more computation per epoch ---
 the ideal combination of stochastic efficiency and deterministic convergence.
 
-A practically important consequence is the \emph{linear scaling rule}: to maintain the same
-noise floor when increasing batch size by factor $k$ (replacing $b$ with $kb$), the learning
-rate should scale proportionally $\alpha \to k\alpha$. Since the noise floor $\propto \alpha
-\sigma_g^2/b$, multiplying both $\alpha$ and $b$ by $k$ keeps the floor constant. This rule
---- widely used in large-scale distributed training (a system with $K$ GPUs uses
-$\alpha_{\text{base}} \times K$ as the initial learning rate) --- has a validity limit: when
-$k\alpha > 2/L$, the GD update itself becomes unstable. In practice a learning-rate
-\emph{warm-up} schedule (linearly ramping $\alpha$ from 0 to $k\alpha$ over the first few
-epochs) regularises this instability and is standard in Transformer and ResNet training.
+The implementation uses \emph{random shuffling without replacement} (Algorithm~\ref{alg:sgd}):
+the $m$ data indices are permuted once per epoch, then each mini-batch is drawn sequentially
+from this permutation.  This is superior to \emph{sampling with replacement} (iid draws),
+because in a single epoch every data point is seen exactly once, distributing the information
+content of the dataset uniformly.  Theoretical analysis shows that without-replacement SGD
+converges as $O(1/(n^{2/3}T))$ (where $T$ is the number of epochs) compared to
+$O(\sigma/\sqrt{T})$ for with-replacement, a subtle but practical advantage on finite datasets.
+
+A practically important consequence of the noise-floor analysis is the \emph{linear scaling
+rule}: to maintain the same noise floor when increasing batch size by factor $k$ (replacing
+$b$ with $kb$), the learning rate should scale proportionally $\alpha \to k\alpha$. Since the
+noise floor $\propto \alpha \sigma_g^2/b$, multiplying both $\alpha$ and $b$ by $k$ keeps the
+floor constant. This rule --- widely used in large-scale distributed training (a system with
+$K$ GPUs uses $\alpha_{\text{base}} \times K$ as the initial learning rate) --- has a validity
+limit: when $k\alpha > 2/L$, the GD update itself becomes unstable. In practice a
+learning-rate \emph{warm-up} schedule (linearly ramping $\alpha$ from 0 to $k\alpha$ over the
+first few epochs) regularises this instability and is standard in Transformer and ResNet
+training.
 
 \begin{figure}[H]
 \centering
@@ -1013,9 +1054,14 @@ $\theta_0$ and the condition number of $H$.
 converges in \textbf{one iteration} to $J = 0.4826$, consistent with
 Proposition~\ref{prop:newton_quadratic}: the Newton step recovers the OLS solution
 $\hat\theta = H^{-1}b \approx [3.028, 4.017]^\top$ exactly. GD requires approximately
-80 iterations to reach comparable accuracy, with per-iteration progress rate
+80 iterations to reach comparable accuracy, with per-iteration convergence rate
 $\rho = \max(|1 - \alpha\lambda_{\max}|, |1 - \alpha\lambda_{\min}|)$ determined by the
-Hessian eigenvalues of $H = X^\top X / m \approx I_2$.}
+Hessian eigenvalues of $H = X^\top X / m \approx I_2$. With $\alpha = 0.08$ and $H \approx I$
+(eigenvalues $\approx 1$), $\rho \approx |1 - 0.08 \times 1| = 0.92$; after 80 iterations,
+the algorithmic error is $\rho^{80} \approx 0.92^{80} \approx 1.1 \times 10^{-3}$ times
+the initial error --- essentially at machine precision relative to the noise floor $J^{\star}$.
+The residual $J = 0.4827 > J^{\star}$ at 80 iterations is the irreducible observation-noise
+floor, not algorithmic error.}
 \label{fig:q3_fval_A}
 \end{figure}
 
@@ -1730,7 +1776,14 @@ where $z_k$ is the LMO solution. Since $f$ is convex, $g_k \geq f(x_k) - f^{\sta
 so $g_k$ upper-bounds the optimality gap. The Frank--Wolfe convergence theorem implies
 $g_k = O(1/k)$, providing a stopping criterion that is computable at each iteration without
 knowing $f^{\star}$ --- a significant practical advantage over methods that require the
-optimal value.
+optimal value.  Moreover, $g_k = 0$ if and only if $x_k$ is a \emph{first-order stationary
+point} of the constrained problem: $g_k = 0 \Leftrightarrow \min_{z \in \mathcal{X}}\nabla f(x_k)^\top z
+= \nabla f(x_k)^\top x_k \Leftrightarrow \nabla f(x_k)^\top(z - x_k) \geq 0\ \forall z \in \mathcal{X}$,
+which is the constrained first-order optimality condition (the analogue of $\nabla f = 0$
+for unconstrained problems).  For convex $f$ this condition is also sufficient for global
+optimality.  In code, computing $g_k$ requires only the gradient (already computed for the
+gradient step) and the LMO solution (already computed for the iterate update), adding zero
+overhead to the Frank--Wolfe iteration.
 
 For the interior objective $f(x) = (x_1-1)^2 + (x_2-5)^2$, the mechanism behind the LMO
 oscillation near $x^{\star} = (1,5)$ can be traced precisely: the gradient
@@ -1825,6 +1878,21 @@ Key observations from Table~\ref{tab:cross_comparison}:
   Benchmark~C in 160 iterations using only function values, outperforming every first-order
   method including Nesterov. This underscores that convergence speed depends not only on
   gradient access but on how well the algorithm exploits local problem structure.
+\item The Polyak step with correct $f^{\star} = 0$ achieves $f = 0.0094$ after 120 iterations
+  (Table~\ref{tab:q1_final}), better than Nesterov ($f = 0.479$) despite using only first-order
+  information.  The key is that knowing $f^{\star}$ provides \emph{progress information} that
+  gradients alone cannot supply: $f(x_k) - f^{\star}$ quantifies how far the iterate is from
+  optimal in function value, encoding implicit curvature information.  For $L$-smooth strongly
+  convex $f$, the gradient-bound inequality $\|\nabla f(x)\|^2 \leq 2L(f(x)-f^{\star})$ implies
+  $\alpha_k = (f-f^{\star})/\|\nabla f\|^2 \geq 1/(2L)$, guaranteeing the Polyak step is
+  always at least as large as the standard GD step $1/(2L)$ --- the method automatically
+  adjusts to the problem's smoothness without requiring knowledge of $L$.  On non-convex
+  Rosenbrock, this self-calibration still works empirically: as $x_k$ approaches $x^{\star}$
+  along the valley, $f(x_k) \to 0$ while $\|\nabla f\|$ decreases proportionally, keeping
+  $\alpha_k$ at a useful scale throughout.  In this sense, knowing $f^{\star}$ is equivalent
+  to possessing \emph{oracle access} to the remaining optimisation gap, a piece of information
+  unavailable to pure gradient methods and explaining why Polyak outperforms every
+  gradient-only method on Benchmark~C.
 \end{enumerate}
 
 Figure~\ref{fig:all_methods_rosenbrock} consolidates all methods on Benchmark~C into a single
