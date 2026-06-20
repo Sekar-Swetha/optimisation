@@ -783,6 +783,33 @@ This projection interpretation explains the method's self-tuning nature and why
 the exact value of $f^\star$ is critical: the projection target is the true sub-level set.
 \end{remark}
 
+\begin{remark}[Online-to-batch conversion: from regret bounds to convergence rates]
+Adagrad was originally derived for the \emph{online convex optimization} (OCO) setting,
+where a learner chooses $x_t$ before seeing the loss function $f_t$.
+The regret after $T$ rounds is $R(T) = \sum_{t=1}^T f_t(x_t) - \min_x \sum_{t=1}^T f_t(x)$.
+
+\textbf{Adagrad regret bound:} For any $x^\star \in \mathbb{R}^d$ and bounded gradients $\|g_t\| \leq G$:
+\[
+R(T) \;\leq\; \frac{\|x_0 - x^\star\|_\infty}{2\alpha_0} \sum_{i=1}^d \sqrt{\sum_{t=1}^T g_{t,i}^2}
+\;\leq\; \frac{d\, G\, \|x_0 - x^\star\|_\infty}{2\alpha_0} \sqrt{T} = O(\sqrt{T}).
+\]
+
+\textbf{Online-to-batch conversion:} If $f_t = f$ (same function at each step, as in batch Q1),
+then $R(T)/T = \sum_t f(x_t)/T - f(x^\star) \leq 0$ is achievable by the averaged iterate
+$\bar{x}_T = (1/T)\sum_t x_t$, giving convergence $f(\bar{x}_T) - f^\star \leq R(T)/T = O(1/\sqrt{T})$.
+
+\textbf{Implication for Q1:} The Q1 experiments run Adagrad in the batch deterministic setting
+($f_t = f$ always). The $O(1/\sqrt{T})$ regret bound gives $O(1/\sqrt{T})$ convergence for
+the averaged iterate --- slower than the $O(1/T)$ rate of standard GD on smooth strongly convex $f$.
+This is not a contradiction: the Adagrad bound is designed for the harder online setting
+(adversarial $f_t$); on smooth strongly convex $f$, Adagrad's adaptivity means the effective
+step size adapts towards $1/L$, achieving a rate \emph{faster} than $O(1/\sqrt{T})$ in practice
+but without the same theoretical guarantee as GD's $O(1/T)$ on strongly convex objectives.
+The monotonically decreasing step size (denominator $\sqrt{G_k} \nearrow \infty$) means
+Adagrad eventually stagnates, which is why we observe it levelling off at the noise floor
+around the same iterations as GD, rather than diverging or accelerating further.
+\end{remark}
+
 \subsection{Contour Plots with Optimisation Trajectories}
 
 \begin{figure}[H]
@@ -1592,6 +1619,35 @@ still smaller than the irreducible floor $J^\star = 18$, confirming that the obs
 plateau is due to the observation noise (irreducible), not the step-size choice (reducible).
 \end{remark}
 
+\begin{remark}[SGD with momentum (SGDM) and the stochastic heavy ball]
+In practice, deep learning uses \emph{SGD with momentum} (SGDM), combining the stochastic
+mini-batch gradient with a heavy ball momentum term:
+\[
+m_{t+1} = \beta m_t + (1-\beta) g_t^{\mathcal{B}}, \qquad \theta_{t+1} = \theta_t - \alpha m_{t+1},
+\]
+where $g_t^{\mathcal{B}}$ is the mini-batch gradient and $\beta \in (0,1)$ is momentum.
+This is the \emph{stochastic heavy ball} or \emph{stochastic Polyak--Heavyball} method.
+
+\textbf{Variance reduction effect of momentum:}
+The exponential moving average $m_t = (1-\beta)\sum_{j=0}^t \beta^{t-j} g_j^{\mathcal{B}}$
+smooths out mini-batch noise: variance of $m_t$ decreases by a factor of $(1-\beta)^2/(1-\beta^2)
+\approx (1-\beta)/2$ relative to a single mini-batch gradient.
+For $\beta = 0.9$: variance reduction of $\approx 0.05\times$ (20$\times$ reduction),
+allowing a $\sqrt{20} \approx 4.5\times$ larger effective batch size.
+
+\textbf{Convergence:} For strongly convex smooth $J$, SGDM with decreasing step $\alpha_t = O(1/t)$
+converges at the same $O(1/t)$ rate as plain SGD (no theoretical acceleration).
+The practical benefit is the implicit variance reduction and the ability to use a larger
+effective step size, which is why SGDM is preferred over plain SGD in deep learning.
+
+\textbf{Comparison with Q2 mini-batch experiments:}
+The Q2 code uses plain mini-batch SGD without momentum. Adding $\beta = 0.9$ momentum
+to the $b = 5$ run would effectively increase the batch size to $\sim b_{\text{eff}} = b/(1-\beta) = 50$,
+reducing gradient noise by $10\times$ and allowing a larger step size $\alpha$ without oscillation.
+This would produce smoother loss curves and potentially faster per-epoch convergence,
+at no additional computation cost (momentum update is $O(d)$).
+\end{remark}
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{figures/q2_sgd_batch.pdf}
@@ -2335,6 +2391,37 @@ The key trade-off is that AD requires access to the computation graph
 (white-box setting), whereas FD applies to any callable objective (black-box).
 \end{remark}
 
+\begin{remark}[Forward-mode vs reverse-mode automatic differentiation]
+Automatic differentiation (AD) comes in two modes that differ in which direction the
+chain rule is applied through the computation graph.
+
+\textbf{Forward mode (tangent linear):}
+Computes the Jacobian-vector product $Jv = \partial f(x)/\partial x \cdot v$
+for a given tangent direction $v \in \mathbb{R}^n$.
+Running the computation alongside the forward pass, each scalar variable $a_i$ carries
+a ``tangent'' $\dot{a}_i = \partial a_i / \partial x_j$ for one input direction $j$.
+\emph{Cost}: one forward pass per input dimension. For $d$ inputs and $m$ outputs:
+total cost is $O(d \cdot C_{\text{fwd}})$ where $C_{\text{fwd}}$ is the forward pass cost.
+\emph{Best for}: $d \ll m$ (few inputs, many outputs); for $d = 2$ (Q4 benchmarks),
+forward-mode AD with two passes gives the full $2 \times m$ Jacobian exactly.
+
+\textbf{Reverse mode (adjoint / backpropagation):}
+Computes the vector-Jacobian product $v^T J = v^T \partial f(x)/\partial x$
+for a given co-tangent $v \in \mathbb{R}^m$.
+Stores the forward pass computation graph, then traverses it backwards propagating adjoints.
+\emph{Cost}: one backward pass (at most $O(5 C_{\text{fwd}})$ in practice).
+\emph{Best for}: $m \ll d$ (one or few outputs, many inputs); for scalar $f$ ($m = 1$),
+reverse mode gives the full $d$-dimensional gradient in one pass.
+
+\textbf{Application to Q4:}
+For the Q4 benchmarks ($d = 2$, scalar $f$), both modes give the same asymptotic cost ($O(1)$ passes).
+The choice matters for high-dimensional problems: for neural networks with $d = 10^8$ parameters
+and scalar loss ($m = 1$), reverse mode computes $\nabla f$ in one backward pass vs
+$10^8$ forward passes for forward mode.
+Finite differences ($O(d+1)$ passes) is always more expensive than reverse-mode AD but
+requires no computation graph and works for black-box $f$.
+\end{remark}
+
 \subsubsection{Nesterov Random Search}
 
 \begin{algorithm}[H]
@@ -3004,6 +3091,37 @@ Frank--Wolfe is related to primal-dual methods: the LP oracle step $z_k = \arg\m
 (where $g = \nabla f(x_k)$) corresponds to a dual ``ascent'' step that evaluates the dual
 function at the current primal iterate. The duality gap $g(x_k) = \nabla f(x_k)^T(x_k - z_k)$
 is precisely the Lagrangian gap between the primal and dual objectives at $(x_k, z_k)$.
+\end{remark}
+
+\begin{remark}[Sensitivity of the LP optimal value: perturbation theory]
+The \emph{sensitivity} of the optimal value $f^\star(\lambda)$ to perturbations in the
+constraint bounds $l$ and $u$ (or the objective $a$) is governed by the dual variables.
+
+For the Q6 LP $\min_{l \leq x \leq u} a^T x$ with optimal dual $(\mu^\star, \nu^\star)$:
+\[
+\frac{\partial f^\star}{\partial l_i} = \mu_i^\star \geq 0, \qquad
+\frac{\partial f^\star}{\partial u_i} = -\nu_i^\star \leq 0, \qquad
+\frac{\partial f^\star}{\partial a_i} = x_i^\star.
+\]
+This is the \emph{LP sensitivity} theorem: the dual variables are the shadow prices of the
+constraints, measuring how much the optimal value changes per unit relaxation.
+
+\textbf{Application to Q6:}
+At the optimal solution $x^\star = (0.5, -5)$ with dual $\mu^\star = (1, 2)$, $\nu^\star = (0, 0)$:
+\begin{itemize}[nosep]
+\item Increasing the lower bound $l_1 = 0.5 \to 0.5 + \varepsilon$: optimal value increases
+  by $\mu_1^\star \varepsilon = 1 \cdot \varepsilon$. The LP becomes $\min a^T x$ s.t. $x_1 \geq 0.5+\varepsilon$,
+  with new optimal $f^\star = (0.5+\varepsilon) + 2(-5) = -9.5 + \varepsilon$. Confirmed: $\partial f^\star / \partial l_1 = 1 = \mu_1^\star$.
+\item Decreasing $l_2 = -5 \to -5 - \varepsilon$: optimal decreases by $\mu_2^\star \varepsilon = 2\varepsilon$.
+  New optimal $f^\star = 0.5 + 2(-5 - \varepsilon) = -9.5 - 2\varepsilon$. Confirmed: $\partial f^\star / \partial l_2 = 2 = \mu_2^\star$.
+\item Changing objective from $a = [1, 2]^T$ to $a' = [1 + \delta, 2]^T$: optimal changes
+  by $x_1^\star \delta = 0.5 \delta$. New $f^\star = (1+\delta)(0.5) + 2(-5) = -9.5 + 0.5\delta$.
+\end{itemize}
+These sensitivity results are only valid within the \emph{basis stability range}:
+the optimal basis (which lower bounds are active) does not change as long as $a$ stays in
+the region where the same vertex $(0.5, -5)$ is optimal.
+For $a = [a_1, a_2]^T$ with $a_1 > 0$ and $a_2 > 0$: $(0.5, -5)$ is always optimal (lower-left vertex),
+so the sensitivity formula holds for all such $a$.
 \end{remark}
 
 \begin{figure}[H]
