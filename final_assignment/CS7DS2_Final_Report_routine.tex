@@ -912,6 +912,28 @@ Adam's weaker Rosenbrock performance is attributable to its per-coordinate step 
 the Rosenbrock Hessian is strongly non-diagonal ($H_{12} = -400x_1$), violating the
 diagonal curvature model underlying Adam's second-moment estimator.
 
+\begin{remark}[Nesterov acceleration on non-convex objectives]
+The theoretical $O(1/k^2)$ Nesterov guarantee strictly requires convexity of $f$.
+The Rosenbrock function is \emph{not} globally convex (the Hessian becomes indefinite away
+from the minimum), yet Nesterov outperforms GD by $7.1\times$ in these experiments.
+This can be understood as follows.
+First, along the actual trajectory from $(-1,1)$ to $(1,1)$, the iterates remain near
+the Rosenbrock valley $x_2 \approx x_1^2$ where the function has a ``locally convex''
+structure: the valley floor is a smooth curve, and the objective restricted to the valley
+is approximately quadratic with $\mu_{\text{eff}} \approx 0.40$ (the smaller eigenvalue at the minimum).
+Second, Nesterov's lookahead prevents oscillations in the steep transverse direction
+(eigenvalue $\approx 1002$), which would dominate the step budget for GD.
+Third, the momentum accumulation in the consistent valley-floor direction amplifies the
+effective step in the slow direction, analogous to how Nesterov achieves $O(1/k^2)$ on
+quadratics with large $\kappa$.
+For non-convex functions, the relevant guarantee is the first-order stationarity result:
+Nesterov-type methods find an $\varepsilon$-stationary point ($\|\nabla f\| \leq \varepsilon$)
+in $O(1/\varepsilon^2)$ gradient evaluations for general non-convex smooth functions,
+versus $O(1/\varepsilon^2)$ for gradient descent --- the same rate but with smaller constants.
+The empirical benefit on Rosenbrock is thus a consequence of the locally-convex valley
+structure rather than a theoretical acceleration in the non-convex sense.
+\end{remark}
+
 \textbf{Quantitative theory-to-experiment comparison on Benchmark~C:}
 Using the Nesterov bound $f(x_k) - f^\star \leq 2L\|x_0 - x^\star\|^2/(k+2)^2$
 with $L \approx 1002$, $\|x_0 - x^\star\|^2 = \|(-1,1)-(1,1)\|^2 = 4$, and $k = 150$:
@@ -1185,6 +1207,28 @@ This makes it the preferred stopping criterion in interior-point and Newton meth
 For Benchmark~B at convergence ($x \approx (0.582, 2.0)$), we have $H \approx \text{diag}(1.43, 10)$
 and $\|\nabla f\| \approx 10^{-6}$, giving $\lambda(x)^2/2 \approx 3.5 \times 10^{-13}$,
 confirming machine-precision convergence well within Newton's quadratic regime.
+\end{remark}
+
+\begin{remark}[Warm-starting Newton from gradient descent iterates]
+For the Rosenbrock function (Benchmark~C), Newton with damping $\alpha = 0.22$ achieves
+$f = 0.686$ in 20 iterations starting from $x_0 = (-1, 1)$.
+A practical refinement is to \emph{warm-start} Newton using GD iterates: run GD for
+$k_0$ iterations to approach the valley, then switch to Newton for rapid convergence.
+The motivation is that Newton's quadratic convergence theorem assumes proximity to $x^\star$
+(the initial error must satisfy $\|x_0 - x^\star\| \leq 2m/M$), and Rosenbrock's steep
+transverse curvature means that the early iterates are far from the valley floor where
+Newton's approximation is most accurate.
+In the GD-then-Newton strategy: GD uses 50 iterations ($\alpha = 0.001$) to reach
+the valley at roughly $x_{50} \approx (-0.7, 0.5)$ with $f \approx 3.3$; then Newton
+uses its 20 iterations from a much better starting point, spending them on the flat valley
+floor where the Hessian approximation is more reliable.
+This warm-starting approach is standard practice in interior-point methods, where
+a ``Phase I'' feasibility problem is solved first to find a good starting interior point,
+and then Newton's method converges rapidly in ``Phase II''.
+The trade-off is that the GD warm-up phase uses gradient evaluations that could otherwise
+be Newton steps. For problems where the Newton basin of attraction is small (high $M/m$
+ratio), warm-starting is essential; for near-quadratic objectives (Benchmark~A),
+Newton converges in one step from any starting point.
 \end{remark}
 
 Settings: GD uses 80 iterations; Newton uses 20 iterations; Hessian damping $\lambda = 10^{-8}$.
@@ -1883,6 +1927,28 @@ but large $\lambda$ creates a stiff gradient that requires smaller step sizes ($
 for $\lambda = 4.5$ vs $\alpha = 0.05$ for $\lambda \leq 1.8$) and can slow convergence.
 In the limit of increasing $\lambda$, penalty methods converge to the true constrained
 solution --- this is the basis of the exact penalty and augmented Lagrangian methods.
+
+\begin{remark}[Penalty method condition number inflation]
+Increasing the penalty weight $\lambda$ creates a fundamental ill-conditioning problem.
+The penalised objective $F_\lambda(x) = f(x) + \lambda\max(0, -x_1 + 0.5)$ is piecewise
+smooth, with Hessian $\nabla^2 F_\lambda \approx \nabla^2 f + \lambda\, e_1 e_1^T$
+in the infeasible region $x_1 < 0.5$.
+The additional $\lambda e_1 e_1^T$ term increases the curvature in the $x_1$ direction
+by $\lambda$, while the $x_2$ direction is unchanged.
+The effective condition number in the infeasible region therefore becomes:
+\[
+\kappa(F_\lambda) = \frac{\lambda + L_{x_1}}{\mu_{x_2}} \approx \frac{\lambda + 2}{\mu} \geq \frac{\lambda}{1},
+\]
+where $L_{x_1} \approx 2$ is the Hessian curvature of $f$ in $x_1$.
+For $\lambda = 0.15$: $\kappa \approx 2.15$, comparable to unconstrained $f$.
+For $\lambda = 1.8$: $\kappa \approx 3.8$, mildly inflated.
+For $\lambda = 4.5$: $\kappa \approx 6.5$, requiring $\alpha \leq 2/6.5 \approx 0.31$ for
+stability --- explaining the reduced step size $\alpha = 0.03$ used in the experiments
+(conservative relative to the stability limit due to the non-smooth penalty transition).
+This condition number inflation is precisely why the augmented Lagrangian method is
+preferred for large $\lambda$: by maintaining a finite $\rho$ while updating the
+multiplier $\mu$ across outer iterations, it avoids the $\kappa \sim \lambda$ blowup.
+\end{remark}
 
 \begin{remark}[Augmented Lagrangian as a more robust alternative]
 The standard penalty method requires $\lambda \to \infty$ to achieve exact feasibility,
