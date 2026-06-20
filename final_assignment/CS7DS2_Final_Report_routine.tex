@@ -237,6 +237,19 @@ The Heavy Ball method accumulates momentum by maintaining a velocity vector $z_k
 \end{equation}
 yielding convergence rate $\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k$ --- substantially faster than GD's $(1-1/\kappa)^k$. For Benchmark~A ($\kappa=1.12$): $\alpha^\star \approx 0.965$, $\beta^\star \approx 0.0033$ (the near-unit condition number makes momentum nearly useless). For Benchmark~B ($\kappa=10$): $\alpha^\star \approx 0.165$, $\beta^\star \approx 0.52$. The used parameters ($\alpha=0.045$, $\beta=0.88$ for Bench~A) differ from the theoretical optima; these are tuned empirically for stability given the non-quadratic nature of the objectives.
 
+The iteration count speedup from Heavy Ball over GD for the same convergence precision is:
+\begin{equation}
+\text{Speedup} = \frac{k_{\rm GD}}{k_{\rm HB}} = \frac{\log(r_{\rm HB})}{\log(r_{\rm GD})} = \frac{\log\!\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)}{\log\!\left(1-\frac{1}{\kappa}\right)} \xrightarrow{\kappa \to \infty} \frac{1}{2}\sqrt{\kappa},
+\end{equation}
+so Heavy Ball achieves an $O(\sqrt{\kappa})$ speedup over GD for large $\kappa$, identical in order to Nesterov's acceleration. However, unlike Nesterov, the Heavy Ball convergence guarantee applies only to \emph{quadratic} objectives; for general non-convex functions, Heavy Ball can diverge. On the experiments, the parameters were tuned empirically (not at the quadratic optima), since the benchmarks are non-quadratic.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q1_hb_theory.pdf}
+\caption{Q1: Heavy Ball theoretical analysis. \textbf{Top-left:} GD convergence factor $(1-1/\kappa)^k$ for different condition numbers --- higher $\kappa$ slows convergence dramatically. \textbf{Top-right:} Speedup ratio $k_{\rm GD}/k_{\rm HB}$ as a function of $\kappa$: Heavy Ball achieves $\approx\sqrt{\kappa}/2$ times fewer iterations, growing from near-1 (Bench~A, $\kappa=1.12$) to $\approx 25\times$ (Bench~C, $\kappa=2508$). \textbf{Bottom-left:} Optimal $\alpha^*$ (blue, left axis) decreases with $\kappa$ (larger curvature spread requires smaller steps), while $\beta^*$ (red, right axis) increases towards 1 (more momentum needed for ill-conditioned problems). The markers show where the three benchmarks lie --- Bench~C requires very small $\alpha^*$ and large $\beta^*$ near 1. \textbf{Bottom-right:} Effect of $\beta$ on Bench~A convergence ($\alpha=0.045$ fixed): $\beta=0$ is GD; the optimal $\beta^*=0.003$ (near 0 due to $\kappa=1.12$) differs little from GD; the used $\beta=0.88$ adds unnecessary momentum that causes oscillation but still converges; $\beta=0.97$ shows excessive momentum leading to slower convergence.}
+\label{fig:q1_hb_theory}
+\end{figure}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -419,7 +432,20 @@ The key distinction from Heavy Ball is the \emph{lookahead}: the gradient is eva
 \end{algorithmic}
 \end{algorithm}
 
-Adam combines first-moment momentum (reducing variance in the gradient direction) with per-coordinate second-moment scaling (RMSprop-style adaptation). Bias correction via $(1-\beta_1^t)$ and $(1-\beta_2^t)$ prevents the first few iterates from being biased towards zero due to zero initialisation of $m_0, v_0$. Typical defaults $\beta_1 = 0.9$, $\beta_2 = 0.999$ are used in practice; here $\beta_1$ is tuned per benchmark.
+Adam combines first-moment momentum (reducing variance in the gradient direction) with per-coordinate second-moment scaling (RMSprop-style adaptation). Bias correction via $(1-\beta_1^t)$ and $(1-\beta_2^t)$ prevents the first few iterates from being biased towards zero due to zero initialisation of $m_0, v_0$. To see why: without correction, at iteration $t=1$, $m_1 = (1-\beta_1)g_1$ and $\mathbb{E}[m_1] = (1-\beta_1)\mathbb{E}[g_1]$; dividing by $(1-\beta_1^1) = 1-\beta_1$ restores the unbiased estimate $\hat{m}_1 = g_1$. At $t=1$, the uncorrected step is $(1-\beta_1) \approx 0.1$ times the corrected step, causing dramatically small updates in early iterations.
+
+Without bias correction, Adam's effective step size in early iterations can be much smaller than intended:
+\begin{equation}
+\text{effective step} = \frac{\alpha\, m_t}{\sqrt{v_t} + \varepsilon} \approx \frac{\alpha(1-\beta_1^t)}{\sqrt{1-\beta_2^t}} \cdot \frac{g}{\sqrt{g^2}} = \alpha\sqrt{\frac{1-\beta_1^t}{1-\beta_2^t}} \cdot \text{sign}(g),
+\end{equation}
+where for $t=1$: $\sqrt{(1-\beta_1)/(1-\beta_2)} = \sqrt{0.1/0.001} \approx 10$ for $\beta_2=0.999$ --- but this is amplified by the step size while with correction, $\sqrt{\hat{v}_t} \approx |g|$ so the effective step magnitude is $\approx \alpha$. Typical defaults $\beta_1 = 0.9$, $\beta_2 = 0.999$ are used in practice; here $\beta_1$ is tuned per benchmark.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_adam_bias_correction.pdf}
+\caption{Q2 Adam analysis. \textbf{Left:} Bias in first moment $m_t$ (blue) and $\sqrt{v_t}$ (red) vs bias-corrected $\hat{m}_t, \sqrt{\hat{v}_t}$ for a constant gradient $g=2$. Without correction, the moments are heavily biased towards zero in early iterations (e.g., $m_1 = 0.2$ vs $\hat{m}_1 = 2.0$ at $t=1$), fully converging to the true value only after $\sim 30$ iterations for $\beta_2=0.999$. \textbf{Centre:} Effective step size $\alpha\hat{m}_t/(\sqrt{\hat{v}_t}+\varepsilon)$ with (blue) and without (red) bias correction. Without correction, early steps are only $\sim 10\%$ of the intended $\alpha=0.12$, significantly slowing convergence in the first $\sim 20$ iterations. With correction, the effective step is close to $\alpha$ throughout. \textbf{Right:} Effect of $\beta_1$ on convergence: small $\beta_1$ (0.5--0.7) gives faster initial descent but higher steady-state oscillation; large $\beta_1$ (0.9--0.99) gives smoother convergence but slower initial progress. The experimentally used $\beta_1=0.80$ (for Bench~B) represents a good intermediate choice.}
+\label{fig:q2_adam_bias}
+\end{figure}
 
 \subsection{Hyperparameter Settings}
 
@@ -627,6 +653,13 @@ The Newton step at $x_k$ is $p_k = [\nabla^2 f(x_k)]^{-1}\nabla f(x_k)$, obtaine
 \end{algorithm}
 
 Newton's method achieves \emph{quadratic} local convergence near the optimum (Theorem~\ref{thm:newton_convergence}) when the Hessian is invertible and $\alpha = 1$. The Tikhonov regularisation $\lambda I$ ensures positive definiteness when the Hessian is near-singular or indefinite (as can occur on Rosenbrock far from the optimum).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q3_newton_quadratic.pdf}
+\caption{Q3: Demonstration of Newton's quadratic convergence on Benchmark~B (full Newton, $\alpha=1$, no regularisation). \textbf{Left:} Log-distance $\|x_k - x^\star\|$ vs iteration. Newton (blue) drops from $\|x_0 - x^\star\|\approx 2.2$ to machine precision ($\sim 10^{-14}$) in only 8 iterations. GD (red) requires all 25 shown iterations to reduce the distance by the same factor. \textbf{Right:} Log-log plot of $\|x_{k+1}-x^\star\|$ vs $\|x_k-x^\star\|$ --- for quadratic convergence, this plot has slope 2 (dashed black), i.e., each step squares the error: $e_{k+1} \leq C e_k^2$. Newton's data (blue circles) follow the slope-2 line closely in the local convergence regime, directly confirming Theorem~\ref{thm:newton_convergence}. GD's data (red squares) follow slope 1 (dashed red), confirming linear convergence $(e_{k+1} \approx \rho e_k)$ with constant ratio $\rho = (1-1/\kappa)$.}
+\label{fig:q3_newton_quad}
+\end{figure}
 
 \begin{theorem}[Newton Quadratic Convergence]
 \label{thm:newton_convergence}
