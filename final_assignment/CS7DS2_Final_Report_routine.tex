@@ -813,6 +813,15 @@ full gradient:
 where $\sigma_i^2$ is the per-sample gradient variance in coordinate $i$ and $b$ is the
 batch size.  Larger batches reduce variance but perform fewer parameter updates per epoch.
 
+\paragraph{Sampling strategy.} The implementation uses \emph{shuffle-then-partition}: at
+the start of each epoch, the $m = 1000$ data indices are randomly permuted, then divided
+into contiguous mini-batches.  This is the standard practice in deep learning.  Sampling
+\emph{with replacement} (i.i.d.\ mini-batches) gives the same variance in expectation but
+may repeat samples within an epoch.  Sampling in \emph{fixed order} (no shuffling) would
+be harmful if data were class-ordered --- each mini-batch would see only one class and the
+gradient estimate would be severely biased.  For this assignment's i.i.d.\ Gaussian data,
+the ordering does not matter.
+
 \begin{algorithm}[H]
 \caption{Mini-Batch SGD}
 \label{alg:sgd}
@@ -950,7 +959,14 @@ $x_0 - \alpha g'(x_0)$ for any reasonable $\alpha$.}
 \end{algorithm}
 
 The Newton direction $p_k = H_k^{-1} g_k$ minimises the local quadratic model of $f$ around
-$x_k$.  Near the minimiser, Newton's method exhibits \textbf{quadratic convergence}:
+$x_k$.  Viewed differently, Newton's method is \emph{gradient descent with a per-coordinate
+step derived from the Hessian}: the update $x_{k+1} = x_k - \alpha H_k^{-1} g_k$ applies
+a different scaling to each gradient component, determined by the local curvature.  When
+$H_k$ is diagonal (as for Benchmark~B near $x^{\star}$), Newton's update is
+$\Delta x_i = -\alpha g_i / H_{ii}$, exactly analogous to Adam's $\Delta x_i = -\alpha \hat{m}_i /
+\sqrt{\hat{v}_i}$ --- but with the true diagonal curvature $H_{ii}$ rather than an
+exponentially-smoothed estimate $\sqrt{\hat{v}_i} \approx \sqrt{H_{ii}^2}$.
+Near the minimiser, Newton's method exhibits \textbf{quadratic convergence}:
 \begin{equation}
 \|x_{k+1} - x^{\star}\| \leq C\|x_k - x^{\star}\|^2,
 \end{equation}
@@ -988,6 +1004,18 @@ may overshoot when the Hessian is not a perfect quadratic model.  On Benchmark~B
 sinusoidal term $\sin(x_1)$ introduces third-order residuals, so $\alpha = 0.85$ provides
 a conservative step.  On Rosenbrock, the Hessian changes rapidly and the quadratic model
 is only locally valid; $\alpha = 0.22$ is a damped step to prevent divergence far from $x^{\star}$.
+
+\begin{remark}[Practical Newton variants]
+The \textbf{trust region} approach replaces the fixed damped step $\alpha < 1$ with an
+adaptive step that expands when the quadratic model accurately predicts the actual
+decrease and contracts when it does not.  This provides more principled control than
+a fixed $\alpha$.
+\textbf{L-BFGS} (Limited-memory BFGS) avoids computing the Hessian entirely by building
+a rank-$m$ approximation from the last $m$ gradient difference pairs
+$\{(s_k = x_{k+1} - x_k, y_k = g_{k+1} - g_k)\}_{k}$.  For moderate-scale problems
+($d$ up to $\sim 10^6$), L-BFGS is the default second-order method (used by
+\texttt{scipy.optimize} and \texttt{sklearn}'s L-BFGS solver).
+\end{remark}
 
 \subsection{Convergence Comparison}
 
@@ -1366,6 +1394,17 @@ the same linear rate as unconstrained GD.  When the constraint is inactive at $x
 finite number of iterations and the algorithm behaves identically to unconstrained GD.
 \end{proposition}
 
+\begin{remark}[FISTA: Nesterov acceleration for PGD]
+Nesterov acceleration extends naturally to projected gradient descent as the
+\textbf{FISTA} (Fast Iterative Shrinkage-Thresholding Algorithm) update:
+\begin{equation}
+\tilde{x}_k = x_k + \tfrac{k-1}{k+2}(x_k - x_{k-1}), \qquad
+x_{k+1} = \Pi_{\mathcal{C}}(\tilde{x}_k - \alpha \nabla f(\tilde{x}_k)),
+\end{equation}
+achieving $O(1/k^2)$ convergence for the constrained problem.  By contrast, no clean
+Nesterov extension exists for Adam or RMSprop in the projected gradient framework.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{Penalty Method (Gradient Descent on Penalised Objective)}
 \label{alg:penalty}
@@ -1489,6 +1528,13 @@ Penalty $\lambda=4.5$  & $(0.582, 2.000)$ & 0.7244 & 0.0000 & $\sim 8$ \\
       throughout while navigating along the boundary, whereas penalty methods would converge
       to a nearby interior point (which approaches the constrained optimum as $\lambda \to
       \infty$).
+
+\item \textbf{Alternative: change of variables.} The constraint $x_1 \geq 0.5$ can be
+      eliminated via the substitution $x_1 = 0.5 + e^{z_1}$ (always $\geq 0.5$) and
+      running unconstrained GD on $(z_1, x_2)$.  This avoids the projection oracle entirely.
+      However, the transformation changes the Hessian structure and can worsen the condition
+      number (the Jacobian of the map $z_1 \mapsto e^{z_1}$ introduces coordinate-dependent
+      scaling).  For simple constraints like half-spaces, projection is generally preferable.
 \end{itemize}
 
 % ============================================================
