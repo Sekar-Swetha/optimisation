@@ -261,7 +261,27 @@ while $(f(x_k) - f^{\star}) > 0$, causing divergence.
 automatically decreases for coordinates with historically large gradients and increases for those with
 small gradients. The cumulative nature means the effective step size is monotonically decreasing,
 which guarantees stability but can cause premature convergence on non-stationary problems.
-In the online learning setting, Adagrad achieves a regret bound of $O(\sqrt{T})$ over $T$ rounds.
+
+\noindent \textbf{Adagrad regret bound:}
+In the online convex optimisation setting where $f_t(x)$ is an arbitrary convex function at
+round $t$, Adagrad achieves the following \emph{regret bound} (Duchi et al., 2011):
+\begin{equation}
+\label{eq:adagrad_regret}
+R_T = \sum_{t=1}^{T} f_t(x_t) - \min_{x} \sum_{t=1}^T f_t(x) \leq \frac{\alpha_0}{2}\sum_{i=1}^n \sqrt{G_T^{(i)}} + C,
+\end{equation}
+where $G_T^{(i)} = \sum_{t=1}^T g_t^{(i)2}$ is the cumulative squared gradient for coordinate $i$,
+and $C$ is a constant depending on the domain diameter.
+This bound has the key property that the regret decomposes \emph{per coordinate}, so coordinates
+with small cumulative gradients (``sparse'' features) receive higher learning rates and thus
+faster per-coordinate convergence.
+In the worst case, $\sum_i \sqrt{G_T^{(i)}} \leq n\sqrt{T}$, recovering the $O(\sqrt{T})$
+bound of standard SGD.
+However, if the gradient is sparse (most coordinates have zero or near-zero gradients),
+the bound can be much tighter, making Adagrad particularly effective for natural language
+processing and other sparse gradient problems.
+
+For Benchmark A (non-sparse, all coordinates receive similar gradients), Adagrad's advantage
+over GD is minimal, consistent with the observations in Table~\ref{tab:q1_final}.
 
 \begin{algorithm}[H]
 \caption{RMSprop}
@@ -585,6 +605,24 @@ This $O(1/k^2)$ rate is \emph{optimal} among all first-order methods: no gradien
 algorithm can guarantee better than $O(1/k^2)$ on the class of convex $L$-smooth functions
 \textup{(Nesterov's lower bound)}.
 \end{theorem}
+
+\noindent \textbf{Why $O(1/k^2)$ is optimal (Nesterov's lower bound):}
+Nesterov proved in 1983 that for any first-order algorithm $\mathcal{A}$ and any $k \leq (n-1)/2$,
+there exists an $L$-smooth convex function $f$ such that the algorithm's output after $k$
+gradient queries satisfies:
+\begin{equation}
+f(x_k) - f^{\star} \geq \frac{3L\|x_0 - x^{\star}\|^2}{32(k+1)^2}.
+\end{equation}
+The construction uses a \emph{Krylov-space argument}: after $k$ first-order oracle calls,
+the information accessible is at most $\mathrm{span}\{\nabla f(x_0), \nabla f(x_1), \ldots, \nabla f(x_{k-1})\}$,
+which has dimension at most $k$, so the method cannot have eliminated all $n$-dimensional
+error.
+Since GD's $O(1/k)$ rate is strictly below this lower bound, GD is \emph{suboptimal} for
+convex smooth minimisation, and Nesterov's method closes this gap exactly.
+
+For \emph{strongly convex} functions (condition number $\kappa$), the analogous lower bound is
+$(1 - 2/(\sqrt{\kappa}+1))^k$, and Heavy Ball / Nesterov achieve this rate, making them
+\emph{optimal} first-order methods for strongly convex objectives.
 
 \noindent Compared to GD's $O(1/k)$ rate, Nesterov's $O(1/k^2)$ provides a
 $\sim k$-fold speedup in terms of function value suboptimality at iteration $k$.
@@ -998,6 +1036,28 @@ definiteness when $H$ is ill-conditioned or indefinite (which can occur for the 
 function far from the minimum).
 A step size $\alpha < 1$ further damps the Newton step to prevent overshooting when the
 Hessian changes rapidly.
+
+\noindent \textbf{Affine invariance:} A fundamental theoretical property of Newton's method is
+\emph{affine invariance}: the Newton iterates are identical under any invertible linear change of
+variables $y = Ax$.
+To see this, note that for $g(y) = f(A^{-1}y)$, the Newton step is
+$y_{k+1} = y_k - (\nabla^2 g(y_k))^{-1}\nabla g(y_k) = Ax_k - A H_k^{-1} g_k = A x_{k+1}$.
+This invariance means Newton's method is unaffected by the condition number $\kappa$: a
+poorly-conditioned quadratic and a well-conditioned one are solved in the same number of steps
+(1 step for any quadratic with $\alpha = 1$).
+This is in stark contrast to gradient descent, where the convergence rate is $(1-1/\kappa)^k$,
+and to Nesterov, where strongly convex convergence rate is $(1-1/\sqrt{\kappa})^k$.
+The condition number $\kappa \approx 2000$ of Benchmark C has no effect on Newton's
+convergence once the Rosenbrock function enters the local quadratic regime,
+which is why Newton dramatically outperforms gradient methods on this benchmark.
+
+\noindent \textbf{Practical note on Hessian computation:}
+For the 2D benchmark functions, the Hessian is computed analytically:
+for Benchmark B, $H = \text{diag}(2 - \sin(x_1), 10)$; for Rosenbrock,
+$H_{11} = 2 + 1200x_1^2 - 400x_2$, $H_{12} = H_{21} = -400x_1$, $H_{22} = 200$.
+In general, computing the exact Hessian requires $O(n^2)$ second-derivative evaluations;
+for large $n$, this motivates quasi-Newton methods (BFGS, L-BFGS) that estimate the Hessian
+from first-order information alone.
 
 \begin{theorem}[Quadratic Convergence of Newton's Method]
 Suppose $f$ is twice continuously differentiable, $\nabla^2 f$ is $M$-Lipschitz continuous,
@@ -1699,6 +1759,54 @@ penalty with a dual variable estimate, achieving exact feasibility without $\lam
 \label{fig:q5_penalty}
 \end{figure}
 
+\subsection{Augmented Lagrangian Method: Improvement Over Penalty}
+\label{subsec:alm}
+
+The \emph{augmented Lagrangian method} (ALM, also called the \emph{method of multipliers})
+addresses the fundamental weakness of the penalty method by introducing an explicit Lagrange
+multiplier estimate $\mu_k$ that is updated alongside the primal variable.
+The augmented Lagrangian for the constraint $x_1 \geq 0.5$ (equivalently $h(x) = 0.5 - x_1 \leq 0$) is:
+\begin{equation}
+\mathcal{L}_{\rho}(x, \mu) = f(x) + \mu \max(0,\, 0.5 - x_1) + \frac{\rho}{2}\max(0,\, 0.5 - x_1)^2.
+\end{equation}
+Each ALM iteration consists of two steps:
+\begin{enumerate}[nosep]
+\item \textbf{Primal update:} $x_{k+1} = \arg\min_x \mathcal{L}_{\rho}(x, \mu_k)$
+  (solved approximately with a gradient method).
+\item \textbf{Dual update:} $\mu_{k+1} = \mu_k + \rho\,\max(0,\, 0.5 - (x_{k+1})_1)$.
+\end{enumerate}
+
+The key insight is that the dual variable $\mu_k$ provides a \emph{running estimate} of the
+Lagrange multiplier $\mu^{\star}$.
+As $\mu_k \to \mu^{\star}$, the augmented Lagrangian subproblem approximates the true
+constrained problem, so even a \emph{finite} (fixed) $\rho$ achieves exact feasibility at
+the limit.
+Contrast this with the pure penalty method, which requires $\lambda \to \infty$ (and
+correspondingly $\alpha \to 0$) to achieve exact feasibility.
+
+\textbf{Convergence comparison:}
+\begin{table}[H]
+\centering
+\caption{Q5: Comparison of penalty method and ALM.}
+\label{tab:alm_comp}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Exact feasibility?} & \textbf{Condition num.} & \textbf{Convergence} & \textbf{Oracle} \\
+\midrule
+Penalty ($\lambda = 4.5$) & Approx.\ only & $O(\lambda)$ growth & Linear for each $\lambda$ & $\nabla f$ \\
+ALM (fixed $\rho$)  & Yes (as $k\to\infty$) & Fixed $O(\rho)$ & Linear (superlinear under SC) & $\nabla f$ \\
+Projected GD        & Always          & Same as $f$        & Linear (SC) & $\nabla f$ + proj. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent For this problem where $\mu^{\star} = 0$ (the constraint is inactive at the optimum),
+the dual update $\mu_{k+1} = \max(0, \mu_k + \rho\max(0, 0.5 - (x_{k+1})_1)) \to 0$
+automatically, and ALM reduces to a standard penalty method for this specific instance.
+The power of ALM is most evident when the constraint \emph{is} active (e.g., if the
+unconstrained minimum were at $x_1^{\star} = 0.2 < 0.5$), where $\mu^{\star} > 0$ and the
+penalty method would require $\lambda \to \infty$ while ALM converges with fixed $\rho$.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -1756,6 +1864,19 @@ Since $z_k \in \mathcal{X}$ and $x_k \in \mathcal{X}$ (by induction), the convex
 $\beta x_k + (1-\beta) z_k \in \mathcal{X}$ automatically, without any projection.
 This is the key advantage for constraint sets where projection is expensive but LMO is cheap
 (e.g., nuclear norm ball, spectrahedra, transportation polytopes).
+
+\noindent \textbf{Sparsity-promoting property:}
+A distinctive structural property of Frank--Wolfe is that iterates are always convex
+combinations of vertices of $\mathcal{X}$.
+Starting from any initial $x_0 \in \mathcal{X}$, after $k$ steps, $x_k$ lies in the convex
+hull of at most $k+1$ vertices.
+For structured constraint sets (e.g., the probability simplex $\{p \geq 0 : \sum_i p_i = 1\}$),
+this means the iterates are automatically \emph{sparse}: at most $k+1$ coordinates are non-zero.
+This makes Frank--Wolfe the natural choice for problems like LASSO (L1 ball),
+low-rank matrix optimisation (nuclear norm ball), and structural SVM training.
+For the box constraint in this experiment, the sparsity interpretation is less relevant
+since all vertices have both coordinates at their bounds, but the convex-combination
+structure ensures the iterates stay in the feasible box without any projection step.
 
 \begin{theorem}[Frank--Wolfe Convergence]
 For a convex $L$-smooth function and a convex compact set $\mathcal{X}$ with diameter $D$,
