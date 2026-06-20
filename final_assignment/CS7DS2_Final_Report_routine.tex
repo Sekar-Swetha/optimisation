@@ -342,6 +342,33 @@ the numerator $f(x_k) - f^\star$ remains bounded away from zero while $\|g_k\| \
 causing $\alpha_k \to \infty$ and divergence.
 \end{remark}
 
+\begin{remark}[Polyak--\L{}ojasiewicz inequality: linear convergence without strong convexity]
+The \emph{Polyak--\L{}ojasiewicz (PL) inequality} (also called the gradient dominance condition)
+is a strictly weaker assumption than strong convexity that still guarantees linear convergence
+for gradient descent:
+\[
+\|\nabla f(x)\|^2 \;\geq\; 2\mu\bigl(f(x) - f^\star\bigr) \quad \forall x.
+\]
+Under PL and $L$-smoothness, gradient descent with step $\alpha = 1/L$ satisfies:
+\[
+f(x_{k+1}) - f^\star \;\leq\; \left(1 - \frac{\mu}{L}\right)^k \bigl(f(x_0) - f^\star\bigr),
+\]
+the same rate as for strongly convex objectives.
+Crucially, PL does \emph{not} require convexity or uniqueness of the minimiser: it allows
+multiple global minima, saddle points that are not minimisers, and non-convex landscapes.
+The condition is satisfied by:
+\begin{itemize}[nosep]
+\item Every strongly convex function (with the same $\mu$);
+\item Over-parameterised linear models ($X\theta = y$ when the system is under-determined);
+\item Certain neural network loss landscapes near global minima (empirically).
+\end{itemize}
+For Benchmarks~A and B (quadratic objectives), strong convexity holds with $\mu = \lambda_{\min}(H)$,
+so PL is automatically satisfied.
+The Polyak step size's linear convergence guarantee (see Remark above) is precisely a
+consequence of the PL inequality: the denominator $\|\nabla f(x_k)\|^2$ lower-bounds
+$2\mu(f(x_k) - f^\star)$ via PL, giving $\alpha_k \leq 1/(2\mu)$ adaptively.
+\end{remark}
+
 \begin{algorithm}[H]
 \caption{Adagrad}
 \label{alg:adagrad}
@@ -1302,6 +1329,40 @@ on smooth convex problems, but it is information-theoretically optimal for stoch
 first-order methods on non-smooth objectives.
 \end{remark}
 
+\begin{remark}[Variance reduction: SVRG and SAGA as bridges between SGD and GD]
+The fundamental limitation of SGD on finite-sum objectives $f(\theta) = \frac{1}{m}\sum_{i=1}^m f_i(\theta)$
+is persistent gradient noise even near convergence: even with $\theta$ at the optimum, a
+single-sample gradient $\nabla f_i(\theta^\star) \neq 0$ in general.
+\emph{Variance reduction} methods eliminate this noise while retaining SGD's cheap per-step cost.
+
+\textbf{SVRG} (Stochastic Variance-Reduced Gradient, Johnson \& Zhang 2013): At the start
+of each epoch, compute and store the full gradient $\tilde{g} = \nabla f(\tilde\theta)$ at a
+snapshot $\tilde\theta$.
+Each inner step uses the corrected gradient:
+\[
+v_k = \nabla f_{i_k}(\theta_k) - \nabla f_{i_k}(\tilde\theta) + \tilde{g},
+\]
+which is unbiased ($\mathbb{E}[v_k] = \nabla f(\theta_k)$) but has variance $O(\|\theta_k - \tilde\theta\|^2)$
+that vanishes as $\theta_k \to \tilde\theta$.
+This gives \emph{linear convergence} $O((1-\mu/L)^k)$ for $\mu$-strongly convex $f$ ---
+the same rate as full gradient descent, with per-step cost $O(1)$ instead of $O(m)$.
+
+\textbf{SAGA} (Defazio et al.\ 2014): Stores all $m$ gradient vectors $\{\nabla f_i(\phi_i)\}$
+in a table, and on each step replaces one entry.
+The SAGA update uses $\nabla f_{i_k}(\theta_k) - \nabla f_{i_k}(\phi_{i_k}) + \frac{1}{m}\sum_j \nabla f_j(\phi_j)$
+as an unbiased, lower-variance gradient estimate.
+SAGA achieves the same linear rate as SVRG but with better constants and no inner-loop
+epoch structure (making it more amenable to asynchronous distributed implementations).
+
+\textbf{Relevance to Q2 experiments:}
+For Benchmark~A ($m = 1000$ samples), a full gradient step costs $m = 1000$ evaluations.
+SVRG would perform a full gradient evaluation every $s = 2m = 2000$ inner steps
+(cost $\approx 3 \times$ per epoch), yet achieve linear convergence to \emph{zero} noise floor
+rather than the $\sigma^2/2 \approx 0.48$ floor observed in SGD.
+The Q2 mini-batch experiments converge to the irreducible noise floor; SVRG/SAGA would
+converge below it (to the true minimum $J(\theta^\star)$, not the empirical optimum of the noisy $y$).
+\end{remark}
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
 \label{sec:q3}
@@ -1586,6 +1647,37 @@ For the three benchmarks: L-BFGS with $m = 5$ would converge in $\sim 3$--$5$ it
 on Benchmark~A (similar to Newton), $\sim 4$--$8$ on Benchmark~B, and potentially fewer
 iterations than damped Newton on Benchmark~C (where Newton's damping $\alpha = 0.22$ makes
 it effectively sub-optimal).
+\end{remark}
+
+\begin{remark}[Conjugate gradient method: between gradient descent and Newton]
+The \emph{Conjugate Gradient} (CG) method occupies the space between gradient descent
+(cheap per step, slow convergence) and Newton's method (expensive per step, quadratic convergence).
+For the quadratic $f(x) = \frac{1}{2}x^T A x - b^T x$ with $A \succ 0$, CG finds the exact
+minimiser in at most $d$ steps using only matrix-vector products $Av_k$, at cost $O(d^2)$
+total versus Newton's single $O(d^3)$ Cholesky factorisation.
+The iterates are $A$-conjugate:
+\[
+p_k^T A p_j = 0 \quad \text{for all } j \neq k,
+\]
+so each step minimises over an expanding Krylov subspace $\mathcal{K}_k = \text{span}\{r_0, Ar_0, \ldots, A^{k-1}r_0\}$
+(where $r_0 = b - Ax_0$ is the initial residual).
+
+\textbf{Convergence rate for quadratics:}
+\[
+\|x_k - x^\star\|_A \;\leq\; 2\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k \|x_0 - x^\star\|_A,
+\]
+where $\kappa = \lambda_{\max}/\lambda_{\min}$ is the condition number.
+For Benchmark~A ($\kappa \approx 1.06$): $(\sqrt{1.06}-1)/(\sqrt{1.06}+1) \approx 0.015$,
+so CG would converge in $\lesssim 2$ iterations --- similarly fast to Newton's 1 step.
+For Benchmark~C (Rosenbrock, $\kappa \approx 2504$ near $x^\star$): CG would require
+$O(\sqrt{2504}) \approx 50$ steps on the local quadratic approximation, versus 1 Newton step.
+
+\textbf{Non-linear CG (Fletcher--Reeves, Polak--Ribi\`ere):}
+For non-quadratic $f$, the conjugacy direction is updated using gradient information:
+$p_{k+1} = -\nabla f(x_{k+1}) + \beta_k p_k$ where $\beta_k^{FR} = \|\nabla f_{k+1}\|^2/\|\nabla f_k\|^2$.
+This provides super-linear convergence with reset to steepest descent every $d$ steps.
+Nonlinear CG on Benchmark~C (Rosenbrock) would outperform SGD-style methods but requires
+line search per iteration, similar cost to L-BFGS but without Hessian approximation.
 \end{remark}
 
 \begin{remark}[Quantitative Newton convergence on Benchmark B]
@@ -2581,6 +2673,40 @@ Frank--Wolfe with only a linear oracle; it would require projection or a stronge
 The practitioner's conclusion: prefer Frank--Wolfe only when projection is genuinely
 expensive (e.g., nuclear norm ball or spectrahedron constraints), and use projected
 gradient descent when a cheap projection is available.
+\end{remark}
+
+\begin{remark}[Interior-point methods and their contrast with Frank--Wolfe]
+\emph{Interior-point methods} (IPMs) provide an alternative approach to LP and constrained
+optimisation that contrasts sharply with Frank--Wolfe's vertex-visiting behaviour.
+
+\textbf{Barrier method:} Replace the constrained problem $\min_x c^T x \text{ s.t. } Ax \leq b$
+with the unconstrained barrier sequence:
+\[
+\min_x \; c^T x - \frac{1}{t} \sum_i \log(b_i - a_i^T x), \quad t \to \infty.
+\]
+The log-barrier $-\frac{1}{t}\log(\cdot)$ enforces feasibility; as $t \to \infty$, the
+barrier minimiser $x^\star(t)$ traces the \emph{central path} converging to the LP optimum.
+
+\textbf{Polynomial complexity:} The primal-dual IPM solves LP in $O(\sqrt{n} \log(1/\varepsilon))$
+Newton steps, each costing $O(n^3)$ (or $O(n^{2.37})$ with fast matrix multiplication).
+This is polynomial in $n$ and $d$ --- unlike the simplex method, which is polynomial
+in practice but exponential in worst case.
+
+\textbf{Contrast with Frank--Wolfe on Q6:}
+\begin{itemize}[nosep]
+\item Frank--Wolfe stays on the boundary (vertices of $[-1,1]^2$); IPM stays \emph{interior}.
+\item Frank--Wolfe requires only LP subproblem solves ($O(d)$ per step); IPM requires Newton
+  steps ($O(d^3)$ per step, but $O(\sqrt{d}\log(1/\varepsilon))$ total Newton steps).
+\item For the small Q6 LP ($d = 2$, box constraint), both methods converge quickly. IPM's
+  advantage emerges at scale: for $d = 10^4$ variables, Frank--Wolfe needs $O(1/\varepsilon)$
+  LP solves while IPM needs $O(\sqrt{d}\log(1/\varepsilon)) \approx 100\log(1/\varepsilon)$ Newton steps.
+\end{itemize}
+
+\textbf{Warm starting:} IPM central paths can be initialised from any strictly feasible
+interior point. For the Q6 box constraint $x \in [-1,1]^2$, the warm-start point is the
+origin $x = (0, 0)$ (interior of the box), which is far from where Frank--Wolfe starts
+(a vertex). This interior initialisation is why IPMs work well in practice but make
+cold-start restarts expensive.
 \end{remark}
 
 % ============================================================
