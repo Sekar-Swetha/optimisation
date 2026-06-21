@@ -606,6 +606,26 @@ where $\tau > 0$ is the clipping threshold. This is standard practice in recurre
 An important but often overlooked property of SGD is its role as an \emph{implicit regulariser}. For overparameterised models (where the number of parameters $d \gg m$ samples), there are infinitely many solutions with zero training loss. Among these, GD converges to the \emph{minimum-norm} solution $\theta^{\star} = \arg\min_{\theta: J(\theta)=0} \|\theta\|$, while SGD with small batches tends to find solutions with better \emph{generalisation} (lower test error). Intuitively, the gradient noise in SGD acts as a random perturbation that steers the iterate away from sharp minima (high Hessian trace) and towards flat minima, which are known to generalise better (Keskar et al., 2016). For Benchmark~A (a well-specified, underparameterised problem), this effect is absent: all methods converge to the unique OLS minimiser and the implicit regularisation of SGD provides no benefit.
 \end{remark}
 
+\begin{remark}[Variance Reduction: SVRG and SAGA]
+A fundamental limitation of standard mini-batch SGD is that its convergence rate degrades with gradient variance: even for strongly convex $f$, the best achievable rate with fixed step size is a noise floor rather than linear convergence to $x^{\star}$. \emph{Variance reduction} methods eliminate this noise floor by periodically anchoring the stochastic gradient to a full gradient snapshot. Two leading methods are:
+\begin{itemize}[nosep,leftmargin=*]
+\item \textbf{SVRG} (Johnson \& Zhang, 2013): every $s$ steps, compute a full gradient $\tilde{\nabla} = \nabla f(\tilde{x})$ at a snapshot $\tilde{x}$. The stochastic update uses a control variate:
+\begin{equation}
+g_k = \nabla f_{i_k}(x_k) - \nabla f_{i_k}(\tilde{x}) + \tilde{\nabla},
+\end{equation}
+which is unbiased ($\mathbb{E}[g_k] = \nabla f(x_k)$) but has variance $O(\|x_k - \tilde{x}\|^2)$, shrinking to zero as $x_k \to x^{\star}$. SVRG achieves \emph{linear} convergence $O((1-\mu/(2L))^k)$ with $O(m)$ gradient evaluations per effective pass --- matching full GD rate.
+\item \textbf{SAGA} (Defazio et al., 2014): stores the last gradient $\nabla f_i(\phi_i)$ for every data point $i$, and updates only the sampled component at each step. The update $g_k = \nabla f_{i_k}(x_k) - \nabla f_{i_k}(\phi_{i_k}) + \frac{1}{m}\sum_j \nabla f_j(\phi_j)$ similarly achieves linear convergence without periodic snapshot recomputation, at the cost of $O(md)$ storage.
+\end{itemize}
+Figure~\ref{fig:q2_svrg} illustrates this empirically and theoretically: SVRG achieves linear convergence matching full GD (per epoch), whereas fixed-step SGD plateaus at a noise floor. For Benchmark~A with $m = 1000$ samples, SVRG/SAGA would converge at the full GD linear rate $O((1-\kappa^{-1})^k) \approx O((1-1/1.12)^k)$ while performing only $O(b)$ gradient computations per step. Their practical disadvantage is implementation complexity and, for SAGA, the $O(md)$ memory requirement.
+\end{remark}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_svrg_comparison.pdf}
+\caption{Q2: Variance reduction (SVRG) vs.\ SGD variants on a strongly convex least-squares problem. \emph{Left}: empirical convergence per epoch (one pass through data). Full GD converges linearly to machine precision. SGD with a fixed learning rate plateaus at a noise floor ($\Delta f \approx 0.002$) due to persistent gradient variance. SGD with $1/t$ decay converges below the noise floor but slowly. SVRG achieves linear convergence matching full GD, with the control variate driving the stochastic gradient variance to zero as $x_k \to x^{\star}$. \emph{Right}: theoretical convergence rates on the same scale, illustrating the $O(1/T)$ rate of decaying SGD vs.\ linear convergence of GD and SVRG.}
+\label{fig:q2_svrg}
+\end{figure}
+
 % ============================================================
 \section[Question 3: Newton's Method and Local Approximation]{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
 \label{sec:q3}
@@ -954,6 +974,14 @@ Adagrad's adaptive step sizes can be analysed through the lens of online convex 
 \sum_{t=1}^{T} f_t(x_t) - \min_{x \in \mathcal{X}} \sum_{t=1}^{T} f_t(x) \leq 2\alpha_0 \sum_{i=1}^{d} \left(\sum_{t=1}^{T} g_{t,i}^2\right)^{1/2}.
 \end{equation}
 This bound adapts to the problem: if only a few coordinates $i$ have large cumulative gradients, those coordinates have small effective step sizes, improving over the coordinate-uniform bound. For sparse gradient problems (e.g.\ NLP embeddings where most coordinates are zero most of the time), Adagrad's regret can be $O(\sqrt{T})$ with a much smaller constant than non-adaptive methods.
+\end{remark}
+
+\begin{remark}[Coordinate Descent as an Alternative Derivative-Free Method]
+An important class of gradient-free (or gradient-aware) methods not covered in the assignment is \emph{coordinate descent} (CD). At each step, CD minimises $f$ exactly along a single coordinate direction $e_i$ (cycling or randomised):
+\begin{equation}
+x_{k+1} = x_k - \frac{\partial f}{\partial x_i}(x_k)\, e_i \cdot \alpha_i^{\star}, \qquad \alpha_i^{\star} = \arg\min_\alpha\, f(x_k - \alpha e_i),
+\end{equation}
+requiring only a 1D line search per iteration rather than a full gradient. This is advantageous when partial derivatives are cheap or when $d$ is very large but the function has separable or sparse coupling structure. For \emph{separable} $f$ (i.e.\ $f(x) = \sum_i f_i(x_i)$), CD achieves exact convergence in one sweep. For general strongly convex $f$, randomised CD converges at rate $(1 - \mu/(Ld))^k$ --- slower than full GD by the dimension $d$ --- because each step updates only one of $d$ coordinates. This matches the $O(d/k)$ rate of Nesterov random search and highlights a general principle: \emph{per-coordinate methods exchange gradient computation for more iterations}. In contrast to Nelder--Mead, CD has theoretical convergence guarantees for smooth convex objectives.
 \end{remark}
 
 % ============================================================
@@ -1346,27 +1374,32 @@ Table~\ref{tab:complexity} summarises the per-iteration cost and convergence rat
 
 \begin{table}[H]
 \centering
-\caption{Algorithm complexity hierarchy. $d$: dimension; $m$: number of data samples; $\kappa = L/\mu$: condition number; $D$: constraint set diameter. ``Oracle'' = type of information required.}
+\caption{Algorithm complexity hierarchy. $d$: dimension; $m$: data samples; $\kappa = L/\mu$: condition number; $D$: diameter; $m_h$: L-BFGS history; $d+1$: Nelder--Mead simplex vertices.}
 \label{tab:complexity}
-\begin{tabular}{llllc}
+\begin{tabular}{lllllc}
 \toprule
-\textbf{Method} & \textbf{Oracle} & \textbf{Cost/iter} & \textbf{Convergence rate} & \textbf{Global?} \\
+\textbf{Method} & \textbf{Oracle} & \textbf{Cost/iter} & \textbf{Memory} & \textbf{Convergence rate} & \textbf{Global?} \\
 \midrule
-Grid search & $f$ only & $N^d$ total & $O(1/N)$ (global) & Yes \\
-Nesterov rand.\ search & $f$ only & $O(1)$ & $O(d/k)$ & No (convex) \\
-Nelder--Mead & $f$ only & $O(d)$ FE & No guarantee & Empirical \\
-FD GD & $f$ only & $O(d)$ FE & $\approx$ GD (small $\delta$) & No \\
-GD & $\nabla f$ & $O(md)$ & $O((1-1/\kappa)^k)$ linear & No \\
-Polyak / Adagrad / RMSprop & $\nabla f$ & $O(md)$ & $O(1/k)$ to linear & No \\
-Heavy Ball (quadratic) & $\nabla f$ & $O(md)$ & $O((1-1/\sqrt{\kappa})^{2k})$ & No (quadratic) \\
-Nesterov & $\nabla f$ & $O(md)$ & $O(1/k^2)$ or $O((1-1/\sqrt{\kappa})^k)$ & No (convex) \\
-Proj.\ GD & $\nabla f + \Pi_{\mathcal{X}}$ & $O(md)$ + proj.\ & Linear $O((1-1/\kappa)^k)$ & No \\
-Frank--Wolfe & $\nabla f +$ LMO & $O(md + d)$ & $O(1/k)$ & No \\
-Newton & $\nabla f, \nabla^2 f$ & $O(md + d^3)$ & $O(\log\log 1/\varepsilon)$ & No (local) \\
-L-BFGS & $\nabla f$ (history) & $O(md + md_{\text{hist}})$ & Superlinear & No \\
+Grid search & $f$ only & $N^d$ total & $O(d)$ & $O(1/N)$ (global) & Yes \\
+Nesterov rand.\ search & $f$ only & $O(1)$ FE & $O(d)$ & $O(d/k)$ & No (convex) \\
+Nelder--Mead & $f$ only & $O(d)$ FE & $O(d^2)$ & No guarantee & Empirical \\
+FD GD & $f$ only & $O(d)$ FE & $O(d)$ & $\approx$ GD (small $\delta$) & No \\
+GD / Polyak & $\nabla f$ & $O(md)$ & $O(d)$ & $O((1-1/\kappa)^k)$ linear & No \\
+Adagrad / RMSprop & $\nabla f$ & $O(md)$ & $O(d)$ & $O(1/k)$ to linear & No \\
+Heavy Ball (quadratic) & $\nabla f$ & $O(md)$ & $O(d)$ & $O((1-1/\sqrt{\kappa})^{2k})$ & No (quad.) \\
+Nesterov & $\nabla f$ & $O(md)$ & $O(d)$ & $O(1/k^2)$ / $O((1-1/\sqrt{\kappa})^k)$ & No (convex) \\
+Adam & $\nabla f$ & $O(md)$ & $O(d)$ & No optimal rate & No \\
+Proj.\ GD & $\nabla f + \Pi_{\mathcal{X}}$ & $O(md)$ + proj.\ & $O(d)$ & $O((1-\alpha\mu)^{2k})$ & No \\
+Frank--Wolfe & $\nabla f +$ LMO & $O(md + d)$ & $O(d)$ & $O(1/k)$ & No \\
+Newton & $\nabla f, \nabla^2 f$ & $O(md^2 + d^3)$ & $O(d^2)$ & $O(\log\log 1/\varepsilon)$ & No (local) \\
+L-BFGS & $\nabla f$ (history) & $O(md + m_h d)$ & $O(m_h d)$ & Superlinear & No \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{remark}[Memory Bottleneck of Second-Order Methods]
+The memory column of Table~\ref{tab:complexity} reveals a key practical limitation of Newton's method: it requires $O(d^2)$ memory to store the Hessian and $O(d^3)$ arithmetic operations to invert it. For a neural network with $d = 10^6$ parameters, the Hessian would require $\sim 4\,\text{TB}$ of memory (float32) --- entirely infeasible. L-BFGS reduces this to $O(m_h d)$ with $m_h = 5$--$20$ history pairs, requiring only $\sim 80\,\text{MB}$ for the same network. This makes L-BFGS the practical quasi-Newton method of choice for moderately large problems. For very large-scale problems ($d \gg 10^6$), all gradient methods reduce to $O(d)$ memory, and the dominant memory cost is storing the model parameters and a small number of gradient vectors.
+\end{remark}
 
 \subsection{Practical Recommendations}
 
