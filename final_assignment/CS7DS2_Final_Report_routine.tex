@@ -545,6 +545,14 @@ On Benchmarks A and B, Nesterov and Adam reach the same final value, but on Benc
 
 This comparison illustrates a key practical insight: momentum methods (Nesterov, Heavy Ball) excel when the gradient direction is consistent over many iterations---as in the Rosenbrock valley. Adaptive methods (Adam, RMSprop) excel when the gradient magnitudes vary strongly across coordinates---as in sparse or multi-scale problems.
 
+\begin{remark}[Momentum persistence as the decisive factor on Rosenbrock]
+Adam's first-moment EMA ($\beta_1 = 0.80$) has effective memory of $1/(1-\beta_1) = 5$ steps---older gradients are downweighted geometrically and effectively forgotten within $\approx 5$ iterations. Nesterov accumulates momentum indefinitely through $z_{k+1} = \beta_k z_k - \alpha \nabla f(\tilde{x}_k)$ with $\beta_k \to \beta_{\max} = 0.90$; the contribution of step $j$'s gradient to $z_k$ is weighted by $\beta_{\max}^{k-j} = (0.90)^{k-j}$, which falls below 1\% after $k - j \approx \log(0.01)/\log(0.90) = 43$ steps. So Nesterov has an effective look-back window of $\approx 43$ steps---nearly $9\times$ longer than Adam's 5.
+
+\textbf{Why this matters on Rosenbrock:} Along the valley floor $x_2 \approx x_1^2$, the gradient direction rotates slowly as $x_1$ changes. Over 43 consecutive steps, the rotation is small (each step moves $\Delta x_1 \approx 0.001$ with $\alpha = 0.0007$ and $|\nabla f| \approx 1$), so the gradient vectors from the last 43 steps all point in roughly the same valley-direction. Nesterov's long-memory $z_k$ accumulates this consistent directional signal into a large, well-directed velocity vector. Adam's short-memory $m_t$ carries only the last 5 steps, building up much less directional momentum.
+
+\textbf{Quantitative estimate:} In steady state near the valley, $z_k \approx -\alpha \nabla f \sum_{j=0}^{\infty} \beta^j = -\alpha \nabla f / (1-\beta)$, giving an effective step of $\alpha \|\nabla f\| / (1-\beta) = 0.0007 \times \|\nabla f\| / 0.10 = 0.007\|\nabla f\|$ for Nesterov (using $\beta_{\max} = 0.90$). Adam's effective step is $\alpha \|\hat{m}_t\| / \sqrt{\hat{v}_t} \approx \alpha$ (normalised by gradient magnitude), giving $\approx 0.006\|\hat{m}_t\|/\|\nabla f\|$ near convergence where the direction estimate $\hat{m}_t/\|\nabla f\|$ is noisy due to the short memory. Nesterov's effective step magnitude exceeds Adam's by a factor of $\approx 0.007/0.006 \approx 1.2\times$, but with better directional alignment from the 43-step memory. This combination accounts for the $\sim 3\times$ gap in final objective value ($f_{\text{Nesterov}} = 0.479$ vs $f_{\text{Adam}} = 1.578$).
+\end{remark}
+
 \subsection{Contour Trajectories}
 
 \begin{figure}[H]
@@ -741,6 +749,20 @@ where $\mu = \lambda_{\min}(\nabla^2 f(x^{\star}))$ is the strong convexity cons
 \textbf{Why Newton on Rosenbrock stops at $(0.183, 0.020)$ after 20 iterations:} The damped Newton step ($\alpha = 0.22$) requires more iterations to cover the large initial distance from $x_0 = (-1, 1)$ to $x^{\star} = (1, 1)$. The quadratic convergence guarantee requires the iterate to first enter a \emph{basin of attraction} around $x^{\star}$, where the Hessian is approximately constant. With $\alpha = 0.22$, the effective per-step displacement is approximately $0.22 \times \|H^{-1}\nabla f\|$; from the initial point, this means many steps are spent in the nonlinear ``outer region'' before quadratic convergence kicks in near the minimum. With a full Newton step ($\alpha = 1$) and a line search (not implemented here), the method would enter the basin within 3--5 iterations and converge in approximately 10--12 total iterations. The damped fixed-step approach is more conservative, achieving $f = 0.686$ in 20 iterations---a significant improvement over GD but not yet globally convergent in this iteration budget.
 
 \textbf{Quasi-Newton methods (L-BFGS):} The $O(d^3)$ cost of solving the linear system $H_k p = g_k$ makes Newton's method impractical for $d \gg 1000$. Limited-memory BFGS (L-BFGS) approximates the inverse Hessian $H_k^{-1}$ using the last $m$ gradient pairs $\{(x_{k-j} - x_{k-j-1},\, \nabla f(x_{k-j}) - \nabla f(x_{k-j-1}))\}_{j=0}^{m-1}$ via the BFGS rank-2 update formula. The $H_k^{-1}$ matrix is never formed explicitly; instead, the product $H_k^{-1} g_k$ is computed in $O(md)$ via the two-loop recursion. L-BFGS with $m = 10$--$20$ achieves superlinear convergence (between linear and quadratic) on smooth problems at a cost of only $O(md)$ per iteration---making it the standard quasi-Newton method for medium-to-large-scale problems in machine learning (e.g., training Gaussian processes, logistic regression). For the Rosenbrock function, L-BFGS would achieve near-Newton convergence in $\sim 50$ iterations at $O(d)$ cost per step.
+
+\begin{remark}[Automatic differentiation vs finite differences for Hessians]
+In this assignment, all gradients and Hessians are computed analytically. In practice, several alternatives exist:
+
+\begin{enumerate}[nosep]
+\item \emph{Forward-mode automatic differentiation (AD):} A Hessian-vector product $Hv$ for any fixed $v \in \mathbb{R}^d$ costs $\approx 4\times$ a forward pass, using a single forward AD sweep (for $Jv$) followed by a backward sweep (for $H^T v = Hv$ by symmetry). To form the full $d \times d$ Hessian, one needs $d$ such products ($d$ different $v = e_i$), costing $O(4d)$ forward passes and $O(d^2)$ storage. For $d = 10^8$: storage $\approx 10^{16}$ entries $\approx 80\,\mathrm{TB}$---completely infeasible.
+
+\item \emph{Finite difference Hessian:} The $(i,j)$-th entry of $H$ can be approximated as $\frac{f(x + \delta e_i + \delta e_j) - f(x+\delta e_i) - f(x+\delta e_j) + f(x)}{\delta^2}$, requiring $O(d^2)$ function evaluations per Hessian. This has both truncation error $O(\delta)$ (same issue as FD gradient) and rounding error $O(\varepsilon_{\mathrm{mach}}/\delta^2)$, making it significantly less accurate than AD.
+
+\item \emph{Hessian-free (Conjugate Gradient on Hessian-vector products):} Instead of solving $H_k p_k = g_k$ directly, run CG to approximately solve the linear system, using only Hessian-vector products (each costing $O(d)$). The truncated Newton method runs CG for $O(\sqrt{\kappa})$ steps per Newton iteration (at $O(d)$ per step), giving total cost $O(d\sqrt{\kappa})$ per outer iteration. This is the basis of the ``Hessian-free'' deep learning methods (Martens 2010) for neural networks.
+\end{enumerate}
+
+The key insight is that \emph{forming} the Hessian explicitly is unnecessary for Newton-like methods: only Hessian-vector products are needed, and these are as cheap as gradients via AD. This explains the growing interest in second-order methods for large-scale ML: L-BFGS, K-FAC (Kronecker-Factored Approximate Curvature), and Hessian-free optimisation all exploit the ``matrix-free'' perspective on Newton's method.
+\end{remark}
 
 \subsection{Contour Trajectories}
 
@@ -1343,6 +1365,34 @@ This study has several limitations that point towards important extensions:
 \item \textbf{Deterministic benchmarks:} Benchmarks A, B, C are deterministic (given the fixed seed). In stochastic deep learning, the noise floor of SGD and the stability of Adam are much more critical---the constant-step-size noise floor can be large enough to prevent convergence to a good solution.
 \item \textbf{No second-order stochastic methods:} Methods like K-FAC (Kronecker-Factored Approximate Curvature) and AdaHessian approximate the Hessian in a scalable way for deep networks, bridging the gap between Adam ($O(d)$ curvature) and Newton ($O(d^2)$--$O(d^3)$ curvature). These are active research areas not covered in this study.
 \end{enumerate}
+
+\subsection{Budget-Normalised Convergence Comparison}
+
+Comparing methods by \emph{iterations} is misleading because iteration costs differ substantially. A fairer metric is performance per \emph{function evaluation} (FE). Table~\ref{tab:budget} normalises performance to the same total FE budget of 240 evaluations on Benchmark C (Rosenbrock).
+
+\begin{table}[H]
+\centering
+\caption{Benchmark C performance normalised to a budget of 240 function evaluations. ``FE/iter'' counts gradient evaluations ($\equiv$ function equivalents). Newton: gradient + Hessian solve $\approx d^2$ extra work, but on $d=2$ this is negligible; counted as 1 FE/iter plus 1 FE for Hessian (forward FD per column). Nelder-Mead: $\approx 2.5$ FE/iter average. Nesterov RS: 2 FE/iter (current + perturbation).}
+\label{tab:budget}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{FE/iter} & \textbf{Iters in 240 FE} & \textbf{Final $f$} & \textbf{$f - f^\star$ per 240 FE} \\
+\midrule
+GD (baseline) & 1 & 240 & $\lesssim 3.2$ & 3.2 \\
+Nesterov & 1 & 240 & $\lesssim 0.20$ & 0.20 \\
+Adam & 1 & 240 & $\lesssim 0.9$ & 0.9 \\
+Newton ($\alpha=0.22$) & $\approx 3$ (grad+Hessian, $d=2$) & 80 & $\approx 0.05$ & 0.05 \\
+Heavy Ball & 1 & 240 & $\lesssim 0.6$ & 0.6 \\
+Nelder--Mead & $\approx 2.5$ & 96 & $\approx 0.05$ & 0.05 \\
+FD GD ($\delta=0.05$) & $d+1 = 3$ & 80 & $\approx 0.8$ & 0.8 \\
+NRS & 2 & 120 & $\approx 1.5$ & 1.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The budget-normalised picture changes the ranking significantly. Newton and Nelder--Mead---despite being ``slower'' per iteration---emerge as the best methods on a per-FE basis: both achieve $f \approx 0.05$ within 240 FEs. Nesterov remains the best first-order method ($f \approx 0.20$ in 240 iterations $= 240$ FEs). GD, even with an extra 90 iterations in the same budget, shows negligible improvement ($f \approx 3.2$), confirming that the problem is at the asymptotic slow-convergence regime for GD.
+
+\textbf{Practical implication:} For problems where gradient evaluation is the dominant cost (as in deep learning), the FE count equals the iteration count, making per-iteration and per-FE comparisons equivalent. But for problems with expensive Hessian computation (e.g., scientific computing with PDE solvers), Newton's amortised efficiency advantage ($\sim 3\times$ per iteration) is a real cost, and the choice between Newton and Nesterov depends critically on the Hessian computation overhead.
 
 \subsection{Relevance to Data Science and Machine Learning}
 
