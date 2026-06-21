@@ -466,6 +466,21 @@ The key mechanism is the \emph{lookahead}: evaluating $\nabla f$ at $\tilde{x}_k
 
 Adam's bias corrections are essential in early iterations: without them, $m_1 = (1-\beta_1)g_1$ severely underestimates the true gradient mean due to initialisation at zero. With corrections, $\hat{m}_1 = g_1$ regardless of $\beta_1$. The effective per-coordinate update is approximately $\alpha \cdot \text{sign}(\hat{m}_t^{(i)})$ when the signal-to-noise ratio is high, bounding the per-step learning rate in $[-\alpha/\varepsilon, \alpha/\varepsilon]$ from above.
 
+\subsubsection{Adam Non-Convergence and AMSGrad}
+
+Reddi, Kale \& Kumar (2018) demonstrated that Adam can \emph{fail to converge} on simple online convex problems due to the non-monotone second moment $\hat{v}_t^{(i)}$: when gradients become small, $\hat{v}_t$ decreases, causing the effective step $\alpha/\sqrt{\hat{v}_t}$ to \emph{increase}, which can prevent convergence near the optimum. \textbf{AMSGrad} fixes this by replacing $\hat{v}_t$ with the running maximum $\hat{v}_t^{\max} = \max_{j \leq t} \hat{v}_j$:
+\begin{equation}
+x_{t+1} \gets x_t - \frac{\alpha}{\sqrt{\hat{v}_t^{\max}} + \varepsilon} \hat{m}_t.
+\end{equation}
+The monotone non-decreasing $\hat{v}_t^{\max}$ guarantees the effective step is non-increasing, restoring convergence guarantees. However, in practice AMSGrad is often \emph{slower} than Adam on deterministic smooth problems (as shown in Figure~\ref{fig:amsgrad}) because the conservative step reduction near the optimum prevents fine-grained tuning. This illustrates the gap between theoretical guarantees and practical performance --- Adam's non-convergence is only observed in carefully-constructed adversarial examples, not typical deep learning training.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/amsgrad_comparison.pdf}
+\caption{Q2: Adam vs AMSGrad on Rosenbrock (left) and second moment estimates (right). Left: Adam with $\alpha = 0.006$ outperforms AMSGrad in practice (reaching $f \approx 0.19$ vs $\approx 1.36$ after 300 iterations), despite Adam's theoretical non-convergence guarantee. Larger $\alpha = 0.02$ causes instability; smaller $\alpha = 0.002$ converges but more slowly. Right: AMSGrad's $\hat{v}_t^{\max}$ (solid) is monotone non-decreasing, while Adam's $\hat{v}_t$ (dashed) decreases as the iterates stabilise near the optimum. This decrease in $\hat{v}_t$ causes Adam's effective step to grow later in training --- a bug in adversarial settings but a feature in smooth optimisation where finer steps near the optimum are beneficial.}
+\label{fig:amsgrad}
+\end{figure}
+
 \subsubsection{Learning Rate Schedules}
 
 For non-convex optimisation (deep networks, Rosenbrock), a single constant learning rate often fails: too large causes divergence, too small is slow. \textbf{Learning rate schedules} gradually reduce $\alpha_t$ to allow large initial steps followed by fine-tuning:
@@ -773,6 +788,16 @@ $\lambda$ & --- & $10^{-8}$ & --- & $10^{-8}$ & --- & $10^{-8}$ \\
 \end{table}
 
 The damped steps ($\alpha < 1$) for Benchmarks B and C are necessary because the true $f$ deviates from its quadratic model at larger distances. The Rosenbrock Hessian at $x_0$ has $H_{11} \approx 2 + 1200 + 400 = 1602$, making the full Newton step dangerously large.
+
+\noindent\textit{Numerical stability:} Solving $H_k p_k = g_k$ with plain Gaussian elimination ($O(d^3)$) is numerically unstable when $H_k$ is nearly singular. The Tikhonov regularisation $H_k + \lambda I$ (used in the experiments with $\lambda = 10^{-8}$) ensures positive definiteness. Alternatively, \textbf{modified Cholesky decomposition} (Gill \& Murray, 1974) adds the minimum diagonal perturbation $\lambda_{\min}^+ I$ to make $H_k$ positive definite, preserving curvature information more faithfully than Tikhonov.
+
+For non-convex $f$, $H_k$ may have negative eigenvalues (saddle points). The \textbf{trust-region Newton} solves $\min_{\|p\| \leq \Delta_k} g_k^T p + \frac{1}{2}p^T H_k p$, which is well-defined even when $H_k \not\succ 0$: the negative curvature direction is exploited to escape the saddle point (an advantage over damped Newton with fixed step).
+
+\noindent\textit{Non-convex stationary points:} For a general smooth (possibly non-convex) $f$, GD with step $\alpha \leq 1/L$ satisfies:
+\begin{equation}
+\min_{k \leq K} \|\nabla f(x_k)\|^2 \leq \frac{2(f(x_0) - f^{\star})}{\alpha K} = O\!\left(\frac{1}{K}\right).
+\end{equation}
+This guarantees convergence to an \emph{approximate stationary point} $\|\nabla f(x_k)\|^2 \leq \varepsilon$ in $O(1/(\alpha\varepsilon))$ steps, but not to a local minimum (could be a saddle point). Nesterov acceleration provides no benefit for non-convex objectives (the $O(1/k^2)$ rate relies on convexity). For deep learning where local minima are numerous but often near-equivalent in loss, reaching any approximate stationary point is sufficient.
 
 \subsection{Convergence Analysis}
 
