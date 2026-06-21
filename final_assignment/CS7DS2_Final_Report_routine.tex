@@ -229,6 +229,26 @@ G_k = \sum_{j=0}^k g_j g_j^T, \qquad x_{k+1} = x_k - \alpha_0 G_k^{-1/2} g_k,
 \end{equation}
 where $G_k^{-1/2}$ is the inverse square root of the outer product accumulation. This achieves the optimal \emph{adaptive regret} bound over all linear predictors, since $G_k$ captures all cross-coordinate gradient correlations. However, computing $G_k^{-1/2}$ requires $O(d^3)$ per step (full eigendecomposition), making it practical only for $d \leq 100$. The diagonal approximation $G_k \approx \text{diag}(G_k^{(1)}, \ldots, G_k^{(d)})$ drops the cross terms at $O(d)$ cost, sacrificing cross-coordinate preconditioning for scalability. For diagonal Hessians (as in Benchmark A where $H = X^TX/m \approx I_2$), the diagonal and full-matrix variants are equivalent.
 
+\noindent\textbf{Natural gradient and information geometry (Amari, 1998).} Adaptive diagonal methods like Adam and Adagrad implicitly define a \emph{Riemannian geometry} on parameter space. The principled extension uses the \textbf{Fisher information matrix} as the metric tensor:
+\begin{equation}
+F(\theta) \;=\; \mathbb{E}_{x \sim p(\cdot;\theta)}\!\left[\nabla_\theta \log p(x;\theta)\,\nabla_\theta \log p(x;\theta)^T\right] \;=\; -\mathbb{E}\!\left[\nabla^2_\theta \log p(x;\theta)\right].
+\label{eq:fisher_info}
+\end{equation}
+The natural gradient step $\theta_{k+1} = \theta_k - \alpha_k F(\theta_k)^{-1}\nabla_\theta \mathcal{L}(\theta_k)$ is \emph{parameterisation-invariant}: for any smooth bijection $\phi = g(\theta)$, the gradient-flow trajectory is the same regardless of which coordinate system is used. Standard GD's convergence, by contrast, depends heavily on parameterisation since the condition number $\kappa = L/\mu$ changes under reparameterisation.
+
+\begin{proposition}[Natural gradient as Gauss-Newton]
+For the negative log-likelihood $\mathcal{L}(\theta) = -\mathbb{E}[\log p(x;\theta)]$ under a well-specified model, $F(\theta) = \mathbb{E}[\nabla^2\mathcal{L}(\theta)]$ (the expected Hessian). Hence the natural gradient step $F(\theta)^{-1}\nabla\mathcal{L}$ is the \emph{Gauss-Newton step}, achieving Newton-like convergence without requiring the full Hessian. For exponential families $p(x;\theta) \propto \exp(\theta^T T(x) - A(\theta))$, $F(\theta) = \nabla^2 A(\theta)$ exactly, so natural gradient GD is equivalent to Newton's method on the log-partition function $A$.
+\end{proposition}
+
+\noindent\textbf{K-FAC: Kronecker-Factored Approximate Curvature.} For neural networks with $d \sim 10^7$ parameters, full $F \in \mathbb{R}^{d\times d}$ is infeasible ($O(d^2)$ storage, $O(d^3)$ inversion). K-FAC (Martens \& Grosse, 2015) exploits the layer-wise block structure: for layer $\ell$ with weights $W_\ell \in \mathbb{R}^{n_\ell \times n_{\ell-1}}$, the Fisher block is approximated as a Kronecker product:
+\begin{equation}
+F_\ell \;\approx\; \hat{A}_{\ell-1} \otimes \hat{G}_\ell, \qquad \hat{A}_{\ell-1} = \mathbb{E}[a_{\ell-1}a_{\ell-1}^T],\quad \hat{G}_\ell = \mathbb{E}[\delta_\ell \delta_\ell^T],
+\label{eq:kfac}
+\end{equation}
+where $a_{\ell-1}$ are input activations and $\delta_\ell$ are output pre-activation gradients. Since $(A \otimes G)^{-1} = A^{-1} \otimes G^{-1}$, inversion costs only $O(n_{\ell-1}^3 + n_\ell^3)$ rather than $O((n_{\ell-1}n_\ell)^3)$. Taking $A = \text{diag}(\hat{A}_{\ell-1})$ and $G = \text{diag}(\hat{G}_\ell)$ in \eqref{eq:kfac} recovers an Adam-like coordinate-wise scaling — diagonal adaptive methods are a special case of the natural gradient hierarchy. K-FAC achieves 3--5$\times$ epoch speedup over Adam on large-scale vision and language benchmarks, illustrating that curvature structure beyond the diagonal meaningfully accelerates training.
+
+\noindent\textit{Curvature approximation hierarchy.} The trade-off between cost and fidelity defines a spectrum: diagonal Adagrad/Adam $\subsetneq$ full-matrix Adagrad \eqref{eq:adagrad_full} $\subsetneq$ Shampoo (block Kronecker) $\subsetneq$ K-FAC $\subsetneq$ full Fisher $\approx$ Hessian (Newton). Moving right improves convergence speed but increases memory and compute; the right choice depends on model size and hardware constraints.
+
 \noindent\textbf{RMSprop vs Adam: bias correction analysis.} Adam's bias correction replaces $m_t$ and $v_t$ by $\hat{m}_t = m_t/(1-\beta_1^t)$ and $\hat{v}_t = v_t/(1-\beta_2^t)$. RMSprop omits bias correction. The difference matters primarily in \emph{early iterations} (small $t$):
 \begin{itemize}
 \item At $t=1$: $\hat{m}_1 = g_1$ (exact); uncorrected $m_1 = (1-\beta_1)g_1 \approx 0.1 g_1$ (for $\beta_1 = 0.9$), severely underestimating the gradient.
