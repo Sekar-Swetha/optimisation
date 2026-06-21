@@ -513,9 +513,24 @@ $\tilde{x}_k = x_k + \beta_k z_k$ rather than at $x_k$.
 This ``look before you leap'' strategy allows the algorithm to correct its direction
 \emph{before} committing to the full momentum step, which is why Nesterov's method can be
 proved convergent with optimal rate while Heavy Ball cannot in general.
-The schedule $\beta_k = (k-1)/(k+2)$ approximates the classic FISTA schedule
-$\beta_k = (t_k - 1)/t_{k+1}$ where $t_k = (1+\sqrt{1+4t_{k-1}^2})/2$; both achieve
-the $O(1/k^2)$ rate.
+
+The schedule $\beta_k = (k-1)/(k+2)$ closely approximates the classic FISTA schedule
+$\beta_k = (t_k - 1)/t_{k+1}$ where $t_k = (1+\sqrt{1+4t_{k-1}^2})/2$;
+both achieve the $O(1/k^2)$ rate (Figure~\ref{fig:q2_schedule}).
+The maximum clamp $\beta_{\max}$ prevents the momentum from exceeding a safe value
+on non-convex problems, trading some theoretical acceleration for practical stability.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/q2_nesterov_schedule.pdf}
+\caption{Q2: Comparison of Nesterov momentum schedules. The implemented schedule $(k-1)/(k+2)$
+closely tracks the FISTA schedule $(t_k-1)/t_{k+1}$ (which is optimal for the $O(1/k^2)$ rate)
+for $k \geq 5$. Both increase monotonically towards 1, providing progressively more momentum as
+the algorithm converges and the local curvature becomes better understood. The $\beta_{\max}$ cap
+(here $0.90$--$0.92$ depending on the benchmark) is applied once the schedule exceeds it, limiting
+momentum in later iterations for non-convex problems.}
+\label{fig:q2_schedule}
+\end{figure}
 
 \begin{algorithm}[H]
 \caption{Adam Optimiser}
@@ -1180,19 +1195,35 @@ grows exponentially in $d$, making dense sampling infeasible.
 \label{sec:q5}
 % ============================================================
 
-\subsection{Problem Setup}
+\subsection{Problem Setup and KKT Conditions}
 
-The problem is to minimise Benchmark~B subject to the inequality constraint $x_1 \geq 0.5$:
+The problem is to minimise Benchmark~B subject to the inequality constraint $x_1 \geq 0.5$,
+written in standard form with $g(x) = 0.5 - x_1$:
 \begin{equation}
 \min_{x \in \mathbb{R}^2}\; f(x_1, x_2) = (x_1-1)^2 + 5(x_2-2)^2 + \sin(x_1)
-\quad \text{subject to } x_1 \geq 0.5.
+\quad \text{s.t.} \quad g(x) = 0.5 - x_1 \leq 0.
 \label{eq:constrained}
 \end{equation}
 The feasible set is $\mathcal{C} = \{x \in \mathbb{R}^2 : x_1 \geq 0.5\}$, a closed half-space.
-The unconstrained minimiser $x^\star \approx (0.582, 2.0)$ satisfies $x_1^\star = 0.582 > 0.5$,
-so it lies in the \emph{interior} of $\mathcal{C}$ and is also the constrained minimiser.
-Starting from the \emph{infeasible} point $x_0 = (0.2, 4.0)$ (where $x_{0,1} = 0.2 < 0.5$)
-provides a genuine test of how quickly each method enforces feasibility.
+
+The Karush--Kuhn--Tucker (KKT) first-order necessary conditions for a local minimum~$x^\star$ are:
+\begin{align}
+\nabla f(x^\star) + \mu^\star \nabla g(x^\star) &= 0 \quad &\text{(stationarity)}\notag\\
+g(x^\star) &\leq 0 \quad &\text{(primal feasibility)}\notag\\
+\mu^\star &\geq 0 \quad &\text{(dual feasibility)}\notag\\
+\mu^\star g(x^\star) &= 0 \quad &\text{(complementary slackness)}\notag
+\end{align}
+With $\nabla g(x) = -e_1$, stationarity gives:
+$2(x_1^\star-1)+\cos(x_1^\star) - \mu^\star = 0$ and $10(x_2^\star-2) = 0$,
+so $x_2^\star = 2$ always.
+Since $x_1^\star \approx 0.582 > 0.5$, the constraint is \emph{inactive} at the optimum
+($g(x^\star) < 0$), so by complementary slackness $\mu^\star = 0$, and stationarity reduces
+to the unconstrained condition $2(x_1^\star-1)+\cos(x_1^\star) = 0$.
+Therefore the \textbf{constrained and unconstrained optima coincide} at $(0.582, 2.0)$---a
+deliberate design choice that allows both projected GD and penalty methods to converge to
+the same final point, enabling a fair comparison of feasibility enforcement rather than
+objective value quality.
+Starting from the \emph{infeasible} point $x_0 = (0.2, 4.0)$ tests feasibility recovery speed.
 
 \begin{algorithm}[H]
 \caption{Projected Gradient Descent (PGD)}
@@ -1299,6 +1330,26 @@ the violation decays geometrically as the penalty force dominates.
 at $x_1 = 0.3$, the penalty contribution to the gradient is only $0.15$ vs $f$-gradient $\sim 1.4$,
 insufficient to drive the iterate to feasibility quickly.}
 \label{fig:q5_violation}
+\end{figure}
+
+\subsection{Effect of Penalty Weight}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q5_penalty_lambda.pdf}
+\caption{Q5: Effect of penalty weight $\lambda$ on the penalty method, sweeping over
+$\lambda \in \{0.15, 0.5, 1.0, 1.8, 3.0, 4.5, 10, 50\}$ with 200 iterations each.
+Left: the final $x_1$ value converges to $x_1^\star = 0.582$ (unconstrained optimum, shown green)
+from below as $\lambda$ increases; even small $\lambda = 0.15$ drives $x_1$ very close to 0.582
+since the constraint is inactive at the optimum.
+Centre: constraint violation is essentially zero for all tested $\lambda$ values (since the
+unconstrained optimum already satisfies $x_1 > 0.5$), confirming that the constraint is
+inactive and the KKT multiplier $\mu^\star = 0$.
+Right: objective suboptimality $f(x) - f^\star$ is near zero for most $\lambda$;
+only at very large $\lambda = 50$ does the small step size ($\alpha = 0.01$) cause
+slight undershoot. This illustrates that when the constraint is inactive at the optimum,
+all $\lambda > 0$ yield the same optimal solution.}
+\label{fig:q5_lambda}
 \end{figure}
 
 \subsection{Comparative Discussion}
