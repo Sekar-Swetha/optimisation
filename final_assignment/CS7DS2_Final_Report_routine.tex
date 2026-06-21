@@ -372,6 +372,28 @@ Heavy Ball & \textbf{0.4826} & \textbf{0.7244} & 1.4003 \\
 
 The experiments reveal a sharp dichotomy in Polyak's behaviour: it is the best method when $f^{\star}$ is exactly known (Rosenbrock, where it beats all other Q1 methods) and catastrophically bad otherwise (Benchmarks A and B). Adagrad and Heavy Ball are robustly good across benchmarks. RMSprop requires more careful $\alpha_0$ tuning. Heavy Ball, while designed for quadratics, provides useful acceleration on Rosenbrock by building momentum along the consistent valley direction.
 
+\subsection{Mirror Descent: A Unifying Framework}
+
+Gradient descent, proximal gradient, and projected GD are all special cases of \textbf{mirror descent} (Nemirovsky \& Yudin, 1983), which replaces the Euclidean geometry with a \emph{Bregman divergence}:
+\begin{equation}
+x_{k+1} = \arg\min_{x \in \mathcal{X}} \left\{ \nabla f(x_k)^T x + \frac{1}{\alpha} D_\psi(x, x_k) \right\},
+\label{eq:mirror_descent}
+\end{equation}
+where $D_\psi(x, y) = \psi(x) - \psi(y) - \nabla\psi(y)^T(x-y) \geq 0$ is the Bregman divergence of a mirror map $\psi$. Substituting different $\psi$:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Mirror map $\psi$} & \textbf{Divergence $D_\psi$} & \textbf{Algorithm} \\
+\midrule
+$\frac{1}{2}\|x\|^2$ & $\frac{1}{2}\|x-y\|^2$ (squared Euclidean) & Gradient descent / Projected GD \\
+$\sum_i x_i \log x_i$ (negative entropy) & $\sum_i x_i \log(x_i/y_i)$ (KL divergence) & Multiplicative weights / Exponentiated GD \\
+$\frac{1}{2}\|x\|_p^2$ & $p$-norm divergence & $p$-norm mirror descent \\
+$\psi = f$ (self-concordant) & Newton update & Newton's method \\
+\bottomrule
+\end{tabular}
+\end{center}
+Mirror descent adapts to the geometry of the constraint set $\mathcal{X}$: the KL-divergence mirror descent is optimal for the simplex (achieving $O(\sqrt{\log d / k})$ rather than $O(\sqrt{d/k})$ for Euclidean GD), since the entropy mirror map respects the simplex geometry. This explains why projected GD is suboptimal for probability simplex problems in high dimensions --- multiplicative weights (exponentiated gradient) should be used instead.
+
 % ============================================================
 \section{Question 2: Momentum and Stochastic Methods \hfill [30 marks]}
 \label{sec:q2}
@@ -1272,6 +1294,33 @@ A key structural advantage of Frank--Wolfe is that the iterates are \emph{convex
 x_k = \sum_{j=0}^{k} w_j z_j, \quad w_j \geq 0, \quad \sum_j w_j = 1, \quad z_j \in \text{vertices}(\mathcal{X}).
 \end{equation}
 This follows by induction: $x_{k+1} = (1-\gamma_{k+1}) x_k + \gamma_{k+1} z_k$ is a convex combination of $x_k$ (which uses $k$ vertices by hypothesis) and one new vertex $z_k$. Consequence: for a polytope with many vertices (e.g., an $n \times n$ permutation matrix polytope with $n!$ vertices), Frank--Wolfe naturally produces \textbf{sparse} iterates using at most $k+1$ active vertices --- critical in matrix factorisation, compressed sensing, and sparsity-constrained optimisation.
+
+\subsection{Frank--Wolfe Sparsity on the Simplex}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/fw_away_steps.pdf}
+\caption{Q6: FW on the probability simplex $\{x \geq 0, \sum x_i = 1\}$ ($d=20$) minimising $f(x) = \frac{1}{2}\|x - c\|^2$ (strongly convex, $\mu = L = 1$). Left: FW with decaying step ($\gamma_k = 2/(k+2)$) achieves $O(1/k)$ convergence, while projected GD converges linearly to machine precision. The $5\times$ advantage of projected GD is clear. Right: FW's active set (non-zero coordinates) starts at $d=20$ (uniform distribution) and converges to 11 --- the true support of the optimal solution $x^{\star} = \Pi_{\Delta}(c)$. This sparsification is automatic: the LMO always selects a vertex (extreme point), and the convex combination gradually concentrates weight on relevant coordinates. Projected GD is dense: all 20 coordinates are non-zero after projection onto the interior of the simplex.}
+\label{fig:fw_simplex}
+\end{figure}
+
+\subsection{Frank--Wolfe Away-Steps}
+
+Standard FW with decaying step $\gamma_k = 2/(k+2)$ achieves only $O(1/k)$ convergence even for strongly convex objectives, because the step size must vanish. The \textbf{away-step} (Guélat \& Marcotte, 1986) adds a second direction that moves \emph{away} from the worst active vertex:
+\begin{align}
+s_k &= \arg\min_{s \in \mathcal{X}} \nabla f(x_k)^T s \quad \text{(FW direction)} \label{eq:fw_dir}\\
+v_k &= \arg\max_{v \in \mathcal{S}_k} \nabla f(x_k)^T v \quad \text{(away direction; $\mathcal{S}_k$ = active set)} \label{eq:away_dir}\\
+x_{k+1} &= \begin{cases} (1-\gamma)x_k + \gamma s_k & \text{if FW gap} \geq \text{away gap} \\ x_k + \gamma(x_k - v_k) & \text{otherwise (away step)} \end{cases}
+\end{align}
+The away step $x_k + \gamma(x_k - v_k)$ moves \emph{away} from $v_k$ (the most harmful active atom), reducing its weight. Unlike standard FW where iterates are always convex combinations of vertices ($\gamma \leq 1$), away steps can drop vertices from the active set, enabling exact sparsification.
+
+\begin{theorem}[Away-Step FW Convergence]
+For $\mu$-strongly convex, $L$-smooth $f$ with $\mathcal{X}$ a polytope of diameter $C$, FW with away-steps achieves linear convergence:
+\begin{equation}
+f(x_k) - f^{\star} \leq (1 - \rho_{\text{FW}})^k (f(x_0) - f^{\star}), \quad \rho_{\text{FW}} = \frac{2\mu}{2\mu + LC^2},
+\end{equation}
+matching projected GD's linear rate ($O(\rho^k)$) while maintaining the LMO-only interface (no projection required). The standard decaying-step FW achieves only $O(1/k)$ regardless of strong convexity.
+\end{theorem}
 
 \subsection{LMO Cost Analysis for Specific Constraint Sets}
 
