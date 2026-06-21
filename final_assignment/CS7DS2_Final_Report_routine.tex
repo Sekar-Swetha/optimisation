@@ -493,6 +493,51 @@ The variance of the mini-batch gradient estimator is $\text{Var}(g) = \frac{\sig
 \label{fig:q2_sgd_noisy}
 \end{figure}
 
+\subsection{Variance-Reduced Stochastic Methods}
+
+Pure SGD with a fixed step $\alpha > 0$ converges only to a noise floor of order $O(\alpha \sigma^2_{\text{per-sample}}/b)$ rather than to the exact minimiser $\theta^{\star}$. Eliminating this floor requires either (a) diminishing steps $\alpha_k \to 0$ (giving sublinear $O(1/k)$ convergence, losing SGD's per-epoch speed advantage) or (b) \textbf{variance reduction}: modifying the stochastic estimator so its variance vanishes near the optimum.
+
+\begin{algorithm}[H]
+\caption{SVRG (Stochastic Variance Reduced Gradient)}
+\label{alg:svrg}
+\begin{algorithmic}[1]
+\Require $\tilde{\theta}_0$, step $\alpha$, inner period $m$, epochs $S$
+\For{$s = 0, 1, \ldots, S-1$}
+    \State $\tilde{g}^{(s)} \gets \frac{1}{n}\sum_{i=1}^n \nabla f_i(\tilde{\theta}_s)$ \Comment{Full gradient at reference point: $O(n)$ cost}
+    \State $\theta_0 \gets \tilde{\theta}_s$
+    \For{$t = 0, 1, \ldots, m-1$}
+        \State Sample $i \sim \text{Uniform}\{1, \ldots, n\}$
+        \State $v_t \gets \nabla f_i(\theta_t) - \nabla f_i(\tilde{\theta}_s) + \tilde{g}^{(s)}$ \Comment{Variance-reduced estimator}
+        \State $\theta_{t+1} \gets \theta_t - \alpha v_t$
+    \EndFor
+    \State $\tilde{\theta}_{s+1} \gets \theta_m$ (or uniform-random draw from $\{\theta_0, \ldots, \theta_{m-1}\}$)
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The key property of $v_t$ is that $\mathbb{E}_i[v_t] = \nabla J(\theta_t)$ (unbiased gradient), and crucially:
+\begin{equation}
+\mathbb{E}_i\|v_t\|^2 \leq 4L^2\|\theta_t - \tilde{\theta}_s\|^2 + 4L^2\|\tilde{\theta}_s - \theta^{\star}\|^2 \xrightarrow{\theta_t, \tilde{\theta}_s \to \theta^{\star}} 0.
+\end{equation}
+The variance \emph{vanishes at the optimum}, unlike SGD where $\text{Var}(g_t) = \sigma^2_{\text{per-sample}}$ regardless of proximity to $\theta^{\star}$. Each inner iteration requires only \textbf{2} gradient evaluations ($\nabla f_i$ at $\theta_t$ and $\tilde{\theta}_s$); the full gradient is amortised over $m$ inner steps, costing $O(n/m)$ full passes per inner step.
+
+\begin{theorem}[SVRG Linear Convergence]
+For $\mu$-strongly convex, $L$-smooth $J = \frac{1}{n}\sum f_i$, with $m \geq 16L/\mu$ and step $\alpha = 1/(10L)$:
+\begin{equation}
+\mathbb{E}[J(\tilde{\theta}_s) - J^{\star}] \leq \rho^s (J(\tilde{\theta}_0) - J^{\star}), \quad \rho = \frac{1}{2} < 1.
+\end{equation}
+This is \textbf{linear (geometric) convergence} per epoch --- identical in rate to full gradient descent --- while each epoch costs only $O(n + m) = O(n)$ gradient evaluations (vs $O(n)$ for full GD). The per-epoch cost is the same but SVRG's linear convergence is maintained even with stochastic updates, unlike SGD which only achieves $O(1/k)$.
+\end{theorem}
+
+Related methods: \textbf{SAG/SAGA} (Stochastic Average Gradient) also achieve linear convergence by maintaining a table of $n$ past gradients, updating one per iteration; suitable when $n$ fits in memory. \textbf{SARAH} and \textbf{SPIDER} achieve optimal oracle complexity of $O(\sqrt{n}/\epsilon)$ for non-convex finite-sum problems.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/svrg_vs_sgd.pdf}
+\caption{Q2: SVRG vs SGD (Benchmark A, strongly convex quadratic). Left: all methods per epoch. Full GD and SVRG converge linearly to $J^{\star}$; SGD with $b=1$ (red) plateaus at a noise floor. Right: convergence tail highlighting the fundamental difference: SGD oscillates around $J^{\star}$ at a floor $\propto \alpha \sigma^2$ (red dashed), while SVRG's variance-reduced estimator continues to converge linearly to $J^{\star}$.}
+\label{fig:q2_svrg}
+\end{figure}
+
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
 \label{sec:q3}
@@ -614,6 +659,30 @@ C & 3.7319 & \textbf{0.6864} & $(0.183, 0.020)$ \\
 \label{fig:q3_quadratic}
 \end{figure}
 
+\subsection{Quasi-Newton Methods: BFGS}
+
+Newton's method requires (i) computing $\nabla^2 f(x_k) \in \mathbb{R}^{d \times d}$ explicitly (not always available in code) and (ii) solving a $d \times d$ linear system at cost $O(d^3)$. \textbf{Quasi-Newton methods} approximate the inverse Hessian from gradient differences alone, requiring only $O(d^2)$ per iteration.
+
+The \textbf{BFGS} (Broyden--Fletcher--Goldfarb--Shanno) update maintains $B_k \approx [\nabla^2 f(x_k)]^{-1}$:
+\begin{equation}
+B_{k+1} = \underbrace{\left(I - \rho_k s_k y_k^T\right)}_{\text{rank-1 correction}} B_k \underbrace{\left(I - \rho_k y_k s_k^T\right)}_{\text{rank-1 correction}} + \rho_k s_k s_k^T, \qquad \rho_k = \frac{1}{y_k^T s_k},
+\label{eq:bfgs}
+\end{equation}
+where $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$ are the step and gradient-change vectors. The update enforces the \emph{secant condition} $B_{k+1} y_k = s_k$, which approximates $[\nabla^2 f]^{-1} y_k = s_k$ (the Newton relationship). Combined with a Wolfe-condition line search, BFGS achieves \textbf{super-linear} convergence: $\|x_{k+1} - x^{\star}\| = o(\|x_k - x^{\star}\|)$ near $x^{\star}$.
+
+\textbf{L-BFGS} (limited-memory BFGS) avoids storing the full $d \times d$ matrix $B_k$ by retaining only the last $\ell = 5$--20 $(s_k, y_k)$ pairs. The product $B_k g$ is computed via the two-loop recursion in $O(\ell d)$ time, making L-BFGS the standard algorithm for large-scale smooth unconstrained optimisation (neural network training, logistic regression with $d \gg 1000$).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/quasi_newton_bfgs.pdf}
+\caption{Q3: BFGS vs Newton vs GD. Left (Benchmark B): BFGS with line search converges in $\approx 5$ iterations, matching Newton but without explicit Hessian computation. GD requires $>$40 iterations for the same accuracy. Right (Rosenbrock, Benchmark C): BFGS reaches $f \approx 0$ in $\approx 30$ iterations (machine precision) vs GD's $f = 3.6$ after 100 iterations --- a $>3$ order of magnitude improvement. The Wolfe-condition line search is essential on Rosenbrock's variable curvature landscape; it ensures sufficient decrease and curvature conditions that maintain positive-definiteness of $B_k$.}
+\label{fig:q3_bfgs}
+\end{figure}
+
+\begin{remark}
+BFGS cannot exploit the exact Hessian structure even when it is available. For the linear regression Benchmark A, Newton terminates in 1 step; BFGS requires $\approx 5$ iterations because it builds up $B_k \approx H^{-1}$ incrementally. The payoff for BFGS is gradient-only access at $O(d^2)$ cost, while Newton needs $O(d^3)$ and explicit second derivatives.
+\end{remark}
+
 \subsection{Contour Trajectories and Update Magnitudes}
 
 \begin{figure}[H]
@@ -669,6 +738,19 @@ has truncation error $O(\delta)$ (from higher-order Taylor terms) and round-off 
 \end{algorithm}
 
 The estimator satisfies $\mathbb{E}_u[\hat{g}_k] = \nabla f_{\delta}(x_k)$ where $f_\delta$ is the $\delta$-Gaussian smoothing of $f$, and $\|\nabla f - \nabla f_\delta\| = O(L\delta^2)$. Only \textbf{2} function evaluations are needed per iteration regardless of dimension $d$, versus $d+1$ for FD. However, the estimator variance is $O(L^2 d/\delta^2)$, so more iterations are needed to compensate, making it most competitive in very high-dimensional settings.
+
+\begin{theorem}[Zeroth-Order Oracle Complexity]
+\label{thm:zo_complexity}
+Let $f$ be $L$-smooth and $\mu$-strongly convex. To achieve $\mathbb{E}[f(x_k) - f^{\star}] \leq \varepsilon$:
+\begin{itemize}
+\item \textbf{First-order GD} (exact $\nabla f$): $O\!\left(\kappa \log \frac{1}{\varepsilon}\right)$ gradient evaluations, where $\kappa = L/\mu$.
+\item \textbf{Finite Difference} ($d+1$ FE per gradient): $O\!\left((d+1)\kappa \log \frac{1}{\varepsilon}\right)$ function evaluations --- exactly $d+1$ times more expensive.
+\item \textbf{Nesterov Random Search} (2 FE per step, $K$ steps needed): $O\!\left(d \kappa \log \frac{1}{\varepsilon}\right)$ function evaluations. Despite using only 2 FE per step, the high-variance estimator requires $O(d\kappa)$ steps to converge, giving the same $d$-fold overhead as FD.
+\end{itemize}
+For smooth (but not strongly convex) $f$, achieving $\min_{j \leq k}\|\nabla f(x_j)\|^2 \leq \varepsilon$ requires $O(d L / \varepsilon)$ function evaluations for zeroth-order methods vs $O(L/\varepsilon)$ for first-order --- the fundamental $d$-fold dimension penalty of derivative-free optimisation.
+\end{theorem}
+
+The practical conclusion from Theorem~\ref{thm:zo_complexity} is that zeroth-order methods are competitive only when (a) gradient computation is genuinely unavailable (black-box simulators, hardware-in-the-loop systems), or (b) $d$ is very large and the gradient computation is so expensive that even 2 cheap function evaluations per step are preferable. For small $d$ (as in all experiments here, $d = 2$), finite differences almost always dominate random search because $(d+1)/2 = 1.5$ --- only marginally more expensive per step while delivering far lower-variance estimates.
 
 \subsubsection{Results on Benchmark B}
 
@@ -831,6 +913,34 @@ Penalty $\lambda = 0.15$ & 0.05 & 0.15 & $(x_1 < 0.5)$ & $> 0.7244$ & $> 0$ \\
 
 \textbf{Augmented Lagrangian / ADMM} (not implemented here) would combine both approaches: $F_{\lambda, \mu}(x) = f(x) + \lambda h(x)_+ + \frac{\mu}{2}\|h(x)_+\|^2$, updating $\lambda$ alongside $x$, achieving exact feasibility without the $\lambda \to \infty$ instability.
 
+\subsection{Augmented Lagrangian Method (Theoretical Analysis)}
+
+The pure penalty method's instability arises because exact feasibility requires $\lambda \to \infty$, which inflates the Lipschitz constant of $\nabla F_\lambda$ as $O(\lambda)$ and forces step size $\alpha = O(1/\lambda) \to 0$. The \textbf{Augmented Lagrangian Method} (ALM) circumvents this by dualising the constraint, allowing exact feasibility at \emph{finite} penalty $\mu$:
+
+\begin{align}
+\mathcal{L}_\mu(x, \lambda) &= f(x) + \lambda h(x) + \frac{\mu}{2} h(x)^2, \label{eq:alm}\\
+x^{(k+1)} &= \arg\min_x \mathcal{L}_\mu(x, \lambda^{(k)}), \label{eq:alm_x}\\
+\lambda^{(k+1)} &= \lambda^{(k)} + \mu\, h(x^{(k+1)}). \label{eq:alm_dual}
+\end{align}
+
+The dual update \eqref{eq:alm_dual} increments the multiplier by the constraint violation scaled by $\mu$. As $\lambda^{(k)} \to \lambda^{\star}$ (the KKT multiplier), the inner minimisation \eqref{eq:alm_x} drives $h(x^{(k+1)}) \to 0$ even for fixed $\mu$. The Lipschitz constant of $\nabla_x \mathcal{L}_\mu$ is $O(L + \mu)$, which is bounded as long as $\mu$ is fixed --- no instability as with pure penalty.
+
+For inequality constraints $h(x) \leq 0$ (as in our Q5 setting $h = 0.5 - x_1 \leq 0$), the update becomes:
+\begin{equation}
+\lambda^{(k+1)} = \max\!\left(0,\; \lambda^{(k)} + \mu\, h(x^{(k+1)})\right),
+\end{equation}
+where the projection onto $\lambda \geq 0$ enforces dual feasibility (non-negativity of the inequality multiplier).
+
+\begin{proposition}[ALM Convergence]
+For $\mu$-strongly convex $f$ and a constraint set satisfying Slater's condition, ALM with fixed $\mu > 0$ and dual updates \eqref{eq:alm_dual} converges linearly to the primal-dual optimum $(x^{\star}, \lambda^{\star})$:
+\begin{equation}
+\|x^{(k)} - x^{\star}\| + |\lambda^{(k)} - \lambda^{\star}| = O(\rho^k), \quad \rho = 1 - \frac{\mu}{\mu + L} < 1.
+\end{equation}
+No constraint on $\mu$ is required for convergence (unlike pure penalty's $\lambda \to \infty$).
+\end{proposition}
+
+In our Q5 experiment, the unconstrained minimiser $(0.582, 2.0) \in \mathcal{X}$ means $\lambda^{\star} = 0$ (inactive constraint, KKT complementarity $\lambda^{\star} h(x^{\star}) = 0$). ALM would converge with $\lambda^{(k)} \to 0$ and $x^{(k)} \to (0.582, 2.0)$, recovering the unconstrained solution --- confirming that projected GD and penalty methods correctly identify the unconstrained minimiser as the constrained optimum.
+
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
 \label{sec:q6}
@@ -961,6 +1071,34 @@ Step size schedule & Requires $\gamma_k \to 0$ for convergence & Fixed $\alpha \
 
 Frank--Wolfe is particularly advantageous when (a) the LMO is much cheaper than projection (e.g., nuclear norm ball, spectrahedra), and (b) sparse iterates are desirable (e.g., compressed sensing, sparsity-promoting regularisation). Projected GD converges faster in theory ($O(\rho^k)$ vs $O(1/k)$) and in practice for strongly convex objectives.
 
+\subsection{Iterate Sparsity and Structural Properties}
+
+A key structural advantage of Frank--Wolfe is that the iterates are \emph{convex combinations of at most $k+1$ vertices} of $\mathcal{X}$:
+\begin{equation}
+x_k = \sum_{j=0}^{k} w_j z_j, \quad w_j \geq 0, \quad \sum_j w_j = 1, \quad z_j \in \text{vertices}(\mathcal{X}).
+\end{equation}
+This follows by induction: $x_{k+1} = (1-\gamma_{k+1}) x_k + \gamma_{k+1} z_k$ is a convex combination of $x_k$ (which uses $k$ vertices by hypothesis) and one new vertex $z_k$. Consequence: for a polytope with many vertices (e.g., an $n \times n$ permutation matrix polytope with $n!$ vertices), Frank--Wolfe naturally produces \textbf{sparse} iterates using at most $k+1$ active vertices --- critical in matrix factorisation, compressed sensing, and sparsity-constrained optimisation.
+
+\subsection{LMO Cost Analysis for Specific Constraint Sets}
+
+The computational advantage of Frank--Wolfe depends entirely on the LMO cost:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Constraint Set $\mathcal{X}$} & \textbf{LMO Cost} & \textbf{Projection Cost} \\
+\midrule
+Box $\times_{i=1}^d [l_i, u_i]$ & $O(d)$ & $O(d)$ (same!) \\
+Simplex $\{\sum x_i = 1, x \geq 0\}$ & $O(d)$ (min coord) & $O(d \log d)$ (sort + threshold) \\
+$\ell_1$ ball $\{\|x\|_1 \leq r\}$ & $O(d)$ & $O(d \log d)$ \\
+Spectrahedron $\{X \succeq 0, \text{tr}(X) = 1\}$ & $O(d^3)$ (top eigvec) & $O(d^3)$ (eigendecomp) \\
+Nuclear norm ball $\{\|X\|_* \leq r\}$ & $O(d^2 r_{\text{sparse}})$ (sparse SVD) & $O(d^3)$ (full SVD) \\
+\bottomrule
+\end{tabular}
+\end{center}
+For the nuclear norm ball (matrices with bounded trace norm), the LMO requires only the top singular vector pair ($O(d^2)$ vs $O(d^3)$ for full SVD projection), making Frank--Wolfe the \emph{only} practical algorithm for low-rank matrix completion problems at scale. The $O(1/k)$ convergence rate is an acceptable trade-off when the projection itself is $O(d^3)$.
+
+In the Q6 experiment on the box $\mathcal{X}$, both FW and projected GD have $O(d) = O(2)$ costs per iteration, so the theoretical projection-avoidance advantage vanishes; this is why projected GD's linear rate is the practical winner for this particular constraint set.
+
 % ============================================================
 \section{Summary and Conclusions}
 \label{sec:conclusion}
@@ -982,20 +1120,61 @@ Frank--Wolfe is particularly advantageous when (a) the LMO is much cheaper than 
 \label{fig:condition_number}
 \end{figure}
 
+\subsection{Algorithm Complexity Summary}
+
+\begin{table}[H]
+\centering
+\caption{Convergence rates and per-iteration costs for all methods studied. SC = strongly convex; $\kappa = L/\mu$; $d$ = dimension; $n$ = dataset size. Rates for strongly convex objectives unless noted.}
+\label{tab:complexity}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Family} & \textbf{Method} & \textbf{Rate} & \textbf{Iters to $\varepsilon$} & \textbf{Cost/iter} \\
+\midrule
+First-order & GD (fixed $\alpha = 1/L$) & $O(\rho^k)$, $\rho = 1-1/\kappa$ & $O(\kappa \log 1/\varepsilon)$ & $O(d)$ \\
+ & Nesterov & $O(1/k^2)$ (convex) & $O(1/\sqrt{\varepsilon})$ & $O(d)$ \\
+ & Nesterov (SC) & $O(\rho^k)$, $\rho \approx 1-1/\sqrt{\kappa}$ & $O(\sqrt{\kappa}\log 1/\varepsilon)$ & $O(d)$ \\
+ & Heavy Ball (SC quad.) & $O(\rho^k)$, $\rho = ((\sqrt{\kappa}-1)/(\sqrt{\kappa}+1))^2$ & $O(\sqrt{\kappa}\log 1/\varepsilon)$ & $O(d)$ \\
+\midrule
+Adaptive & Polyak (known $f^{\star}$) & $O(1/\sqrt{k})$ & $O(1/\varepsilon^2)$ & $O(d)$ \\
+ & Adagrad & $O(1/k)$ (convex) & $O(L/\varepsilon)$ & $O(d)$ \\
+ & Adam & Nonconvex & --- & $O(d)$ \\
+\midrule
+Stochastic & SGD (const.\ step) & Noise floor $O(\alpha\sigma^2)$ & N/A (biased) & $O(d)$ \\
+ & SVRG (SC) & $O(\rho^s)$ per epoch & $O((n+m)\kappa\log 1/\varepsilon)$ & $O(d)$ \\
+\midrule
+Second-order & Newton (SC) & Quadratic $\|e_{k+1}\| \leq C\|e_k\|^2$ & $O(\log\log 1/\varepsilon)$ & $O(d^3)$ \\
+ & BFGS & Super-linear & $O(\log\log 1/\varepsilon)$ (local) & $O(d^2)$ \\
+ & L-BFGS & Super-linear (local) & Small constant & $O(\ell d)$ \\
+\midrule
+Deriv.-free & FD gradient & Same as GD & $O((d+1)\kappa\log 1/\varepsilon)$ FE & $O(d)$ FE \\
+ & Nesterov random & $O(d\kappa\log 1/\varepsilon)$ FE & --- & $2$ FE \\
+ & Nelder--Mead & No theory & --- & $O(d)$ FE \\
+ & Grid search & $O(\Delta x)$ approx & N/A & $N^d$ FE \\
+\midrule
+Constrained & Projected GD & $O(\rho^k)$ (SC) & $O(\kappa\log 1/\varepsilon)$ & $O(d)$ + proj.\ \\
+ & Frank--Wolfe & $O(1/k)$ & $O(LC^2/\varepsilon)$ & $O(d)$ LMO \\
+ & Penalty method & $\to$ exact as $\lambda\to\infty$ & --- & $O(d)$ \\
+ & Aug.\ Lagrangian & $O(\rho^k)$ & $O(\kappa'\log 1/\varepsilon)$ & $O(d)$ per iter \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Key Lessons Learned}
 
 \begin{enumerate}
-\item \textbf{Second-order information is transformative for well-conditioned problems.} Newton's method reduces a quadratic problem to one step and achieves quadratic convergence near the optimum of any smooth function. The $O(d^3)$ cost per iteration limits it to small-dimensional problems, motivating quasi-Newton methods (BFGS, L-BFGS) as practical alternatives.
+\item \textbf{Second-order information is transformative for well-conditioned problems.} Newton's method reduces a quadratic problem to one step and achieves quadratic convergence near the optimum of any smooth function, requiring $O(\log\log 1/\varepsilon)$ iterations vs GD's $O(\kappa \log 1/\varepsilon)$. The $O(d^3)$ cost per iteration limits it to small-$d$ problems; BFGS ($O(d^2)$) and L-BFGS ($O(\ell d)$) are the practical alternatives for large scale.
 
-\item \textbf{Nesterov acceleration is provably optimal for first-order methods.} The $O(1/k^2)$ rate is not merely an empirical improvement over GD's $O(1/k)$ --- it is the information-theoretically optimal rate in the black-box oracle model. The key mechanism is gradient evaluation at the extrapolated point (lookahead), not just momentum accumulation (as in Heavy Ball).
+\item \textbf{Nesterov acceleration is provably optimal for first-order methods.} The $O(1/k^2)$ rate (or $O(\sqrt{\kappa}\log 1/\varepsilon)$ for strongly convex) is not merely an empirical improvement --- it matches the information-theoretic lower bound in the black-box oracle model. The key mechanism is gradient evaluation at the extrapolated point (lookahead), not just momentum accumulation (as in Heavy Ball, which is heuristic for nonlinear objectives).
 
-\item \textbf{Adaptive step sizes improve robustness at the cost of requiring tuning.} Polyak step is theoretically optimal when $f^{\star}$ is known but catastrophically fails otherwise. Adagrad and RMSprop provide practical robustness by adapting to the local gradient scale. Adam combines momentum and per-coordinate scaling, making it the most popular choice in deep learning despite lacking strong convergence guarantees in the nonconvex deterministic setting.
+\item \textbf{Adaptive step sizes improve robustness at the cost of requiring tuning.} Polyak step is theoretically optimal when $f^{\star}$ is known exactly but catastrophically unstable otherwise. Adagrad decays the step monotonically, which is unsuitable for non-stationary objectives. RMSprop and Adam use exponential averaging to prevent step decay, making Adam the most popular choice in deep learning despite lacking strong convergence guarantees in the nonconvex deterministic setting.
 
-\item \textbf{Derivative-free methods are the only option without gradient access.} Finite differences with small $\delta$ nearly reproduce exact gradient descent at $d+1$ cost; zeroth-order methods (Nesterov random search) scale to any dimension at 2 evaluations/iter but require many more iterations. Nelder--Mead is practical and often competitive for small-dimensional problems.
+\item \textbf{Stochastic methods need variance reduction for linear convergence.} Pure SGD with constant step achieves only a noise floor $O(\alpha\sigma^2)$, not the true minimum. SVRG and SAGA restore linear convergence at the same per-epoch cost as full GD, by using variance-reduced gradient estimators whose variance vanishes at the optimum. For $n$ samples, SVRG achieves linear convergence at $O(n)$ gradient evaluations per epoch vs $O(n)$ for full GD --- the same cost but without the noise floor.
 
-\item \textbf{Constraint handling has two paradigms.} Projected gradient descent enforces feasibility exactly at every step; penalty methods trade exact feasibility for algorithmic simplicity. Frank--Wolfe avoids projection entirely for polytopic constraints, at the cost of a slower $O(1/k)$ convergence rate vs projected GD's linear rate for strongly convex objectives.
+\item \textbf{Derivative-free methods pay a dimension factor.} By Theorem~\ref{thm:zo_complexity}, both finite differences and random search require $O(d)$ times more function evaluations than first-order GD. Grid search is the only globally optimal derivative-free method, at the prohibitive cost of $N^d$ evaluations. Nelder--Mead has no global convergence guarantee for $d \geq 2$ but is often practical.
 
-\item \textbf{Problem structure determines algorithm choice.} No single method dominates across all settings. The Rosenbrock function is hardest for all first-order methods due to its $\kappa \approx 1600$ condition number and nonquadratic curved valley. Strongly convex quadratics are easiest (Newton terminates in one step). Practitioners must match the algorithm to the problem's geometry.
+\item \textbf{Constraint handling has two paradigms, with ALM bridging them.} Projected GD enforces feasibility at every step (hard constraint), while penalty methods relax constraints into the objective (soft). Augmented Lagrangian combines both: a penalty term for local geometry and a dual update for exact global feasibility at finite $\mu$. Frank--Wolfe avoids projection entirely via the LMO, achieving $O(1/k)$ for polytopic constraints but at the cost of slower convergence vs projected GD's linear rate.
+
+\item \textbf{Problem structure determines algorithm choice.} The Rosenbrock function ($\kappa \approx 1600$, nonquadratic) is hardest for all first-order methods. Strongly convex quadratics are easiest (Newton in one step). The practitioner's decision tree: (i) second-order available and $d$ small? $\to$ Newton or BFGS. (ii) $d$ large, gradients available? $\to$ L-BFGS or Nesterov. (iii) Finite-sum structure with $n$ samples? $\to$ SVRG or Adam. (iv) No gradients? $\to$ FD for small $d$, random search for large $d$. (v) Constraints? $\to$ projected GD (hard), ALM (dual), or FW (polytope).
 \end{enumerate}
 
 % ============================================================
@@ -1107,6 +1286,44 @@ def newtons_method(grad_fn, hess_fn, loss_fn, x0, alpha, n_iters, damping=1e-8):
         x -= alpha * p
         x_hist.append(x.copy()); f_hist.append(loss_fn(x))
     return np.array(x_hist), np.array(f_hist), np.array(update_norms)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={SVRG and BFGS (Illustrative Implementations)}]
+def svrg(grad_fi_fn, grad_full_fn, loss_fn, theta0, alpha, m, n_epochs, n_data):
+    """Stochastic Variance Reduced Gradient."""
+    theta = theta0.copy()
+    f_hist = [loss_fn(theta)]
+    for epoch in range(n_epochs):
+        theta_ref = theta.copy()
+        g_ref = grad_full_fn(theta_ref)   # O(n): full gradient
+        for t in range(m):               # inner loop
+            i = np.random.randint(0, n_data)
+            g_i      = grad_fi_fn(theta, i)      # gradient at current
+            g_i_ref  = grad_fi_fn(theta_ref, i)  # gradient at reference
+            v = g_i - g_i_ref + g_ref    # variance-reduced estimator
+            theta -= alpha * v
+        f_hist.append(loss_fn(theta))
+    return theta, np.array(f_hist)
+
+def bfgs(grad_fn, loss_fn, x0, max_iter=100, tol=1e-8):
+    """BFGS with backtracking Armijo line search."""
+    d = len(x0); x = x0.copy(); B = np.eye(d)
+    f_hist = [loss_fn(x)]
+    for _ in range(max_iter):
+        g = grad_fn(x)
+        if np.linalg.norm(g) < tol: break
+        p = -B @ g                   # quasi-Newton direction
+        alpha, f0, slope = 1.0, loss_fn(x), g @ p
+        while loss_fn(x + alpha*p) > f0 + 0.01*alpha*slope:
+            alpha *= 0.5             # Armijo backtracking
+        s = alpha * p; x_new = x + s
+        y = grad_fn(x_new) - g; sy = s @ y
+        if sy > 1e-10:               # BFGS rank-2 update
+            rho = 1.0 / sy; I = np.eye(d)
+            B = (I - rho*np.outer(s,y)) @ B @ (I - rho*np.outer(y,s)) \
+                + rho * np.outer(s, s)
+        x = x_new; f_hist.append(loss_fn(x))
+    return x, np.array(f_hist)
 \end{lstlisting}
 
 \begin{lstlisting}[caption={Frank--Wolfe Algorithm}]
