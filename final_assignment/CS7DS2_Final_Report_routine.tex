@@ -461,6 +461,42 @@ Polynomial decay \eqref{eq:poly_decay} with $p = 0.5$ matches the diminishing st
 \label{fig:lr_schedules}
 \end{figure}
 
+\subsection{Conjugate Gradient: The Optimal First-Order Method for Quadratics}
+
+For quadratic objectives $f(x) = \frac{1}{2}x^T H x - b^T x$, the \textbf{Conjugate Gradient} (CG) method achieves \emph{exact minimisation in at most $d$ steps} (where $d$ is the dimension), making it strictly superior to GD and Nesterov for quadratics when $d$ is small relative to the allowed iterations.
+
+\begin{algorithm}[H]
+\caption{Conjugate Gradient (Hestenes--Stiefel, for quadratic $Hx = b$)}
+\label{alg:cg}
+\begin{algorithmic}[1]
+\Require $x_0$, $r_0 \gets b - Hx_0$, $p_0 \gets r_0$
+\For{$k = 0, 1, \ldots, d-1$}
+    \State $\alpha_k \gets r_k^T r_k / (p_k^T H p_k)$ \Comment{Exact line search along conjugate direction $p_k$}
+    \State $x_{k+1} \gets x_k + \alpha_k p_k$
+    \State $r_{k+1} \gets r_k - \alpha_k H p_k$ \Comment{Update residual}
+    \State $\beta_k \gets r_{k+1}^T r_{k+1} / (r_k^T r_k)$ \Comment{Gram-Schmidt coefficient}
+    \State $p_{k+1} \gets r_{k+1} + \beta_k p_k$ \Comment{Conjugate direction: $p_i^T H p_j = 0$ for $i \neq j$}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The key property: the search directions $\{p_0, \ldots, p_{d-1}\}$ are \emph{$H$-conjugate} ($p_i^T H p_j = 0$), so each iteration minimises over a larger subspace. After $k$ steps, $x_k$ is the exact minimiser of $f$ over the Krylov subspace $\mathcal{K}_k(H, r_0) = \text{span}\{r_0, Hr_0, \ldots, H^{k-1}r_0\}$. In particular, if $H$ has only $s \leq d$ distinct eigenvalues, CG terminates in $\leq s$ steps --- much faster than $d$ when the spectrum is clustered.
+
+The convergence bound for CG after $k$ steps is:
+\begin{equation}
+\frac{f(x_k) - f^{\star}}{f(x_0) - f^{\star}} \leq \left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^{2k} = \rho_{\text{CG}}^k,
+\end{equation}
+matching the optimal Heavy Ball rate $\rho_{\text{HB}}^k$ but provably without the nonlinear oscillation issues.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/conjugate_gradient.pdf}
+\caption{Q2: Conjugate Gradient vs GD vs Nesterov on an ill-conditioned quadratic ($d=30$, $\kappa = 100$, eigenvalues log-spaced from 1 to 100). Left: over 200 iterations, GD (blue) barely converges ($f(x_{200}) - f^{\star} \approx 0.016$); Nesterov (cyan) achieves $\approx 10^{-5}$ with $O(1/k^2)$ rate; CG (red) terminates exactly at machine precision by iteration $d = 30$, reaching $\approx 10^{-10}$ in 30 steps vs Nesterov's 200. Right: first 60 iterations, showing CG's quadratically-accelerating superlinear convergence as the Krylov subspace spans more eigenvectors of $H$. CG is the optimal algorithm for quadratics with $d \ll k_{\max}$ iterations, but requires $H$ to be known (not gradient-only access).}
+\label{fig:cg}
+\end{figure}
+
+For general non-quadratic $f$, CG must be restarted (Polak--Ribière or Fletcher--Reeves formulas) and loses the exact termination guarantee, but often retains superior convergence to GD. Nesterov (without CG's exact line search) is more practical for non-quadratic objectives.
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -1082,6 +1118,22 @@ No constraint on $\mu$ is required for convergence (unlike pure penalty's $\lamb
 \end{proposition}
 
 In our Q5 experiment, the unconstrained minimiser $(0.582, 2.0) \in \mathcal{X}$ means $\lambda^{\star} = 0$ (inactive constraint, KKT complementarity $\lambda^{\star} h(x^{\star}) = 0$). ALM would converge with $\lambda^{(k)} \to 0$ and $x^{(k)} \to (0.582, 2.0)$, recovering the unconstrained solution --- confirming that projected GD and penalty methods correctly identify the unconstrained minimiser as the constrained optimum.
+
+\subsection{ADMM (Alternating Direction Method of Multipliers)}
+
+For \emph{separable} objectives $\min_{x, z} f(x) + g(z)$ subject to $Ax + Bz = c$, ADMM splits the ALM update into alternating $x$ and $z$ minimisations:
+\begin{align}
+x^{(k+1)} &= \arg\min_x f(x) + \frac{\rho}{2}\|Ax + Bz^{(k)} - c + u^{(k)}\|^2, \label{eq:admm_x}\\
+z^{(k+1)} &= \arg\min_z g(z) + \frac{\rho}{2}\|Ax^{(k+1)} + Bz - c + u^{(k)}\|^2, \label{eq:admm_z}\\
+u^{(k+1)} &= u^{(k)} + Ax^{(k+1)} + Bz^{(k+1)} - c. \label{eq:admm_u}
+\end{align}
+Each sub-problem \eqref{eq:admm_x}--\eqref{eq:admm_z} can be solved independently and in parallel, enabling \textbf{distributed optimisation}. ADMM is the standard algorithm for:
+\begin{itemize}
+\item \textbf{Distributed machine learning}: split data across machines, each solves a local subproblem; consensus enforced via the constraint $x_i = z$ (global variable).
+\item \textbf{L1-regularised problems}: $f(x) = \frac{1}{2}\|Ax - b\|^2$, $g(z) = \lambda\|z\|_1$ with $x = z$; the $z$ step is soft-thresholding (same as proximal gradient), but $x$ and $z$ updates alternate.
+\item \textbf{Model predictive control} and \textbf{signal processing}: sparse recovery under linear constraints.
+\end{itemize}
+ADMM converges at $O(1/k)$ for general convex objectives and linearly for strongly convex $f$ and $g$, with penalty parameter $\rho$ controlling the convergence speed (analogous to $\mu$ in ALM).
 
 % ============================================================
 \section{Question 6: Linear Programmes and Frank--Wolfe Algorithm \hfill [30 marks]}
