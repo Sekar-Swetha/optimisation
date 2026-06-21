@@ -193,6 +193,10 @@ RMSprop (Tieleman \& Hinton, 2012) addresses Adagrad's decaying step problem by 
 
 Heavy Ball adds an inertia term: the update direction is a weighted combination of the current gradient and the previous update direction. For quadratic objectives, the optimal parameters $\alpha^\star, \beta^\star$ can be chosen analytically to achieve the optimal convergence rate $\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k$, which is dramatically faster than gradient descent's $\left(\frac{\kappa-1}{\kappa}\right)^k$ for large $\kappa$.
 
+\begin{remark}[Heavy Ball effective step size]
+Unrolling the momentum recurrence $z_{k+1} = \beta z_k + \alpha \nabla f(x_k)$ gives $z_{k+1} = \sum_{j=0}^{k} \beta^{k-j}\,\alpha\,\nabla f(x_j)$. Since $\sum_{j=0}^{\infty} \beta^j = 1/(1-\beta)$, the \emph{effective step size} relative to any single gradient is $\alpha/(1-\beta)$. For $\beta = 0.9$, this equals $10\alpha$, which explains why the Heavy Ball step size $\alpha$ must be set approximately $10\times$ smaller than the GD step size to maintain stability. Equivalently, momentum amplifies the step in persistent gradient directions by a factor of $1/(1-\beta)$, providing acceleration exactly where it is most beneficial.
+\end{remark}
+
 \subsection{Hyperparameter Settings}
 
 \begin{table}[H]
@@ -307,6 +311,7 @@ Heavy Ball & 0.4826 & 0.7244 & 1.4003 & Good on ill-conditioned \\
 \item \textbf{Smoothness:} RMSprop produces the smoothest convergence curves due to EMA gradient averaging. Heavy Ball shows characteristic underdamped oscillations (overshoot-recover cycles) before settling.
 \item \textbf{Stability:} GD baseline is most stable but slowest. Polyak is \emph{critically unstable} when $f^{\star}$ is misspecified --- even a small error in $f^\star$ causes divergence. Adagrad is uniformly stable due to its monotonically non-increasing step size, though this monotone decay can cause premature stagnation on non-stationary loss surfaces.
 \item \textbf{Practical implication:} In practice, exact $f^{\star}$ is rarely available (it is equivalent to knowing the solution), so Polyak is mainly of theoretical interest. RMSprop and Adagrad require only the objective's gradient and a base rate $\alpha_0$, making them more practical. Heavy Ball requires step size $\alpha$ and momentum $\beta$, which can be chosen near-optimally for quadratic objectives using spectral analysis.
+\item \textbf{Library availability:} Despite its theoretical elegance, Polyak step size is \emph{not} implemented in common machine learning frameworks (PyTorch, TensorFlow, JAX). Adagrad and RMSprop are both standard optimisers in these libraries, reflecting their practical robustness across ML tasks. This gap reflects that Polyak's requirement for $f^\star$ makes it impractical for the vast majority of deep learning applications where the global minimum is unknown.
 \end{itemize}
 
 % ============================================================
@@ -505,6 +510,8 @@ where $\sigma_g^2$ is the population gradient variance. This $1/b$ scaling means
 \item \textbf{Memory:} Both require $O(d)$ extra memory. Adam uses $2d$ extra scalars ($m_t, v_t$) vs.\ $d$ scalars ($z_k$) for Nesterov. For $d = 10^8$ (large language models), this $2\times$ overhead matters.
 \item \textbf{Adaptivity:} Adam adapts step sizes per coordinate, which is beneficial when gradient magnitudes differ vastly across coordinates (e.g., embedding tables). Nesterov uses a single global step size, which can be suboptimal in highly anisotropic settings but maintains the theoretically proven $O(1/k^2)$ rate.
 \item \textbf{Rosenbrock performance:} Nesterov outperforms Adam ($f = 0.479$ vs.\ $f = 1.579$) because the banana valley has a persistent gradient direction --- momentum accumulation is exactly the right inductive bias. Adam's gradient-magnitude scaling inadvertently suppresses steps in the dominant valley direction when that direction accumulates large $v_t$ values, limiting its effectiveness on this structured problem.
+\item \textbf{Nesterov vs.\ Heavy Ball with matched schedules:} When both methods use the same increasing momentum schedule $\beta_k = (k-1)/(k+2)$ (rather than a fixed $\beta = 0.9$ for Heavy Ball), Nesterov and Heavy Ball perform very similarly in practice. The theoretical $O(1/k^2)$ advantage of Nesterov over Heavy Ball is primarily realised when $\beta$ is large and fixed. With an adaptive schedule that mimics Nesterov's prescribed $\beta_k$, the lookahead correction in Nesterov's update becomes a minor second-order effect.
+\item \textbf{Adam step-size tolerance:} Adam allows significantly larger base step sizes without diverging compared to constant-step GD or Nesterov. For Rosenbrock, constant-step GD diverges for $\alpha > 1$, while Adam remains stable at $\alpha = 0.1$--$0.5$ due to the $1/\sqrt{v_t}$ normalisation bounding effective per-coordinate steps. This tolerance for larger $\alpha$ compensates for the absence of a proven $O(1/k^2)$ rate by allowing more aggressive descent per step.
 \end{itemize}
 
 % ============================================================
@@ -826,6 +833,23 @@ Since $x_1^\star = 0.582 > 0.5$, the constraint is \emph{inactive} at the optimu
 \end{algorithm}
 
 The projection onto the half-space $\{x: x_1 \geq 0.5\}$ is the $\max$ operation, computationally trivial. The theory of projected gradient descent guarantees convergence to the constrained minimiser when $f$ is convex and $\alpha \leq 1/L$.
+
+\begin{remark}[General half-plane projection]
+For a general half-plane $\mathcal{X} = \{x : a^T x \leq b\}$ with $a \in \mathbb{R}^d$, the projection is:
+\begin{equation}
+\Pi_{\mathcal{X}}(z) = \begin{cases} z & \text{if } a^T z \leq b \\ z - \dfrac{a^T z - b}{\|a\|^2}\, a & \text{if } a^T z > b \end{cases}
+\end{equation}
+This is an $O(d)$ operation: compute $a^T z$, check feasibility, and subtract the outward normal scaled by the violated amount. For our problem, $a = -e_1 = (-1, 0)^T$ and $b = -0.5$, giving $\Pi_\mathcal{X}(z)_1 = \max(0.5, z_1)$ and $\Pi_\mathcal{X}(z)_2 = z_2$ --- consistent with the algorithm above.
+\end{remark}
+
+\begin{remark}[FISTA: Nesterov acceleration for constrained optimisation]
+Projected gradient descent converges at $O(1/k)$ for convex $f$. Combining Nesterov's momentum with the projection operator yields the \textbf{Fast Iterative Shrinkage-Thresholding Algorithm} (FISTA):
+\begin{align}
+y_t &= x_t + \beta_t(x_t - x_{t-1}) \quad (\text{Nesterov lookahead}) \\
+x_{t+1} &= \Pi_{\mathcal{X}}\!\left(y_t - \alpha\, \nabla f(y_t)\right) \quad (\text{gradient step then project})
+\end{align}
+with $\beta_t = (t-1)/(t+2)$ as in the unconstrained Nesterov scheme. FISTA achieves the optimal $O(1/k^2)$ rate for constrained convex optimisation, matching the unconstrained Nesterov bound. Notably, the literature on combining Polyak step size, RMSprop, Heavy Ball, and Adam \emph{with} projected gradient descent is sparse --- these adaptive methods are rarely studied in the constrained setting, and their convergence guarantees under projection are not fully established.
+\end{remark}
 
 \begin{algorithm}[H]
 \caption{Quadratic Penalty Method}
