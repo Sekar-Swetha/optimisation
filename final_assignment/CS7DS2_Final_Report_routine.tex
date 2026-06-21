@@ -534,9 +534,16 @@ With a constant step size $\alpha$, SGD does not converge to $\theta^\star$ but 
 \item \textbf{Memory:} Both require $O(d)$ extra memory. Adam uses $2d$ extra scalars ($m_t, v_t$) vs.\ $d$ scalars ($z_k$) for Nesterov. For $d = 10^8$ (large language models), this $2\times$ overhead matters.
 \item \textbf{Adaptivity:} Adam adapts step sizes per coordinate, which is beneficial when gradient magnitudes differ vastly across coordinates (e.g., embedding tables). Nesterov uses a single global step size, which can be suboptimal in highly anisotropic settings but maintains the theoretically proven $O(1/k^2)$ rate.
 \item \textbf{Rosenbrock performance:} Nesterov outperforms Adam ($f = 0.479$ vs.\ $f = 1.579$) because the banana valley has a persistent gradient direction --- momentum accumulation is exactly the right inductive bias. Adam's gradient-magnitude scaling inadvertently suppresses steps in the dominant valley direction when that direction accumulates large $v_t$ values, limiting its effectiveness on this structured problem.
-\item \textbf{Nesterov vs.\ Heavy Ball with matched schedules:} When both methods use the same increasing momentum schedule $\beta_k = (k-1)/(k+2)$ (rather than a fixed $\beta = 0.9$ for Heavy Ball), Nesterov and Heavy Ball perform very similarly in practice. The theoretical $O(1/k^2)$ advantage of Nesterov over Heavy Ball is primarily realised when $\beta$ is large and fixed. With an adaptive schedule that mimics Nesterov's prescribed $\beta_k$, the lookahead correction in Nesterov's update becomes a minor second-order effect.
+\item \textbf{Nesterov vs.\ Heavy Ball with matched schedules:} When both methods use the same increasing momentum schedule $\beta_k = \min((k-1)/(k+2), \beta_{\max})$ (rather than a fixed $\beta = 0.9$ for Heavy Ball), Nesterov and Heavy Ball perform very similarly in practice (see Figure~\ref{fig:q2_nesterov_hb_schedule}). The theoretical $O(1/k^2)$ advantage of Nesterov over Heavy Ball is primarily realised when $\beta$ is large and fixed. With an adaptive schedule that mimics Nesterov's prescribed $\beta_k$, the lookahead correction in Nesterov's update becomes a minor second-order effect.
 \item \textbf{Adam step-size tolerance:} Adam allows significantly larger base step sizes without diverging compared to constant-step GD or Nesterov. For Rosenbrock, constant-step GD diverges for $\alpha > 1$, while Adam remains stable at $\alpha = 0.1$--$0.5$ due to the $1/\sqrt{v_t}$ normalisation bounding effective per-coordinate steps. This tolerance for larger $\alpha$ compensates for the absence of a proven $O(1/k^2)$ rate by allowing more aggressive descent per step.
 \end{itemize}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/q2_nesterov_hb_schedule.pdf}
+\caption{Q2: Nesterov vs.\ Heavy Ball with different momentum schedules. \textbf{Left}: on Benchmark B ($\kappa\approx5.6$), Nesterov with the Nesterov schedule $\beta_k = \min((k-1)/(k+2),\,0.92)$ (blue) and Heavy Ball with the identical schedule (green, dashed) converge at essentially the same rate; Heavy Ball with fixed $\beta=0.92$ (red, dotted) oscillates for $k < 50$ before converging. \textbf{Middle}: on Benchmark C ($\kappa\approx2500$, Rosenbrock), the matched-schedule methods track each other closely throughout, while fixed-$\beta$ Heavy Ball converges noticeably slower ($f=0.067$ vs.\ $f=0.041$ at $k=150$). \textbf{Right}: the schedule $\beta_k = \min((k-1)/(k+2),\,\beta_{\max})$ starts at $\beta_1=0$ (a pure GD step) and saturates at $\beta_{\max}$ around $k\approx 26$ for $\beta_{\max}=0.92$, avoiding the early oscillations caused by starting with a large fixed momentum.}
+\label{fig:q2_nesterov_hb_schedule}
+\end{figure}
 
 % ============================================================
 \section{Question 3: Newton's Method and Local Approximation \hfill [30 marks]}
@@ -711,6 +718,14 @@ where $b_i$ are the rows of $(H_k)^{-1}$. When $b_1 = \cdots = b_n = 1$, this is
 \end{enumerate}
 For $d=2$ as in this assignment, Newton is clearly superior (20 vs 80 iterations, minimal overhead). For large $d$, \textbf{quasi-Newton methods} such as BFGS or its memory-efficient variant L-BFGS build an approximation to $H^{-1}$ using gradient-difference vectors from recent iterates, requiring only $O(d)$ memory and computation per step. L-BFGS is the default solver in \texttt{sklearn.linear\_model.LogisticRegression} and is available in PyTorch (\texttt{torch.optim.LBFGS}).
 
+\begin{remark}[BFGS superlinear convergence]
+BFGS builds an approximate inverse Hessian $B_k \approx H_k^{-1}$ using the secant condition: given $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$, the update
+\begin{equation}
+B_{k+1} = B_k + \frac{(s_k - B_k y_k) s_k^T + s_k (s_k - B_k y_k)^T}{s_k^T y_k} - \frac{(s_k - B_k y_k)^T y_k}{(s_k^T y_k)^2} s_k s_k^T
+\end{equation}
+ensures $B_{k+1} y_k = s_k$ (the approximation satisfies the secant equation for the latest step). BFGS achieves \emph{superlinear convergence}: the error ratio $\|x_{k+1} - x^\star\| / \|x_k - x^\star\| \to 0$ as $k \to \infty$, faster than any linear rate but without the strict $O(\|x_k - x^\star\|^2)$ quadratic bound of Newton. Intuitively, the Hessian approximation $B_k^{-1} \to H(x^\star)^{-1}$ as iterates approach $x^\star$, so BFGS behaves more and more like Newton in the limit. L-BFGS stores only the last $m$ pairs $(s_k, y_k)$ (typically $m = 5$--$20$), reducing memory from $O(d^2)$ to $O(md)$ at the cost of a less accurate Hessian approximation.
+\end{remark}
+
 % ============================================================
 \section{Question 4: Derivative Approximation and Derivative-Free Optimisation \hfill [30 marks]}
 \label{sec:q4}
@@ -799,6 +814,10 @@ The Nelder--Mead algorithm maintains a simplex of $n+1 = 3$ vertices in $\mathbb
 \item \textbf{Shrink} ($\sigma = 0.5$): if contraction fails, shrink all vertices towards the best.
 \end{enumerate}
 These geometric operations gradually steer the simplex into lower-objective regions without any gradient information.
+
+\begin{remark}[Nelder--Mead has no convergence guarantees]
+Despite its widespread practical use, the Nelder--Mead algorithm has \emph{no general convergence theory for $d \geq 2$}. McKinnon (1998) constructed a family of strictly convex functions on $\mathbb{R}^2$ for which the algorithm converges to a non-optimal point: the simplex degenerates (two or more vertices collapse towards the same point) and subsequent reflection and expansion steps fail to escape. In practice, degenerate simplices stagnate because reflections pass through the centroid of nearly-collinear vertices, generating steps of negligible length. In higher dimensions ($d \geq 5$), empirical evidence suggests Nelder--Mead often fails to make progress once the simplex contracts below the scale of the objective's curvature. In contrast, Nesterov random search and finite-difference gradient descent have explicit $O(1/k)$ convergence rates (with appropriate step sizes), making them theoretically preferable whenever gradients can be estimated. Nelder--Mead's practical advantage lies in robustness to noisy, discontinuous, or simulation-based objectives where gradient estimation is impossible or unreliable.
+\end{remark}
 
 Settings: initial simplex step $= 0.35$, iterations $= 160$.
 
@@ -971,6 +990,15 @@ Penalty $\lambda = 4.5$ & $(0.583, 2.000)$ & 0.7244 & 0.0000 & Yes \\
 \item \textbf{Projected GD} enforces feasibility immediately and exactly at every iteration --- the projection $\Pi_\mathcal{X}$ is computationally free ($O(d)$) for simple constraints (box, half-space, simplex) but can be expensive or computationally challenging for complex constraints (semidefinite cone: $O(d^3)$ SVD; flow polytope: $O(d^2)$ network flow).
 
 \item \textbf{Penalty methods} trade exact feasibility for implementation simplicity: only a modified gradient is needed, with no projection oracle. The weight $\lambda$ controls the feasibility-optimality trade-off. As $\lambda \to \infty$, the penalty method solution converges to the constrained optimum (for exact penalty $\ell_1$) or the gap shrinks as $O(1/\lambda)$ (for quadratic penalty). Large $\lambda$ creates ill-conditioned loss landscapes near the constraint boundary, requiring smaller $\alpha$ for stability, which in turn slows convergence. This Goldilocks problem with $\lambda$ motivates \emph{augmented Lagrangian methods} (ALM) that adaptively increase $\lambda$.
+
+\begin{remark}[Augmented Lagrangian: exact feasibility without ill-conditioning]
+The \emph{Augmented Lagrangian Method} (ALM, also called the \emph{method of multipliers}) adds a dual variable $\mu$ to avoid the ill-conditioning of pure penalty. For equality constraints $g(x)=0$, ALM alternates:
+\begin{align}
+x_{k+1} &= \arg\min_{x}\; f(x) + \mu_k^\top g(x) + \tfrac{\lambda}{2}\|g(x)\|^2 \\
+\mu_{k+1} &= \mu_k + \lambda\, g(x_{k+1}).
+\end{align}
+The dual update $\mu_{k+1}$ shifts the penalty centre: the inner minimisation targets $g(x) = -\mu_k/\lambda$ rather than $g(x)=0$, so the quadratic well is not artificially tightened around the constraint. This allows $\lambda$ to remain \emph{fixed} (no ill-conditioning) while the dual variable $\mu_k$ drives the violation $g(x_k) \to 0$ at a linear rate. In practice, ALM achieves exact constraint satisfaction in finite $\lambda$, whereas pure penalty requires $\lambda \to \infty$. For inequality constraints $g(x) \leq 0$, the inequality form uses $\mu_{k+1} = \max(0, \mu_k + \lambda g(x_{k+1}))$ (projecting the dual onto the non-negative orthant).
+\end{remark}
 
 \item \textbf{Feasibility speed:} Projected GD achieves zero violation at iteration 1 (hard constraint). Penalty methods achieve $O(1/\lambda)$ violation asymptotically. For time-critical safety constraints, projected GD is preferable; for soft constraints or when projection is expensive, penalty or augmented Lagrangian methods are better.
 
