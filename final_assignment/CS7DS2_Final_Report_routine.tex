@@ -158,6 +158,30 @@ For constrained problems: $\mathcal{X} = \{x \in \mathbb{R}^2 : 0.5 \leq x_1 \le
 
 Standard gradient descent $x_{k+1} = x_k - \alpha \nabla f(x_k)$ requires a global step bound $\alpha \leq 1/L$. For problems with large condition number $\kappa$, this forces an extremely small step that can barely move in the direction of low curvature (as seen on Rosenbrock, where $\alpha = 0.0012$). Adaptive methods address this by automatically adjusting the step based on local gradient information.
 
+\subsubsection{Step-Size Stability Analysis}
+
+The stability condition for GD is $\alpha < 2/L$ (for quadratics; stricter for nonlinear functions). Figure~\ref{fig:stepsize_sensitivity} shows the phase transition from fast convergence to divergence as $\alpha$ increases past the stability threshold.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/step_size_sensitivity.pdf}
+\caption{Q1: Step-size sensitivity for GD. Left (Benchmark B): $\alpha \leq 0.12$ converges, $\alpha = 0.14$ diverges. The Lipschitz constant at the starting point $x_0 = (-1,4)$ is $L(x_0) = \|H(x_0)\| = \max(|2 - \sin(-1)|, 10) = 10$; the stability threshold is $\alpha^{\star} = 2/L = 0.2$. However, the nonlinear sinusoidal term reduces the practical threshold to $\approx 0.13$. Right (Rosenbrock): even $\alpha = 0.002$ causes oscillations; $\alpha = 0.003$ diverges. The Rosenbrock Hessian at $x_0 = (-1,1)$ has $\lambda_{\max} \approx 1802$, giving $\alpha^{\star} \approx 0.0011$. Within the stable regime, smaller $\alpha$ converges more reliably but more slowly; the optimal $\alpha = 1/L$ balances these.}
+\label{fig:stepsize_sensitivity}
+\end{figure}
+
+\noindent\textit{Armijo line search:} A practical alternative to fixed $\alpha$ is the Armijo (sufficient decrease) condition: accept $\alpha_k = \rho^j \alpha_{\text{init}}$ for the smallest $j \geq 0$ such that
+\begin{equation}
+f(x_k - \alpha_k \nabla f(x_k)) \leq f(x_k) - c_1 \alpha_k \|\nabla f(x_k)\|^2, \quad c_1 \in (0,1),
+\label{eq:armijo}
+\end{equation}
+with typical $c_1 = 10^{-4}$, $\rho = 0.5$. Combined with the Wolfe curvature condition $|\nabla f(x_{k+1})^T d_k| \leq c_2 |\nabla f(x_k)^T d_k|$ ($c_2 \in (c_1, 1)$), Wolfe line search guarantees $\alpha_k$ is not too large (sufficient decrease) or too small (avoids early stopping). BFGS with Wolfe line search is the standard second-order algorithm for general smooth unconstrained problems.
+
+\noindent\textit{Preconditioning interpretation of adaptive methods:} Every adaptive gradient method can be written as a preconditioned gradient step:
+\begin{equation}
+x_{k+1} = x_k - P_k^{-1} \nabla f(x_k),
+\end{equation}
+where $P_k$ is a diagonal preconditioner. For Adagrad, $P_k^{(i,i)} = \sqrt{G_k^{(i)}} / \alpha_0$; for RMSprop, $P_k^{(i,i)} = \sqrt{v_k^{(i)}} / \alpha_0$; for Adam, $P_k^{(i,i)} = \sqrt{\hat{v}_k^{(i)}} / \alpha$. These diagonal preconditioners approximate the curvature in each coordinate direction, effectively reducing the coordinate-wise condition number. Full-matrix preconditioning would require $P_k = [\nabla^2 f(x_k)]^{1/2}$ (the Newton step), connecting adaptive methods to quasi-Newton methods through the degree of curvature estimation.
+
 \subsection{Algorithm Formulations}
 
 \begin{algorithm}[H]
@@ -401,6 +425,23 @@ The key mechanism is the \emph{lookahead}: evaluating $\nabla f$ at $\tilde{x}_k
 \end{algorithm}
 
 Adam's bias corrections are essential in early iterations: without them, $m_1 = (1-\beta_1)g_1$ severely underestimates the true gradient mean due to initialisation at zero. With corrections, $\hat{m}_1 = g_1$ regardless of $\beta_1$. The effective per-coordinate update is approximately $\alpha \cdot \text{sign}(\hat{m}_t^{(i)})$ when the signal-to-noise ratio is high, bounding the per-step learning rate in $[-\alpha/\varepsilon, \alpha/\varepsilon]$ from above.
+
+\subsubsection{Learning Rate Schedules}
+
+For non-convex optimisation (deep networks, Rosenbrock), a single constant learning rate often fails: too large causes divergence, too small is slow. \textbf{Learning rate schedules} gradually reduce $\alpha_t$ to allow large initial steps followed by fine-tuning:
+\begin{align}
+\text{Polynomial decay:} & \quad \alpha_t = \alpha_0 / t^p, \quad p \in \{0.5, 1\} \label{eq:poly_decay} \\
+\text{Cosine annealing:} & \quad \alpha_t = \frac{\alpha_0}{2}\left(1 + \cos\!\left(\frac{\pi t}{T}\right)\right) \label{eq:cosine} \\
+\text{Warmup + cosine:} & \quad \alpha_t = \begin{cases} \alpha_{\max} t / T_{\text{warm}} & t \leq T_{\text{warm}} \\ \frac{\alpha_{\max}}{2}\left(1 + \cos\!\tfrac{\pi(t-T_{\text{warm}})}{T-T_{\text{warm}}}\right) & t > T_{\text{warm}} \end{cases} \label{eq:warmup}
+\end{align}
+Polynomial decay \eqref{eq:poly_decay} with $p = 0.5$ matches the diminishing step schedule required for SGD to achieve $O(1/\sqrt{k})$ convergence to the true minimiser (eliminating the noise floor). Cosine annealing \eqref{eq:cosine} is popular in deep learning; the smooth periodic shape avoids the abrupt step-size changes of piecewise-constant schedules. Warmup \eqref{eq:warmup} prevents early instability when gradients are high-variance at iteration 1.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/lr_schedules_adam.pdf}
+\caption{Q2: Adam with different learning rate schedules on Rosenbrock (left) and the corresponding $\alpha_t$ profiles (right). Constant step ($\alpha = 0.006$) performs best here because Rosenbrock is deterministic and smooth: the constant step balances progress and stability. Cosine annealing and warmup+cosine converge more slowly as $\alpha_t \to 0$ slows progress before reaching the optimum. Polynomial decay ($\alpha \propto 1/\sqrt{t}$) matches the theoretically optimal schedule for stochastic problems but is too conservative for deterministic gradient descent. This illustrates that schedule choice is problem-dependent: diminishing schedules are essential for stochastic settings (needed to escape the SGD noise floor) but suboptimal for deterministic optimisation.}
+\label{fig:lr_schedules}
+\end{figure}
 
 \subsection{Hyperparameter Settings}
 
@@ -727,6 +768,13 @@ where $s_k = x_{k+1} - x_k$ and $y_k = \nabla f(x_{k+1}) - \nabla f(x_k)$ are th
 \begin{remark}
 BFGS cannot exploit the exact Hessian structure even when it is available. For the linear regression Benchmark A, Newton terminates in 1 step; BFGS requires $\approx 5$ iterations because it builds up $B_k \approx H^{-1}$ incrementally. The payoff for BFGS is gradient-only access at $O(d^2)$ cost, while Newton needs $O(d^3)$ and explicit second derivatives.
 \end{remark}
+
+\noindent\textit{Wolfe conditions for line search:} The BFGS implementation requires not just sufficient decrease (Armijo) but also the \emph{curvature condition}:
+\begin{equation}
+\nabla f(x_k + \alpha_k p_k)^T p_k \geq c_2 \nabla f(x_k)^T p_k, \quad 0 < c_1 < c_2 < 1.
+\label{eq:wolfe}
+\end{equation}
+Condition \eqref{eq:wolfe} ensures $\alpha_k$ is not too small (gradient at next point is less negative in direction $p_k$ than at $x_k$), which guarantees $y_k^T s_k > 0$ and thus positive definiteness of $B_{k+1}$ in the BFGS update. Without this curvature condition, the BFGS update may produce an indefinite $B_{k+1}$ that is no longer a valid Hessian-inverse approximation. In the experiments, simple Armijo backtracking is used with the convexity of $f$ near the optimum guaranteeing $y_k^T s_k > 0$ empirically.
 
 \subsection{Contour Trajectories and Update Magnitudes}
 
